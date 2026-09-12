@@ -1,0 +1,124 @@
+# dabberz control-plane configuration.
+#
+# Copy to configs/dabberz.yaml and edit. Credentials are deliberately absent:
+# supply them through the environment so this file stays safe to read and to
+# check in.
+#
+#   DABBERZ_MASTER_KEY            secrets key (generate with `dabberzctl keygen`)
+#   DABBERZ_ORCHESTRATOR_API_KEY  the planning model's API key
+#   CLAUDE_CODE_OAUTH_TOKEN       the coding agent's token
+
+# The single v1 user. Everything is scoped to this id so multi-user support is
+# additive later rather than a rewrite.
+owner: you@example.com
+
+# Database, VM workspaces and the per-repo memory store.
+data_dir: var
+
+server:
+  addr: 127.0.0.1:8080
+  read_timeout: 30s
+  # No write timeout: the activity feed is a long-lived streaming response.
+  write_timeout: 0s
+
+driver:
+  # "firecracker" in production. Containers are not an option: agents need full
+  # access to their own environment and need to drive a real browser.
+  # "local" runs agents on the host with no isolation -- development only.
+  kind: firecracker
+  image: dabberz-golden
+  # What each fork VM gets.
+  fork_resources:
+    vcpus: 4
+    memory_mib: 8192
+    disk_gib: 40
+
+  firecracker:
+    kernel_image: /srv/dabberz/vmlinux
+    # One generic golden image with the whole toolchain (Go, Rust, Node, the
+    # common databases, the browser stack), rather than one image per
+    # toolchain. Each VM boots a copy-on-write overlay of it.
+    golden_rootfs: /srv/dabberz/golden.ext4
+    chroot_base: /srv/dabberz/vm
+    bridge_name: fcbr0
+    network: 172.30.0.0/16
+    ssh_port_base: 22000
+    # Held back from the machine's totals so the control plane, the proxy and
+    # the UI VM are never squeezed out by fork VMs.
+    host_reserve:
+      vcpus: 4
+      memory_mib: 8192
+      disk_gib: 100
+
+  local:
+    total:
+      vcpus: 8
+      memory_mib: 16384
+      disk_gib: 200
+
+scheduler:
+  interval: 5s
+  # Keep the queue strictly first-come-first-served. Running forks are never
+  # pre-empted either way; this only decides whether a large fork can be
+  # overtaken by smaller ones behind it.
+  head_of_line_blocking: true
+
+preview:
+  # Every fork gets its own hostname under this domain. No deploys, no cache
+  # clears: the user and the verifier open the same in-flight preview.
+  domain: dab.im
+  scheme: https
+  port_start: 41000
+  port_end: 42999
+
+caddy:
+  admin_endpoint: http://127.0.0.1:2019
+  server_name: dabberz
+  listen: [":443"]
+  wildcard_domain: dab.im
+  acme_email: you@example.com
+  # A wildcard certificate can only be issued over DNS-01, which is what lets a
+  # new fork be reachable immediately instead of waiting on issuance.
+  dns_provider:
+    name: cloudflare
+    api_token: "{env.CF_API_TOKEN}"
+  # Requests for hostnames no fork claims land here, so a stale preview link
+  # gets a real page instead of a TLS failure.
+  fallback_upstream: 127.0.0.1:8080
+
+llm:
+  # The orchestrator model is pluggable behind an OpenAI-shaped API.
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  timeout: 120s
+  max_retries: 3
+
+agent:
+  binary: claude
+  # The dabberz MCP toolset: secrets, preview control, browser driving.
+  mcp_config: /etc/dabberz/mcp.json
+  timeout: 45m
+
+verify:
+  # One shared UI VM serves every verifier: a single browser with N
+  # independently addressable profiles, not N browsers. Set this to the
+  # instance id of that VM.
+  ui_instance_id: ""
+  profiles: 4
+  driver_command: ["dabberz-verify"]
+  timeout: 10m
+
+merge:
+  git_binary: git
+  remote: origin
+  push: true
+  # Leave this off. It is what stops unreviewed work reaching a shared branch.
+  skip_quality_gate: false
+
+# Global escalation thresholds, not per-task. Crossing any of them pauses the
+# fork and asks the user.
+tripwire:
+  max_cycles: 8
+  max_tokens: 4000000
+  max_cost_usd: 25
+  max_wall_clock: 4h

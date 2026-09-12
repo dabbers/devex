@@ -57,9 +57,9 @@ func TestGateIsFirstInFirstOut(t *testing.T) {
 
 	const waiters = 8
 	var (
-		mu    sync.Mutex
-		order []int
-		wg    sync.WaitGroup
+		mu     sync.Mutex
+		order  []int
+		wg     sync.WaitGroup
 		queued sync.WaitGroup
 	)
 	queued.Add(waiters)

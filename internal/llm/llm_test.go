@@ -243,10 +243,10 @@ func TestDecodeJSON(t *testing.T) {
 	}
 
 	for name, content := range map[string]string{
-		"plain":         `{"summary":"two workstreams"}`,
-		"whitespace":    "  \n{\"summary\":\"two workstreams\"}\n ",
-		"fenced":        "```json\n{\"summary\":\"two workstreams\"}\n```",
-		"fenced plain":  "```\n{\"summary\":\"two workstreams\"}\n```",
+		"plain":        `{"summary":"two workstreams"}`,
+		"whitespace":   "  \n{\"summary\":\"two workstreams\"}\n ",
+		"fenced":       "```json\n{\"summary\":\"two workstreams\"}\n```",
+		"fenced plain": "```\n{\"summary\":\"two workstreams\"}\n```",
 	} {
 		var got plan
 		if err := DecodeJSON(content, &got); err != nil {

@@ -1,6 +1,9 @@
 GO      ?= go
 BIN     ?= bin
 PKGS    := ./...
+# Binary targets depend on every source file. Without this make would treat an
+# existing binary as up to date and silently ship a stale build.
+SOURCES := $(shell find . -type f -name '*.go' -not -path './bin/*') go.mod go.sum
 LDFLAGS := -s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .PHONY: all
@@ -9,10 +12,10 @@ all: build
 .PHONY: build
 build: $(BIN)/dabberzd $(BIN)/dabberzctl
 
-$(BIN)/dabberzd:
+$(BIN)/dabberzd: $(SOURCES)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./cmd/dabberzd
 
-$(BIN)/dabberzctl:
+$(BIN)/dabberzctl: $(SOURCES)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./cmd/dabberzctl
 
 .PHONY: test

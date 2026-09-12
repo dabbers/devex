@@ -27,17 +27,19 @@ func (d *fakeDriver) Capacity(context.Context) (vm.Capacity, error) {
 	return d.capacity, nil
 }
 
-func (d *fakeDriver) Create(context.Context, vm.Spec) (*vm.Instance, error) { return nil, vm.ErrNotSupported }
-func (d *fakeDriver) Get(context.Context, string) (*vm.Instance, error)     { return nil, vm.ErrNotFound }
-func (d *fakeDriver) List(context.Context) ([]*vm.Instance, error)          { return nil, nil }
-func (d *fakeDriver) Destroy(context.Context, string) error                 { return vm.ErrNotSupported }
+func (d *fakeDriver) Create(context.Context, vm.Spec) (*vm.Instance, error) {
+	return nil, vm.ErrNotSupported
+}
+func (d *fakeDriver) Get(context.Context, string) (*vm.Instance, error) { return nil, vm.ErrNotFound }
+func (d *fakeDriver) List(context.Context) ([]*vm.Instance, error)      { return nil, nil }
+func (d *fakeDriver) Destroy(context.Context, string) error             { return vm.ErrNotSupported }
 func (d *fakeDriver) Exec(context.Context, string, vm.Command) (*vm.ExecResult, error) {
 	return nil, vm.ErrNotSupported
 }
 
 // recordingLauncher captures which forks were handed off.
 type recordingLauncher struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	launched []string
 	done     chan struct{}
 }
@@ -108,8 +110,8 @@ func newFixture(t *testing.T, total vm.Resources, opts Options) *fixture {
 	opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	return &fixture{
 		store: st, driver: driver, launcher: launcher,
-		sched:   New(st, driver, launcher, opts),
-		user:    user, repo: repo, project: project, task: task,
+		sched: New(st, driver, launcher, opts),
+		user:  user, repo: repo, project: project, task: task,
 		ctx: ctx,
 	}
 }

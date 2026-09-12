@@ -39,10 +39,14 @@ const (
 )
 
 // Resources is an allocation of machine capacity.
+//
+// The yaml tags are load-bearing: these values appear in the control plane's
+// configuration file, and without them yaml would match on lowercased field
+// names ("memorymib") and silently ignore the documented keys.
 type Resources struct {
-	VCPUs     int `json:"vcpus"`
-	MemoryMiB int `json:"memory_mib"`
-	DiskGiB   int `json:"disk_gib"`
+	VCPUs     int `json:"vcpus" yaml:"vcpus"`
+	MemoryMiB int `json:"memory_mib" yaml:"memory_mib"`
+	DiskGiB   int `json:"disk_gib" yaml:"disk_gib"`
 }
 
 // Add returns the sum of two allocations.
