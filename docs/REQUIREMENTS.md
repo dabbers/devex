@@ -2,6 +2,8 @@
 
 dabberz generalizes the existing dab.im "vibe coding" pattern (Dokploy + Caddy + Claude Code) into a platform for automated, largely hands-free LLM-driven development across an unbounded set of projects, with parallel independent workstreams per repo.
 
+**Positioning:** dabberz previously served as a webserver/game server host. v1 here is being built for personal use, but the long-term intent is to carry that hosting identity forward as an agent-development service with live web previews — hosting other people's in-flight development the way it once hosted their running servers.
+
 ## Goals
 
 - Agent has full access *within its sandboxed environment*; a separate, narrower permission set governs anything touching the orchestration layer itself.
@@ -84,7 +86,10 @@ dabberz generalizes the existing dab.im "vibe coding" pattern (Dokploy + Caddy +
 
 ## Driving Interfaces
 
-- v1: web only.
+- v1: web only. The web control plane includes a workspace area for the selected project/fork with:
+  - A web shell and SSH access into that fork's VM, so the user can inspect and manage the development environment directly.
+  - An embedded VS Code view for editing and browsing workspace files inline.
+  - An inline browser for opening the fork's live preview and navigating development URLs without leaving the workspace.
 - Later: Discord and Telegram as additional chat-driven interfaces to the same orchestrator.
 
 ## Monorepo Discovery (resolved)
