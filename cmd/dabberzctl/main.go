@@ -366,9 +366,10 @@ func prettyPrint(out io.Writer, body io.Reader) error {
 	}
 	var indented bytes.Buffer
 	if err := json.Indent(&indented, raw, "", "  "); err != nil {
-		// Not JSON; show it as-is rather than failing.
+		// Not JSON. Showing the body as-is is more useful than refusing to
+		// print a response the user asked for.
 		fmt.Fprintln(out, strings.TrimSpace(string(raw)))
-		return nil
+		return nil //nolint:nilerr // the raw body is the intended output here
 	}
 	fmt.Fprintln(out, indented.String())
 	return nil

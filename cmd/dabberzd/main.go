@@ -106,35 +106,41 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	if err != nil {
 		return nil, err
 	}
+	// The database is closed here on any failure below; on success its
+	// ownership passes to the application, which closes it on shutdown.
+	wired := false
+	defer func() {
+		if wired {
+			return
+		}
+		if err := db.Close(); err != nil {
+			logger.Error("could not close the database after a failed startup", "error", err)
+		}
+	}()
 
 	// v1 is single-user, but everything is scoped by this id so that
 	// multi-user support is additive rather than a rewrite.
 	owner, err := db.EnsureUser(ctx, cfg.Owner)
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 
 	masterKey, err := secrets.ParseKey(cfg.MasterKey)
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 	vault, err := secrets.NewVault(db, masterKey)
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 
 	mem, err := memory.New(filepath.Join(dataDir, "memory"))
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 
 	driver, err := buildDriver(cfg, dataDir)
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 	logger.Info("vm driver ready", "driver", driver.Name())
@@ -142,7 +148,6 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	router := buildRouter(cfg)
 	allocator, err := preview.New(db, router, cfg.Preview)
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 	// Republish on startup so the proxy matches the database even if it was
@@ -153,7 +158,6 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	modelClient, err := buildModel(cfg, logger)
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 
@@ -171,7 +175,6 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	var verifier *verify.Verifier
 	if cfg.Verify.UIInstanceID != "" {
 		if verifier, err = verify.New(driver, cfg.Verify); err != nil {
-			db.Close()
 			return nil, err
 		}
 	}
@@ -188,7 +191,6 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 			Logger:        logger,
 		})
 		if err != nil {
-			db.Close()
 			return nil, err
 		}
 		launcher = pipe
@@ -212,10 +214,10 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Owner: owner, Logger: logger,
 	})
 	if err != nil {
-		db.Close()
 		return nil, err
 	}
 
+	wired = true
 	return &application{
 		cfg:    cfg,
 		logger: logger,

@@ -416,7 +416,9 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("memory: create temporary file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
+	// Best-effort cleanup: a leftover temporary file is harmless, and the
+	// rename below makes this a no-op on the success path.
+	defer os.Remove(tmpName) //nolint:errcheck // nothing to do if cleanup fails
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()

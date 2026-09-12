@@ -42,7 +42,7 @@ type Store struct {
 // Open opens (creating if necessary) the SQLite database at path and applies
 // any outstanding migrations. Pass ":memory:" for an ephemeral store in tests.
 func Open(ctx context.Context, path string) (*Store, error) {
-	dsn := path
+	var dsn string
 	if path == ":memory:" {
 		// A shared cache keeps every pooled connection pointed at the same
 		// in-memory database; without it each connection would get its own.
@@ -164,23 +164,6 @@ func (s *Store) applyMigration(ctx context.Context, name, body string) error {
 	return tx.Commit()
 }
 
-// tx runs fn inside a transaction, rolling back on error.
-func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: begin transaction: %w", err)
-	}
-	if err := fn(tx); err != nil {
-		tx.Rollback() //nolint:errcheck // the original error is what matters
-		return err
-	}
-	return tx.Commit()
-}
-
-// timeLayout is RFC3339 with a fixed-width nanosecond field. The width matters:
-// time.RFC3339Nano trims trailing zeros, which breaks lexicographic ordering
-// (".1Z" would sort after ".10001Z"), and these columns are compared and
-// ordered as text by SQLite.
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 // formatTime renders a timestamp for storage: UTC, fixed-width RFC3339, which
