@@ -1,0 +1,22 @@
+# Build output
+/bin/
+/dist/
+*.test
+*.out
+
+# Local runtime state
+/var/
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local config with real secrets
+/configs/dabberz.yaml
+*.local.yaml
+.env
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
