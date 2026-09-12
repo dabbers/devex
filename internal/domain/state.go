@@ -101,7 +101,10 @@ var forkTransitions = map[ForkState][]ForkState{
 	// through here increments the cycle counter the tripwire watches.
 	ForkFixing:        {ForkVerifying, ForkEscalated, ForkFailed, ForkAbandoned},
 	ForkAwaitingMerge: {ForkMerging, ForkEscalated, ForkAbandoned},
-	ForkMerging:       {ForkMerged, ForkAwaitingMerge, ForkEscalated, ForkFailed},
+	// A merge review that requests changes sends the fork back to fixing: the
+	// reworked change must be verified again before it is offered to the gate
+	// a second time.
+	ForkMerging: {ForkMerged, ForkFixing, ForkEscalated, ForkFailed},
 	// A user answering an escalation resumes the fork at the stage that raised
 	// it, so escalation can return to any working state.
 	ForkEscalated: {ForkCoding, ForkFixing, ForkVerifying, ForkMerging, ForkAbandoned, ForkFailed},
