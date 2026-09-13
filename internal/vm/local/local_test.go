@@ -327,3 +327,81 @@ func TestListIncludesEveryInstance(t *testing.T) {
 		t.Fatalf("List returned %d instances, want 3", len(all))
 	}
 }
+
+func TestInstancesSurviveARestart(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	total := vm.Resources{VCPUs: 8, MemoryMiB: 8192, DiskGiB: 100}
+
+	first, err := New(Options{Root: root, Total: total})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := smallSpec("fork-persistent")
+	spec.ForkID = "fork_abc"
+	spec.Env = map[string]string{"DABBERZ_SECRET": "kept"}
+	created, err := first.Create(ctx, spec)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// A new driver over the same root is what a control-plane restart looks
+	// like. Nothing reclaims machines, so the fork's recorded machine must
+	// still be there rather than orphaned.
+	second, err := New(Options{Root: root, Total: total})
+	if err != nil {
+		t.Fatalf("New (restart): %v", err)
+	}
+
+	found, err := second.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("the instance did not survive a restart: %v", err)
+	}
+	if found.ForkID != "fork_abc" || found.Name != "fork-persistent" {
+		t.Fatalf("instance was not restored faithfully: %+v", found)
+	}
+	if found.Spec.Env["DABBERZ_SECRET"] != "kept" {
+		t.Fatalf("instance environment was lost: %v", found.Spec.Env)
+	}
+	if found.Workspace != created.Workspace {
+		t.Fatalf("workspace moved: %q vs %q", found.Workspace, created.Workspace)
+	}
+
+	// A restored instance is still usable, not just visible.
+	res, err := second.Exec(ctx, created.ID, vm.Command{Argv: []string{"sh", "-c", "echo alive"}})
+	if err != nil {
+		t.Fatalf("Exec after restart: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "alive") {
+		t.Fatalf("stdout = %q", res.Stdout)
+	}
+
+	// And it counts against capacity again, or a restart would silently
+	// oversubscribe the machine.
+	capacity, err := second.Capacity(ctx)
+	if err != nil {
+		t.Fatalf("Capacity: %v", err)
+	}
+	if capacity.Instances != 1 {
+		t.Fatalf("instances = %d after restart, want 1", capacity.Instances)
+	}
+}
+
+func TestRestartIgnoresUnrelatedDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "not-an-instance"), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	d, err := New(Options{Root: root, Total: vm.Resources{VCPUs: 4, MemoryMiB: 4096, DiskGiB: 50}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	all, err := d.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("a directory with no instance record was adopted: %+v", all)
+	}
+}

@@ -214,7 +214,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	apiServer, err := api.New(api.Deps{
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
-		Vault: vault, Memory: mem, Verifier: verifier,
+		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
 		UI: ui, Owner: owner, Logger: logger,
 	})
 	if err != nil {

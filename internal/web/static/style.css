@@ -377,6 +377,26 @@ details.data pre {
 .row-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-top: var(--space-3); }
 .row-actions + .section { margin-top: var(--space-6); }
 
+/* The terminal is the one place ink inverts: a shell on a paper ground reads
+   as a mistake, and every terminal a person has used is dark. */
+.shell {
+  background: #161514;
+  border: 1px solid var(--color-divider);
+  padding: var(--space-2);
+  height: 420px;
+}
+.shell .xterm { height: 100%; }
+
+.tabs-inline { display: flex; gap: var(--space-3); margin-bottom: var(--space-3); }
+.tabs-inline button {
+  background: none; border: 0; padding: 0 0 4px; cursor: pointer;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 15px; color: var(--ink-70);
+  border-bottom: 2px solid transparent;
+}
+.tabs-inline button:hover { color: var(--color-accent); }
+.tabs-inline button[aria-selected="true"] { color: var(--color-text); border-bottom-color: var(--color-accent); }
+
 .preview-frame {
   width: 100%; height: 420px;
   border: 1px solid var(--color-divider);
@@ -420,7 +440,27 @@ details.data pre {
   .repo-head { flex-wrap: wrap; }
   .repo-head h3 { flex: 1 1 100%; }
   .repo-right { margin-left: 0; width: 100%; }
-  .preview-frame { height: 260px; }
+  /* The terminal is the one place ink inverts: a shell on a paper ground reads
+   as a mistake, and every terminal a person has used is dark. */
+.shell {
+  background: #161514;
+  border: 1px solid var(--color-divider);
+  padding: var(--space-2);
+  height: 420px;
+}
+.shell .xterm { height: 100%; }
+
+.tabs-inline { display: flex; gap: var(--space-3); margin-bottom: var(--space-3); }
+.tabs-inline button {
+  background: none; border: 0; padding: 0 0 4px; cursor: pointer;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 15px; color: var(--ink-70);
+  border-bottom: 2px solid transparent;
+}
+.tabs-inline button:hover { color: var(--color-accent); }
+.tabs-inline button[aria-selected="true"] { color: var(--color-text); border-bottom-color: var(--color-accent); }
+
+.preview-frame { height: 260px; }
   .table thead { display: none; }
   .table td { display: block; border-bottom: 0; padding: 2px var(--space-2); }
   .table tbody tr { display: block; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-divider); }

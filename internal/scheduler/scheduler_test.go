@@ -455,3 +455,70 @@ func TestNudgeNeverBlocks(t *testing.T) {
 		f.sched.Nudge()
 	}
 }
+
+func TestAForkAwaitingMergeReleasesItsGroup(t *testing.T) {
+	f := newFixture(t, vm.Resources{VCPUs: 32, MemoryMiB: 32768, DiskGiB: 400}, Options{})
+
+	first := f.enqueue(t, "photo-upload", "media")
+	second := f.enqueue(t, "image-resize", "media")
+
+	if _, err := f.sched.Tick(f.ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	<-f.launcher.done
+	if f.state(t, second.ID) != domain.ForkQueued {
+		t.Fatal("the second fork in a group should wait while the first works")
+	}
+
+	// Walk the first fork to awaiting_merge, where it has finished working but
+	// still holds its machine. Under batch merge timing it can park here until
+	// every sibling is done -- including the one behind it in this group.
+	fork, err := f.store.GetFork(f.ctx, first.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	for _, next := range []domain.ForkState{domain.ForkCoding, domain.ForkVerifying, domain.ForkAwaitingMerge} {
+		if err := f.store.TransitionFork(f.ctx, fork, next, ""); err != nil {
+			t.Fatalf("transition: %v", err)
+		}
+	}
+
+	if _, err := f.sched.Tick(f.ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	// If the parked fork kept its group, this would deadlock: it waits for the
+	// batch, and the batch waits for this one to start.
+	if got := f.state(t, second.ID); got != domain.ForkProvisioning {
+		t.Fatalf("the grouped sibling is %q; a fork awaiting merge must release its group", got)
+	}
+}
+
+func TestAWorkingForkStillHoldsItsGroup(t *testing.T) {
+	f := newFixture(t, vm.Resources{VCPUs: 32, MemoryMiB: 32768, DiskGiB: 400}, Options{})
+	first := f.enqueue(t, "photo-upload", "media")
+	second := f.enqueue(t, "image-resize", "media")
+
+	if _, err := f.sched.Tick(f.ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	<-f.launcher.done
+
+	fork, err := f.store.GetFork(f.ctx, first.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	// Still mid verify/fix loop: an agent is changing this tree, which is
+	// exactly what the group exists to serialise.
+	for _, next := range []domain.ForkState{domain.ForkCoding, domain.ForkVerifying, domain.ForkFixing} {
+		if err := f.store.TransitionFork(f.ctx, fork, next, ""); err != nil {
+			t.Fatalf("transition: %v", err)
+		}
+	}
+
+	if _, err := f.sched.Tick(f.ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if got := f.state(t, second.ID); got != domain.ForkQueued {
+		t.Fatalf("the grouped sibling is %q while its overlap is still being worked on", got)
+	}
+}

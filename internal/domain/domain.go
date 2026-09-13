@@ -325,6 +325,9 @@ const (
 	// trail, which is stored in the clear.
 	EventSecretSet     EventType = "secret.set"
 	EventSecretDeleted EventType = "secret.deleted"
+	// EventShellOpened records a person attaching a terminal to a machine an
+	// agent is working in, from where they can change anything the agent can.
+	EventShellOpened EventType = "shell.opened"
 )
 
 // Event is an append-only record on a task or fork, powering both the audit

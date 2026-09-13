@@ -127,6 +127,37 @@ var activeForkStates = map[ForkState]bool{
 	ForkMerging:       true,
 }
 
+// workingForkStates are the states in which a fork's agent is actively
+// changing its working tree.
+//
+// This is deliberately narrower than activeForkStates. A serialization group
+// exists to stop two agents editing the same code at once, so it is held only
+// while an agent is working. A fork parked in awaiting_merge still holds its
+// VM but has finished: under batch merge timing it can sit there until every
+// sibling is done, and if it kept its group a grouped sibling could never
+// start -- and the batch it is waiting for would never complete.
+var workingForkStates = map[ForkState]bool{
+	ForkProvisioning: true,
+	ForkCoding:       true,
+	ForkVerifying:    true,
+	ForkFixing:       true,
+	ForkMerging:      true,
+}
+
+// Working reports whether an agent is actively changing this fork's tree, and
+// so whether the fork holds its serialization group.
+func (s ForkState) Working() bool { return workingForkStates[s] }
+
+// WorkingStates lists the states in which a fork holds its serialization
+// group.
+func WorkingStates() []ForkState {
+	states := make([]ForkState, 0, len(workingForkStates))
+	for state := range workingForkStates {
+		states = append(states, state)
+	}
+	return states
+}
+
 // Terminal reports whether the fork has reached a state it cannot leave.
 func (s ForkState) Terminal() bool { return len(forkTransitions[s]) == 0 }
 

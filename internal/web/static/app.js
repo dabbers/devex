@@ -654,21 +654,29 @@ async function renderFork(forkID) {
       el("dt", { text: "Working time" }), el("dd", { text: duration(usage.wall_ns) })),
     el("div", { class: "row-actions" }, ...budgetMeters(usage, remaining))));
 
-  if (fork.preview_url) {
-    root.append(section("Live preview",
-      el("p", { class: "muted", style: "margin-bottom:10px" },
-        "Reloads on every agent commit. This is the same URL the validation agent drives."),
-      el("iframe", {
-        class: "preview-frame", src: fork.preview_url, loading: "lazy",
-        sandbox: "allow-scripts allow-same-origin allow-forms",
-      })));
-  }
+  root.append(workspacePanel(fork));
 
   root.append(section("Transcript", await feed(`/v1/audit?fork=${forkID}&limit=100`)));
 
-  return live.subscribe(throttle((event) => {
-    if (event.fork_id === forkID && currentPath().startsWith("#/fork/")) renderFork(forkID);
+  const unsubscribe = live.subscribe(throttle((event) => {
+    // A re-render tears down the workspace panel, and with it any open shell,
+    // so only refresh on events that change what is displayed around it.
+    if (event.fork_id === forkID && currentPath().startsWith("#/fork/") && !openShellCount) {
+      renderFork(forkID);
+    }
   }, 3000));
+  return () => { unsubscribe(); closeOpenShells(); };
+}
+
+// A shell is a live session on a real machine; a background re-render that
+// silently dropped it would look like the connection failing.
+let openShellCount = 0;
+const openShells = new Set();
+
+function closeOpenShells() {
+  for (const shell of openShells) shell.close();
+  openShells.clear();
+  openShellCount = 0;
 }
 
 // validateButton drives a browser against this sub-task's preview on request.
@@ -690,6 +698,117 @@ function validateButton(fork) {
     }
   });
   return button;
+}
+
+// workspacePanel is the sub-task's workspace: the live preview it produces and
+// a shell on the machine producing it.
+function workspacePanel(fork) {
+  const body = el("div", {});
+  const tabs = el("div", { class: "tabs-inline", role: "tablist" });
+  let shell = null;
+
+  const panes = {
+    preview: () => fork.preview_url
+      ? el("div", {},
+          el("p", { class: "muted", style: "margin-bottom:10px" },
+            "Reloads on every agent commit. This is the same URL the validation agent drives."),
+          el("iframe", {
+            class: "preview-frame", src: fork.preview_url, loading: "lazy",
+            sandbox: "allow-scripts allow-same-origin allow-forms",
+          }))
+      : empty("No preview yet. It appears once the machine has booted."),
+    shell: () => {
+      if (!fork.instance_id) return empty("No machine yet, so there is nothing to attach to.");
+      const host = el("div", { class: "shell" });
+      // Mount after the element is in the document: the terminal measures
+      // itself, and measuring a detached node gives a useless size.
+      queueMicrotask(() => { shell = openShell(fork, host); });
+      return el("div", {},
+        el("p", { class: "muted", style: "margin-bottom:10px" },
+          "The same machine the agents are on. Anything you change here, they see."),
+        host);
+    },
+  };
+
+  let active = "preview";
+  const content = el("div", {});
+
+  const show = (name) => {
+    if (name === active && content.firstChild) return;
+    active = name;
+    // Leaving the shell tab closes the session rather than leaving a terminal
+    // running on the machine behind a tab nobody is looking at.
+    if (name !== "shell" && shell) { shell.close(); shell = null; }
+    clear(content);
+    content.append(panes[name]());
+    for (const button of tabs.children) {
+      button.setAttribute("aria-selected", String(button.dataset.pane === name));
+    }
+  };
+
+  for (const [name, label] of [["preview", "Preview"], ["shell", "Shell"]]) {
+    const button = el("button", { role: "tab", "aria-selected": String(name === active), text: label });
+    button.dataset.pane = name;
+    button.addEventListener("click", () => show(name));
+    tabs.append(button);
+  }
+
+  body.append(tabs, content);
+  show("preview");
+  return section("Workspace", body);
+}
+
+// openShell attaches a terminal to the sub-task's machine over a websocket.
+function openShell(fork, host) {
+  const term = new window.Terminal({
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+    theme: { background: "#161514", foreground: "#e6e3de", cursor: "#d8808c" },
+  });
+  const fit = new window.FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  fit.fit();
+
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(
+    `${scheme}://${location.host}/v1/forks/${fork.id}/shell?cols=${term.cols}&rows=${term.rows}`);
+  socket.binaryType = "arraybuffer";
+
+  const send = (message) => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  };
+
+  socket.onmessage = (event) => {
+    // Output arrives as raw bytes: a terminal's stream is not necessarily
+    // valid UTF-8, so it cannot travel as text.
+    term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+  };
+  socket.onclose = () => term.write("\r\n\x1b[2mdabberz: session ended\x1b[0m\r\n");
+  socket.onerror = () => term.write("\r\n\x1b[31mdabberz: could not reach the machine\x1b[0m\r\n");
+
+  term.onData((data) => send({ t: "input", d: data }));
+
+  const resize = () => {
+    fit.fit();
+    send({ t: "resize", c: term.cols, r: term.rows });
+  };
+  window.addEventListener("resize", resize);
+
+  const handle = {
+    close() {
+      if (!openShells.has(handle)) return;
+      openShells.delete(handle);
+      openShellCount = openShells.size;
+      window.removeEventListener("resize", resize);
+      socket.close();
+      term.dispose();
+    },
+  };
+  openShells.add(handle);
+  openShellCount = openShells.size;
+  return handle;
 }
 
 function escalationPanel(fork) {

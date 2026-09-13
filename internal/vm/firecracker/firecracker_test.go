@@ -308,6 +308,9 @@ func TestUnimplementedOperationsReportNotSupported(t *testing.T) {
 	if _, err := d.Get(ctx, "vm_x"); !errors.Is(err, vm.ErrNotFound) {
 		t.Errorf("Get = %v, want vm.ErrNotFound", err)
 	}
+	if _, err := d.OpenSession(ctx, "vm_x", vm.SessionSpec{}); !errors.Is(err, vm.ErrNotSupported) {
+		t.Errorf("OpenSession = %v, want vm.ErrNotSupported", err)
+	}
 }
 
 func TestCapacityReservesHeadroomForTheControlPlane(t *testing.T) {

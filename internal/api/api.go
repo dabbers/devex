@@ -8,11 +8,13 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
 	"github.com/dabbers/devex/internal/verify"
+	"github.com/dabbers/devex/internal/vm"
 )
 
 // Server serves the control-plane HTTP API.
@@ -36,6 +39,7 @@ type Server struct {
 	vault     *secrets.Vault
 	memory    *memory.Store
 	verifier  *verify.Verifier
+	driver    vm.Driver
 	ui        http.Handler
 	owner     *domain.User
 	logger    *slog.Logger
@@ -51,6 +55,9 @@ type Deps struct {
 	Vault    *secrets.Vault
 	Memory   *memory.Store
 	Verifier *verify.Verifier
+	// Driver is the VM driver, used to open a shell on a sub-task's machine.
+	// It is optional; without it the workspace shell is unavailable.
+	Driver vm.Driver
 	// UI serves the control-plane web interface. It is optional so the API can
 	// run headless.
 	UI http.Handler
@@ -71,7 +78,8 @@ func New(deps Deps) (*Server, error) {
 	return &Server{
 		store: deps.Store, orch: deps.Orch, sched: deps.Sched,
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
-		verifier: deps.Verifier, ui: deps.UI, owner: deps.Owner, logger: logger,
+		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
+		owner: deps.Owner, logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -115,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/forks/{fork}", s.getFork)
 	mux.HandleFunc("POST /v1/forks/{fork}/resolve", s.resolveEscalation)
 	mux.HandleFunc("POST /v1/forks/{fork}/validate", s.validateFork)
+	mux.HandleFunc("GET /v1/forks/{fork}/shell", s.shell)
 
 	mux.HandleFunc("GET /v1/events", s.listEvents)
 	mux.HandleFunc("GET /v1/events/stream", s.streamEvents)
@@ -691,4 +700,15 @@ func (r *statusRecorder) Flush() {
 	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+// Hijack forwards to the underlying writer so the websocket upgrade can take
+// over the connection. Without this the wrapper silently removes the
+// capability and every upgrade fails.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("api: the underlying writer does not support hijacking")
+	}
+	return hijacker.Hijack()
 }

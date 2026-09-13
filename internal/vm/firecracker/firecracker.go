@@ -253,6 +253,15 @@ func (d *Driver) ReleaseSlot(instanceID string) {
 	}
 }
 
+// OpenSession implements vm.Interactive.
+//
+// A guest's terminal will come over its serial console or an in-guest SSH
+// daemon on the forwarded port; neither is wired up while the boot path itself
+// is unimplemented.
+func (d *Driver) OpenSession(_ context.Context, instanceID string, _ vm.SessionSpec) (vm.Session, error) {
+	return nil, fmt.Errorf("firecracker: interactive sessions are not implemented yet: %w", vm.ErrNotSupported)
+}
+
 // Guest describes the host-side resources one microVM occupies. Every field is
 // derived from the guest's slot index, so the whole layout is reproducible
 // after a control-plane restart without persisting it.
@@ -457,4 +466,7 @@ func (d *Driver) JailerArgs(instanceID string, guest Guest, configPath string) [
 const jailerBaseUID = 30000
 
 // Driver satisfies the vm.Driver contract.
-var _ vm.Driver = (*Driver)(nil)
+var (
+	_ vm.Driver      = (*Driver)(nil)
+	_ vm.Interactive = (*Driver)(nil)
+)

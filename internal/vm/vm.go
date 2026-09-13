@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -195,6 +196,45 @@ type ExecResult struct {
 
 // OK reports whether the command exited cleanly.
 func (r *ExecResult) OK() bool { return r != nil && r.ExitCode == 0 && !r.TimedOut }
+
+// SessionSpec describes an interactive session to open inside an instance.
+type SessionSpec struct {
+	// Argv is the command to run. Empty means the instance's login shell,
+	// which is what a web shell or an SSH drop-in wants.
+	Argv []string
+	// Dir is the working directory. Empty means the instance's workspace.
+	Dir string
+	Env map[string]string
+	// Cols and Rows size the terminal. A session is attached to a real
+	// terminal, so programs that care -- editors, pagers, progress output --
+	// behave as they would over SSH.
+	Cols uint16
+	Rows uint16
+}
+
+// Session is a live terminal attached to an instance.
+//
+// Read returns whatever the session has written, output and errors
+// interleaved exactly as a terminal would show them; Write sends keystrokes.
+// Read returns io.EOF once the session ends.
+type Session interface {
+	io.Reader
+	io.Writer
+	// Resize tells the session its terminal changed size.
+	Resize(cols, rows uint16) error
+	// Wait blocks until the session exits and reports its status.
+	Wait() (int, error)
+	// Close ends the session, terminating whatever is running in it.
+	Close() error
+}
+
+// Interactive is the optional capability of opening a live terminal inside an
+// instance. It is separate from Driver because not every driver can do it, and
+// callers are expected to type-assert and degrade gracefully rather than every
+// driver carrying a stub.
+type Interactive interface {
+	OpenSession(ctx context.Context, instanceID string, spec SessionSpec) (Session, error)
+}
 
 // Driver creates and supervises instances on one machine.
 //

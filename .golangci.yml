@@ -25,6 +25,11 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+        # Tearing down a socket or a terminal session: by the time these fail
+        # the thing being closed is already gone, and there is no second
+        # recovery step to take.
+        - (*github.com/dabbers/devex/internal/api.wsConn).Close
+        - (github.com/dabbers/devex/internal/vm.Session).Close
     revive:
       rules:
         - name: exported
@@ -34,6 +39,9 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+          # A websocket test holds the upgraded connection open on purpose;
+          # closing the response body would close the socket under test.
+          - bodyclose
 
 formatters:
   enable:

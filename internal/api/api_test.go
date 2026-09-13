@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -20,6 +22,7 @@ import (
 	"github.com/dabbers/devex/internal/store"
 	"github.com/dabbers/devex/internal/verify"
 	"github.com/dabbers/devex/internal/vm"
+	"github.com/dabbers/devex/internal/vm/local"
 	"github.com/dabbers/devex/internal/web"
 )
 
@@ -40,15 +43,17 @@ func (uiVMDriver) Exec(context.Context, string, vm.Command) (*vm.ExecResult, err
 }
 
 type fixture struct {
-	store  *store.Store
-	orch   *orchestrator.Orchestrator
-	model  *llm.Mock
-	vault  *secrets.Vault
-	memory *memory.Store
-	server *httptest.Server
-	owner  *domain.User
-	repo   *domain.Repo
-	ctx    context.Context
+	// localDriver is set only for fixtures whose driver can open terminals.
+	localDriver *local.Driver
+	store       *store.Store
+	orch        *orchestrator.Orchestrator
+	model       *llm.Mock
+	vault       *secrets.Vault
+	memory      *memory.Store
+	server      *httptest.Server
+	owner       *domain.User
+	repo        *domain.Repo
+	ctx         context.Context
 }
 
 func planJSON(questions []map[string]any, workstreams []map[string]any) llm.Response {
@@ -598,3 +603,72 @@ func TestNewValidatesDependencies(t *testing.T) {
 		t.Error("an API server without its core dependencies should be rejected")
 	}
 }
+
+// newFixtureWithShell builds a fixture whose driver can open real terminals.
+func newFixtureWithShell(t *testing.T) *fixture {
+	t.Helper()
+	f := buildFixture(t, true, planJSON(nil, oneWorkstream()))
+
+	driver, err := local.New(local.Options{
+		Root:  t.TempDir(),
+		Total: vm.Resources{VCPUs: 8, MemoryMiB: 8192, DiskGiB: 100},
+	})
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	f.localDriver = driver
+
+	// Rebuild the server with the interactive driver attached.
+	ui, err := web.Handler()
+	if err != nil {
+		t.Fatalf("web.Handler: %v", err)
+	}
+	verifier, err := verify.New(uiVMDriver{}, verify.Config{UIInstanceID: "vm_ui", Profiles: 2})
+	if err != nil {
+		t.Fatalf("verify.New: %v", err)
+	}
+	srv, err := New(Deps{
+		Store: f.store, Orch: f.orch, Vault: f.vault, Memory: f.memory,
+		UI: ui, Verifier: verifier, Driver: driver,
+		Owner: f.owner, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	f.server.Close()
+	f.server = httptest.NewServer(srv.Handler())
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+// forkWithMachine starts a task and gives its first fork a running machine.
+func (f *fixture) forkWithMachine(t *testing.T) *domain.Fork {
+	t.Helper()
+	_, forks := f.startTask(t, "add ratings")
+
+	fork, err := f.store.GetFork(f.ctx, forks[0].ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+
+	instanceID := "vm_stub"
+	if f.localDriver != nil {
+		inst, err := f.localDriver.Create(f.ctx, vm.Spec{
+			Name: fork.Name, ForkID: fork.ID, Image: "img",
+			Resources: vm.Resources{VCPUs: 1, MemoryMiB: 1024, DiskGiB: 5},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		instanceID = inst.ID
+	}
+
+	fork.InstanceID = instanceID
+	if err := f.store.UpdateFork(f.ctx, fork); err != nil {
+		t.Fatalf("UpdateFork: %v", err)
+	}
+	return fork
+}
+
+// newBufReader wraps a connection for http.ReadResponse.
+func newBufReader(conn net.Conn) *bufio.Reader { return bufio.NewReader(conn) }

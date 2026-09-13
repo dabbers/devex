@@ -177,6 +177,28 @@ and a serialized one says so. Keeping the design's framing would have made
 fork-time overlap detection meaningless, since nothing would ever run at the
 same time.
 
+## Two things the interface needs from the VM layer
+
+Running the agents needs only `Exec`: start a command, wait, read what it said.
+The workspace needs two capabilities beyond that.
+
+**A terminal, not a pipe.** `vm.Interactive` is an optional capability a driver
+may implement, kept off `Driver` so that a driver which cannot open one is a
+type assertion rather than a stub in every implementation. A session is a real
+pseudo-terminal: programs that check for one -- editors, pagers, anything
+drawing progress -- behave as they would over SSH. The browser reaches it over
+a websocket, hand-written here because the whole surface needed is one endpoint
+carrying keystrokes one way and bytes the other. Its origin check is load
+bearing: the control plane has no authentication of its own, so without it any
+page the operator visited could open a shell on their machine.
+
+**Machines that outlive the control plane.** Nothing reclaims a VM
+automatically, so a restarted control plane must find the machines it already
+has. The Firecracker driver will rediscover running guests; the local driver
+records each instance beside its workspace and reloads them, so a restart does
+not orphan every fork's machine or boot a second UI VM. A directory with no
+record is left alone rather than adopted.
+
 ## The audit trail
 
 Every action lands in one append-only log, and the UI's unified activity view
@@ -221,11 +243,11 @@ trailing zeros, which breaks lexicographic ordering (`.1Z` sorts after
   implemented and tested. `Create`, `Destroy` and `Exec` return
   `vm.ErrNotSupported`. Until that lands, the control plane runs on the local
   driver.
-- **The workspace half of the UI.** The control plane, the unified audit trail,
-  the planning checkpoint, escalation handling and the embedded live preview
-  are built. The web shell, SSH access and the embedded editor are not: they
-  need interactive streaming into a VM, and `vm.Driver` exposes only
-  run-to-completion `Exec`. That is an interface change, not a missing screen.
+- **The embedded editor**, and SSH from outside the browser. The web shell is
+  built: `vm.Interactive` opens a real pseudo-terminal inside a machine, and a
+  sub-task's workspace carries a terminal beside its preview. An editor needs
+  more than a terminal does, and dropping in over SSH proper needs a daemon
+  in the golden image.
 - **The verifier harness.** dabberz hands the UI VM a JSON job and reads a JSON
   report back; the browser-driving program itself is not in this repository.
 - **The dabberz MCP toolset** given to coding agents (secrets, preview control,

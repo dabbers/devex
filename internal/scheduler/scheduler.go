@@ -271,12 +271,16 @@ func (s *Scheduler) taskReady(ctx context.Context, fork *domain.Fork) (bool, str
 	return true, "", nil
 }
 
-// activeGroups returns the serialization groups currently occupied by a
-// running fork.
+// activeGroups returns the serialization groups currently held.
+//
+// A group is held only while an agent is working, not merely while a fork
+// holds a machine. A fork parked in awaiting_merge has finished; keeping its
+// group would deadlock batch merge timing, where it waits for a grouped
+// sibling that cannot start until it lets go.
 func (s *Scheduler) activeGroups(ctx context.Context) (map[string]bool, error) {
-	active, err := s.store.ListForks(ctx, store.ForkFilter{Active: true})
+	active, err := s.store.ListForks(ctx, store.ForkFilter{States: domain.WorkingStates()})
 	if err != nil {
-		return nil, fmt.Errorf("scheduler: list active forks: %w", err)
+		return nil, fmt.Errorf("scheduler: list working forks: %w", err)
 	}
 	busy := map[string]bool{}
 	for _, fork := range active {

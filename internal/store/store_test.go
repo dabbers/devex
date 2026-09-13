@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -516,5 +517,135 @@ func TestCascadeDeleteRemovesDependents(t *testing.T) {
 	}
 	if _, err := s.GetTask(ctx, task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("task survived repo deletion (err = %v)", err)
+	}
+}
+
+func TestClaimForkLetsExactlyOneCallerWin(t *testing.T) {
+	s, ctx := newTestStore(t)
+	u, r, p := seed(t, s, ctx)
+	task := &domain.Task{UserID: u.ID, RepoID: r.ID, Title: "t", Request: "r"}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	fork := &domain.Fork{TaskID: task.ID, UserID: u.ID, RepoID: r.ID, ProjectID: p.ID, Name: "f", Branch: "b"}
+	if err := s.CreateFork(ctx, fork); err != nil {
+		t.Fatalf("CreateFork: %v", err)
+	}
+	for _, next := range []domain.ForkState{
+		domain.ForkProvisioning, domain.ForkCoding, domain.ForkVerifying, domain.ForkAwaitingMerge,
+	} {
+		if err := s.TransitionFork(ctx, fork, next, ""); err != nil {
+			t.Fatalf("transition: %v", err)
+		}
+	}
+
+	// Several goroutines examine the same finished fork, as pipelines do under
+	// batch merge timing. Exactly one may proceed to merge it.
+	const racers = 12
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		won    int
+		errors []error
+	)
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			view, err := s.GetFork(ctx, fork.ID)
+			if err != nil {
+				mu.Lock()
+				errors = append(errors, err)
+				mu.Unlock()
+				return
+			}
+			claimed, err := s.ClaimFork(ctx, view, domain.ForkAwaitingMerge, domain.ForkMerging, "merging")
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errors = append(errors, err)
+				return
+			}
+			if claimed {
+				won++
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(errors) > 0 {
+		t.Fatalf("claim errors: %v", errors)
+	}
+	if won != 1 {
+		t.Fatalf("%d callers claimed the same fork, want exactly 1", won)
+	}
+
+	final, err := s.GetFork(ctx, fork.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	if final.State != domain.ForkMerging {
+		t.Fatalf("state = %q, want merging", final.State)
+	}
+}
+
+func TestClaimForkRefreshesTheLoser(t *testing.T) {
+	s, ctx := newTestStore(t)
+	u, r, p := seed(t, s, ctx)
+	task := &domain.Task{UserID: u.ID, RepoID: r.ID, Title: "t", Request: "r"}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	fork := &domain.Fork{TaskID: task.ID, UserID: u.ID, RepoID: r.ID, ProjectID: p.ID, Name: "f", Branch: "b"}
+	if err := s.CreateFork(ctx, fork); err != nil {
+		t.Fatalf("CreateFork: %v", err)
+	}
+	for _, next := range []domain.ForkState{
+		domain.ForkProvisioning, domain.ForkCoding, domain.ForkVerifying, domain.ForkAwaitingMerge,
+	} {
+		if err := s.TransitionFork(ctx, fork, next, ""); err != nil {
+			t.Fatalf("transition: %v", err)
+		}
+	}
+
+	stale, err := s.GetFork(ctx, fork.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	if claimed, err := s.ClaimFork(ctx, fork, domain.ForkAwaitingMerge, domain.ForkMerging, "winner"); err != nil || !claimed {
+		t.Fatalf("first claim = %v, %v", claimed, err)
+	}
+
+	claimed, err := s.ClaimFork(ctx, stale, domain.ForkAwaitingMerge, domain.ForkMerging, "loser")
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if claimed {
+		t.Fatal("a second caller claimed an already-claimed fork")
+	}
+	// The loser must not keep acting on a fork that has moved on.
+	if stale.State != domain.ForkMerging {
+		t.Fatalf("the losing caller's view was not refreshed: %q", stale.State)
+	}
+}
+
+func TestClaimForkRejectsIllegalTransitions(t *testing.T) {
+	s, ctx := newTestStore(t)
+	u, r, p := seed(t, s, ctx)
+	task := &domain.Task{UserID: u.ID, RepoID: r.ID, Title: "t", Request: "r"}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	fork := &domain.Fork{TaskID: task.ID, UserID: u.ID, RepoID: r.ID, ProjectID: p.ID, Name: "f", Branch: "b"}
+	if err := s.CreateFork(ctx, fork); err != nil {
+		t.Fatalf("CreateFork: %v", err)
+	}
+
+	if _, err := s.ClaimFork(ctx, fork, domain.ForkQueued, domain.ForkMerged, "nope"); err == nil {
+		t.Fatal("claiming an illegal transition should be refused")
+	}
+	// A claim from a state the fork is not in simply does not win.
+	if claimed, err := s.ClaimFork(ctx, fork, domain.ForkCoding, domain.ForkVerifying, ""); err != nil || claimed {
+		t.Fatalf("claim from the wrong state = %v, %v", claimed, err)
 	}
 }

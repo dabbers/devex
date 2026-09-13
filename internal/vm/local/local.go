@@ -12,6 +12,7 @@ package local
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -62,7 +63,62 @@ func New(opts Options) (*Driver, error) {
 	if err := os.MkdirAll(opts.Root, 0o750); err != nil {
 		return nil, fmt.Errorf("local: create root %s: %w", opts.Root, err)
 	}
-	return &Driver{opts: opts, instances: map[string]*vm.Instance{}}, nil
+
+	d := &Driver{opts: opts, instances: map[string]*vm.Instance{}}
+	// Instances outlive the control plane. Nothing reclaims a machine
+	// automatically, so a restart must find the ones it already has rather
+	// than orphaning every fork's recorded machine -- which is also how the
+	// Firecracker driver will behave, since those guests keep running.
+	if err := d.rehydrate(); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// instanceFile is the per-instance record written beside its workspace.
+const instanceFile = "instance.json"
+
+// rehydrate reloads instances recorded under the driver's root.
+func (d *Driver) rehydrate() error {
+	entries, err := os.ReadDir(d.opts.Root)
+	if err != nil {
+		return fmt.Errorf("local: read root %s: %w", d.opts.Root, err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(d.opts.Root, entry.Name(), instanceFile)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			// A directory without a record is not an instance this driver
+			// wrote; leaving it alone is safer than guessing.
+			continue
+		}
+		var inst vm.Instance
+		if err := json.Unmarshal(raw, &inst); err != nil {
+			return fmt.Errorf("local: read instance record %s: %w", path, err)
+		}
+		if inst.ID == "" {
+			continue
+		}
+		d.instances[inst.ID] = &inst
+	}
+	return nil
+}
+
+// record persists an instance so it survives a control-plane restart.
+func (d *Driver) record(inst *vm.Instance) error {
+	raw, err := json.MarshalIndent(inst, "", "  ")
+	if err != nil {
+		return fmt.Errorf("local: encode instance record: %w", err)
+	}
+	path := filepath.Join(d.opts.Root, inst.ID, instanceFile)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return fmt.Errorf("local: write instance record: %w", err)
+	}
+	return nil
 }
 
 // Name implements vm.Driver.
@@ -116,6 +172,9 @@ func (d *Driver) Create(_ context.Context, spec vm.Spec) (*vm.Instance, error) {
 		Address:   "127.0.0.1",
 		Workspace: workspace,
 		CreatedAt: time.Now().UTC(),
+	}
+	if err := d.record(inst); err != nil {
+		return nil, err
 	}
 	d.instances[instanceID] = inst
 	return cloneInstance(inst), nil

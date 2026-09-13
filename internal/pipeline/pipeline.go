@@ -356,9 +356,20 @@ func (p *Pipeline) land(ctx context.Context, fork *domain.Fork, instanceID strin
 		target = task.IntegrationBranch
 	}
 
-	if err := p.transition(ctx, fork, domain.ForkMerging, "merging into "+target); err != nil {
+	// Claim the fork before merging. Under batch timing several pipeline
+	// goroutines look at the same finished forks at once, and without this
+	// two of them land the same one -- merging and pushing it twice.
+	claimed, err := p.store.ClaimFork(ctx, fork, domain.ForkAwaitingMerge, domain.ForkMerging, "merging into "+target)
+	if err != nil {
 		return err
 	}
+	if !claimed {
+		// Another goroutine is landing it, or already has.
+		return nil
+	}
+	p.event(ctx, fork, domain.EventForkStateChange, "awaiting_merge -> merging", map[string]any{
+		"from": string(domain.ForkAwaitingMerge), "to": string(domain.ForkMerging), "reason": "merging into " + target,
+	})
 
 	res, err := p.reviewer.Merge(ctx, merge.Request{
 		Fork: fork, TargetBranch: target, InstanceID: instanceID, Env: env,

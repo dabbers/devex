@@ -166,6 +166,61 @@ func (s *Store) TransitionFork(ctx context.Context, f *domain.Fork, next domain.
 	return s.UpdateFork(ctx, f)
 }
 
+// ClaimFork moves a fork between states only if it is still in the state the
+// caller last saw, reporting whether this caller won.
+//
+// Reading a fork's state and then writing a new one is two steps, and under
+// batch merge timing several pipeline goroutines examine the same set of
+// finished forks at once. Without this, two of them can both decide to land
+// the same fork, and it is merged and pushed twice. The database decides.
+func (s *Store) ClaimFork(ctx context.Context, f *domain.Fork, from, to domain.ForkState, reason string) (bool, error) {
+	if f.State != from {
+		return false, nil
+	}
+	if !from.CanTransition(to) {
+		return false, &domain.ErrInvalidTransition{Entity: "fork " + f.ID, From: from.String(), To: to.String()}
+	}
+
+	now := time.Now().UTC()
+	var ended any
+	if to.Terminal() {
+		ended = formatTime(now)
+	} else if f.EndedAt != nil {
+		ended = formatTime(*f.EndedAt)
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE forks SET state = ?, state_reason = ?, updated_at = ?, ended_at = ?
+		 WHERE id = ? AND state = ?`,
+		string(to), reason, formatTime(now), ended, f.ID, string(from),
+	)
+	if err != nil {
+		return false, wrapErr("claim fork", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return false, wrapErr("claim fork", err)
+	}
+	if changed == 0 {
+		// Someone else moved it first. The caller has stale state, so refresh
+		// it rather than leaving them acting on a fork that has moved on.
+		fresh, err := s.GetFork(ctx, f.ID)
+		if err != nil {
+			return false, err
+		}
+		*f = *fresh
+		return false, nil
+	}
+
+	f.State = to
+	f.StateReason = reason
+	f.UpdatedAt = now
+	if to.Terminal() && f.EndedAt == nil {
+		f.EndedAt = &now
+	}
+	return true, nil
+}
+
 // CountActiveForks reports how many forks currently hold VM capacity, which is
 // what the scheduler admits against.
 func (s *Store) CountActiveForks(ctx context.Context) (int, error) {
