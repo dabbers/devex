@@ -18,6 +18,7 @@ import (
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
+	"github.com/dabbers/devex/internal/web"
 )
 
 type fixture struct {
@@ -75,8 +76,12 @@ func newFixture(t *testing.T, responses ...llm.Response) *fixture {
 	model := llm.NewMock(responses...)
 	orch := orchestrator.New(st, model, mem, nil, orchestrator.Options{Logger: quiet})
 
+	ui, err := web.Handler()
+	if err != nil {
+		t.Fatalf("web.Handler: %v", err)
+	}
 	srv, err := New(Deps{
-		Store: st, Orch: orch, Vault: vault, Memory: mem, Owner: owner, Logger: quiet,
+		Store: st, Orch: orch, Vault: vault, Memory: mem, UI: ui, Owner: owner, Logger: quiet,
 	})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)

@@ -20,6 +20,12 @@ driver: planning and the approval checkpoint, fork scheduling, preview
 allocation and Caddy routing, repo-scoped secrets, the per-repo memory store,
 the verify/fix loop, tripwires, and the merge gate.
 
+The web UI is served by the daemon at its listen address. It opens on a
+cross-repo overview — what needs you, what is in flight everywhere, and how
+much budget each workstream has left — backed by a single audit trail that
+records every action across every repo, attributed to the user or to the
+component that took it. Secret values never enter that trail.
+
 Booting real Firecracker guests is **not** implemented yet — the driver's
 networking, layout and machine configuration are, but the boot path reports
 `ErrNotSupported`. See [Architecture](docs/ARCHITECTURE.md#what-is-not-implemented)
@@ -36,7 +42,7 @@ export DABBERZ_MASTER_KEY=$(./bin/dabberzctl keygen | head -1)
 make run
 ```
 
-Then, in another terminal:
+Then open the printed address in a browser, or drive it from another terminal:
 
 ```sh
 ./bin/dabberzctl status

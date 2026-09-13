@@ -98,6 +98,13 @@ func (o *Orchestrator) DiscoverProjects(ctx context.Context, repoID string, tree
 		}
 		projects = append(projects, fallback)
 	}
+
+	o.event(ctx, &domain.Event{
+		UserID: repo.UserID, RepoID: repoID,
+		Actor: domain.ActorOrchestrator, Type: domain.EventProjectsDiscovered,
+		Message: fmt.Sprintf("inferred %d project(s) from the repo layout", len(projects)),
+		Data:    map[string]any{"paths": projectPaths(projects), "files_inspected": len(tree)},
+	})
 	return projects, nil
 }
 
@@ -133,7 +140,23 @@ func (o *Orchestrator) ConfirmProjects(ctx context.Context, repoID string, confi
 	if err := o.store.UpdateRepo(ctx, repo); err != nil {
 		return nil, err
 	}
+
+	o.event(ctx, &domain.Event{
+		UserID: repo.UserID, RepoID: repoID,
+		Actor: domain.ActorUser, Type: domain.EventProjectsConfirmed,
+		Message: fmt.Sprintf("confirmed %d project(s)", len(confirmed)),
+		Data:    map[string]any{"paths": projectPaths(confirmed)},
+	})
 	return confirmed, nil
+}
+
+// projectPaths lists project paths for an audit entry.
+func projectPaths(projects []*domain.Project) []string {
+	paths := make([]string, 0, len(projects))
+	for _, p := range projects {
+		paths = append(paths, p.Path)
+	}
+	return paths
 }
 
 // normalizeProjectPath reduces a reported path to the store's convention: a

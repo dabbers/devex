@@ -147,9 +147,12 @@ func (o *Orchestrator) CreateTask(ctx context.Context, req CreateTaskRequest) (*
 		}
 	}
 
+	// A task exists because the user asked for it, so it is attributed to them
+	// even though the orchestrator is the component writing the row.
 	o.event(ctx, &domain.Event{
-		UserID: task.UserID, TaskID: task.ID,
-		Type: domain.EventTaskCreated, Message: "task created: " + task.Title,
+		UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID,
+		Actor: domain.ActorUser,
+		Type:  domain.EventTaskCreated, Message: "task created: " + task.Title,
 	})
 	return task, nil
 }
@@ -201,7 +204,8 @@ func (o *Orchestrator) Plan(ctx context.Context, taskID string) (*domain.Task, e
 	}
 
 	o.event(ctx, &domain.Event{
-		UserID: task.UserID, TaskID: task.ID, Type: domain.EventTaskPlanned,
+		UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID,
+		Actor: domain.ActorOrchestrator, Type: domain.EventTaskPlanned,
 		Message: fmt.Sprintf("planned %d workstream(s)", len(plan.Workstreams)),
 		Data: map[string]any{
 			"round":       plan.Round,
@@ -338,6 +342,12 @@ func (o *Orchestrator) AnswerQuestions(ctx context.Context, taskID string, answe
 	if err := o.store.UpdateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	o.event(ctx, &domain.Event{
+		UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID,
+		Actor: domain.ActorUser, Type: domain.EventPlanAnswered,
+		Message: fmt.Sprintf("answered %d planning question(s)", matched),
+		Data:    map[string]any{"answered": matched, "round": task.Plan.Round},
+	})
 
 	// Replanning with the answers in hand is the point of asking.
 	return o.Plan(ctx, taskID)
@@ -391,7 +401,8 @@ func (o *Orchestrator) ApprovePlan(ctx context.Context, taskID string) (*domain.
 		}
 
 		o.event(ctx, &domain.Event{
-			UserID: task.UserID, TaskID: task.ID, ForkID: fork.ID,
+			UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID, ForkID: fork.ID,
+			Actor:   domain.ActorOrchestrator,
 			Type:    domain.EventForkCreated,
 			Message: "queued workstream " + fork.Name,
 			Data: map[string]any{
@@ -402,6 +413,20 @@ func (o *Orchestrator) ApprovePlan(ctx context.Context, taskID string) (*domain.
 		})
 		forks = append(forks, fork)
 	}
+
+	// Approval is the moment the user authorises real machines to start, so it
+	// is recorded as its own action rather than inferred from a state change.
+	o.event(ctx, &domain.Event{
+		UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID,
+		Actor: domain.ActorUser, Type: domain.EventPlanApproved,
+		Message: fmt.Sprintf("approved the plan; starting %d workstream(s)", len(forks)),
+		Data: map[string]any{
+			"workstreams":  len(forks),
+			"round":        task.Plan.Round,
+			"merge_target": string(task.MergeTarget),
+			"merge_timing": string(task.MergeTiming),
+		},
+	})
 
 	if err := o.transitionTask(ctx, task, domain.TaskRunning, ""); err != nil {
 		return nil, nil, err
@@ -454,16 +479,24 @@ func (o *Orchestrator) Cancel(ctx context.Context, taskID, reason string) error 
 	if err != nil {
 		return err
 	}
+	abandoned := 0
 	for _, fork := range forks {
 		if fork.State.Terminal() {
 			continue
 		}
+		abandoned++
 		if err := o.store.TransitionFork(ctx, fork, domain.ForkAbandoned, reason); err != nil {
 			// One fork in an awkward state must not block cancelling the rest.
 			o.opts.Logger.Warn("could not abandon fork during cancellation",
 				"fork", fork.ID, "state", fork.State, "error", err)
 		}
 	}
+	o.event(ctx, &domain.Event{
+		UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID,
+		Actor: domain.ActorUser, Type: domain.EventTaskCancelled,
+		Message: "task cancelled by the user",
+		Data:    map[string]any{"reason": reason, "forks_abandoned": abandoned},
+	})
 	return o.transitionTask(ctx, task, domain.TaskCancelled, reason)
 }
 
@@ -482,7 +515,8 @@ func (o *Orchestrator) Escalate(ctx context.Context, fork *domain.Fork, kind dom
 		return err
 	}
 	o.event(ctx, &domain.Event{
-		UserID: fork.UserID, TaskID: fork.TaskID, ForkID: fork.ID,
+		UserID: fork.UserID, RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+		Actor:   domain.ActorOrchestrator,
 		Type:    domain.EventForkEscalated,
 		Message: message,
 		Data:    map[string]any{"kind": string(kind), "detail": detail},
@@ -531,6 +565,12 @@ func (o *Orchestrator) ResolveEscalation(ctx context.Context, forkID, response s
 	if err := o.store.TransitionFork(ctx, fork, resume, "resumed by user"); err != nil {
 		return nil, err
 	}
+	o.event(ctx, &domain.Event{
+		UserID: fork.UserID, RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+		Actor: domain.ActorUser, Type: domain.EventEscalationResolved,
+		Message: "escalation answered; fork resumed",
+		Data:    map[string]any{"response": response, "resumed_to": string(resume)},
+	})
 	return fork, nil
 }
 
@@ -630,7 +670,8 @@ func (o *Orchestrator) transitionTask(ctx context.Context, task *domain.Task, ne
 		return nil
 	}
 	o.event(ctx, &domain.Event{
-		UserID: task.UserID, TaskID: task.ID, Type: domain.EventTaskStateChange,
+		UserID: task.UserID, RepoID: task.RepoID, TaskID: task.ID,
+		Actor: domain.ActorOrchestrator, Type: domain.EventTaskStateChange,
 		Message: fmt.Sprintf("task %s -> %s", from, next),
 		Data:    map[string]any{"from": string(from), "to": string(next), "reason": reason},
 	})

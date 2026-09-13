@@ -36,6 +36,7 @@ type Server struct {
 	vault     *secrets.Vault
 	memory    *memory.Store
 	verifier  *verify.Verifier
+	ui        http.Handler
 	owner     *domain.User
 	logger    *slog.Logger
 	streamGap time.Duration
@@ -50,6 +51,9 @@ type Deps struct {
 	Vault    *secrets.Vault
 	Memory   *memory.Store
 	Verifier *verify.Verifier
+	// UI serves the control-plane web interface. It is optional so the API can
+	// run headless.
+	UI http.Handler
 	// Owner is the single v1 user every request is scoped to.
 	Owner  *domain.User
 	Logger *slog.Logger
@@ -67,7 +71,7 @@ func New(deps Deps) (*Server, error) {
 	return &Server{
 		store: deps.Store, orch: deps.Orch, sched: deps.Sched,
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
-		verifier: deps.Verifier, owner: deps.Owner, logger: logger,
+		verifier: deps.Verifier, ui: deps.UI, owner: deps.Owner, logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -80,6 +84,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /v1/capacity", s.capacity)
+	// The two surfaces the UI opens on: what is in flight everywhere, and the
+	// unified audit trail behind it.
+	mux.HandleFunc("GET /v1/overview", s.overview)
+	mux.HandleFunc("GET /v1/audit", s.auditFeed)
 
 	mux.HandleFunc("GET /v1/repos", s.listRepos)
 	mux.HandleFunc("POST /v1/repos", s.createRepo)
@@ -110,7 +118,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/events", s.listEvents)
 	mux.HandleFunc("GET /v1/events/stream", s.streamEvents)
 
+	// The UI is served from the same origin as the API, so the browser needs
+	// no cross-origin configuration and the page can stream events directly.
+	// More specific patterns above still win, so this only catches UI routes.
+	if s.ui != nil {
+		mux.Handle("GET /", s.ui)
+	}
+
 	return logRequests(s.logger, mux)
+}
+
+// audit records a user action. Actions taken through the control plane are
+// attributed to the user; components attribute their own work themselves.
+// A failure to record is logged rather than failing the request: losing an
+// audit entry is bad, but refusing the action the user already took is worse
+// and would leave the system and its trail disagreeing.
+func (s *Server) audit(ctx context.Context, e *domain.Event) {
+	e.UserID = s.owner.ID
+	e.Actor = domain.ActorUser
+	if err := s.store.AppendEvent(ctx, e); err != nil {
+		s.logger.Error("could not record an audit entry", "type", e.Type, "error", err)
+	}
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -164,6 +192,11 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.audit(r.Context(), &domain.Event{
+		RepoID: repo.ID, Type: domain.EventRepoCreated,
+		Message: "repo added: " + repo.Name,
+		Data:    map[string]any{"remote_url": repo.RemoteURL, "default_branch": repo.DefaultBranch},
+	})
 	writeJSON(w, http.StatusCreated, repo)
 }
 
@@ -258,10 +291,18 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.vault.Set(r.Context(), r.PathValue("repo"), r.PathValue("name"), req.Value); err != nil {
+	repoID, name := r.PathValue("repo"), r.PathValue("name")
+	if err := s.vault.Set(r.Context(), repoID, name, req.Value); err != nil {
 		writeError(w, err)
 		return
 	}
+	// The name is recorded, never the value: this trail is stored in the clear
+	// and is meant to be read.
+	s.audit(r.Context(), &domain.Event{
+		RepoID: repoID, Type: domain.EventSecretSet,
+		Message: "secret set: " + name,
+		Data:    map[string]any{"name": name},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -270,10 +311,16 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, http.StatusServiceUnavailable, "secrets are not configured")
 		return
 	}
-	if err := s.vault.Delete(r.Context(), r.PathValue("repo"), r.PathValue("name")); err != nil {
+	repoID, name := r.PathValue("repo"), r.PathValue("name")
+	if err := s.vault.Delete(r.Context(), repoID, name); err != nil {
 		writeError(w, err)
 		return
 	}
+	s.audit(r.Context(), &domain.Event{
+		RepoID: repoID, Type: domain.EventSecretDeleted,
+		Message: "secret deleted: " + name,
+		Data:    map[string]any{"name": name},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -481,13 +528,12 @@ func (s *Server) resolveEscalation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
-	events, err := s.store.ListEvents(r.Context(), store.EventFilter{
-		UserID:   s.owner.ID,
-		TaskID:   r.URL.Query().Get("task"),
-		ForkID:   r.URL.Query().Get("fork"),
-		AfterSeq: int64(intParam(r, "after", 0)),
-		Limit:    intParam(r, "limit", 200),
-	})
+	filter, err := s.auditFilter(r)
+	if err != nil {
+		writeStatus(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	events, err := s.store.ListEvents(r.Context(), filter)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -512,13 +558,15 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	filter := store.EventFilter{
-		UserID:   s.owner.ID,
-		TaskID:   r.URL.Query().Get("task"),
-		ForkID:   r.URL.Query().Get("fork"),
-		AfterSeq: int64(intParam(r, "after", 0)),
-		Limit:    200,
+	filter, err := s.auditFilter(r)
+	if err != nil {
+		fmt.Fprintf(w, "event: error\ndata: %q\n\n", err.Error())
+		flusher.Flush()
+		return
 	}
+	// A stream always reads forwards from its cursor, whatever order the
+	// paged feed uses.
+	filter.Newest = false
 
 	ticker := time.NewTicker(s.streamGap)
 	defer ticker.Stop()

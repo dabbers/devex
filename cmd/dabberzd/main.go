@@ -36,6 +36,7 @@ import (
 	"github.com/dabbers/devex/internal/vm"
 	"github.com/dabbers/devex/internal/vm/firecracker"
 	"github.com/dabbers/devex/internal/vm/local"
+	"github.com/dabbers/devex/internal/web"
 )
 
 // version is set at build time.
@@ -208,10 +209,15 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Logger:             logger,
 	})
 
+	ui, err := web.Handler()
+	if err != nil {
+		return nil, err
+	}
+
 	apiServer, err := api.New(api.Deps{
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier,
-		Owner: owner, Logger: logger,
+		UI: ui, Owner: owner, Logger: logger,
 	})
 	if err != nil {
 		return nil, err

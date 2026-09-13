@@ -144,6 +144,9 @@ const (
 	ReasonGroupBusy    = "waiting for an overlapping sibling workstream to finish"
 	ReasonTaskNotReady = "task is not running"
 	ReasonQueueOrder   = "waiting behind an earlier fork in the queue"
+	// ReasonNoLauncher reports that nothing is configured to actually run an
+	// admitted fork.
+	ReasonNoLauncher = "no runner configured; work cannot start"
 )
 
 // Tick runs one admission pass: it walks the queue oldest-first and starts
@@ -163,6 +166,16 @@ func (s *Scheduler) Tick(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("scheduler: list queued forks: %w", err)
 	}
 	if len(queued) == 0 {
+		return result, nil
+	}
+
+	// With nothing to hand an admitted fork to, admitting one would move it
+	// out of the queue into a state where it holds capacity and never runs.
+	// Leaving it queued keeps the system honest about what is happening.
+	if s.launcher == nil {
+		for _, fork := range queued {
+			result.Waiting = append(result.Waiting, Decision{ForkID: fork.ID, Reason: ReasonNoLauncher})
+		}
 		return result, nil
 	}
 
@@ -226,7 +239,8 @@ func (s *Scheduler) admit(ctx context.Context, fork *domain.Fork) error {
 		return fmt.Errorf("scheduler: admit %s: %w", fork.ID, err)
 	}
 	if err := s.store.AppendEvent(ctx, &domain.Event{
-		UserID: fork.UserID, TaskID: fork.TaskID, ForkID: fork.ID,
+		UserID: fork.UserID, RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+		Actor:   domain.ActorScheduler,
 		Type:    domain.EventForkAdmitted,
 		Message: "fork admitted; provisioning its VM",
 		Data:    map[string]any{"waited_seconds": time.Since(fork.CreatedAt).Seconds()},

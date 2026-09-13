@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/domain"
@@ -187,8 +188,15 @@ func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domai
 	if err := p.store.UpdateFork(ctx, fork); err != nil {
 		return nil, "", err
 	}
+	// Record which credentials the fork was handed. Names only: the audit
+	// trail is stored in the clear, and "which secrets did this agent get" is
+	// the question worth answering anyway.
 	p.event(ctx, fork, domain.EventVMProvisioned, "VM provisioned", map[string]any{
-		"instance": instance.ID, "address": instance.Address,
+		"instance":         instance.ID,
+		"address":          instance.Address,
+		"secrets_injected": sortedKeys(env),
+		"resources":        p.opts.ForkResources.String(),
+		"image":            p.opts.Image,
 	})
 
 	previewURL := ""
@@ -229,7 +237,7 @@ func (p *Pipeline) code(ctx context.Context, fork *domain.Fork, instanceID, prom
 	if err := p.store.UpdateFork(ctx, fork); err != nil {
 		return true, err
 	}
-	p.event(ctx, fork, domain.EventAgentMessage, truncate(res.Output, 400), map[string]any{
+	p.eventAs(ctx, fork, domain.ActorAgent, domain.EventAgentMessage, truncate(res.Output, 400), map[string]any{
 		"cost_usd": res.Usage.CostUSD,
 		"tokens":   res.Usage.InputTokens + res.Usage.OutputTokens,
 	})
@@ -259,7 +267,7 @@ func (p *Pipeline) verifyLoop(ctx context.Context, fork *domain.Fork, instanceID
 		if err := p.transition(ctx, fork, domain.ForkVerifying, "verifying against the live preview"); err != nil {
 			return err
 		}
-		p.event(ctx, fork, domain.EventVerifyStarted, "verification started", nil)
+		p.eventAs(ctx, fork, domain.ActorVerifier, domain.EventVerifyStarted, "verification started", nil)
 
 		report, err := p.verifier.Verify(ctx, verify.Request{
 			ForkID:     fork.ID,
@@ -269,7 +277,7 @@ func (p *Pipeline) verifyLoop(ctx context.Context, fork *domain.Fork, instanceID
 		if err != nil {
 			return err
 		}
-		p.event(ctx, fork, domain.EventVerifyFinished, report.Summary, map[string]any{
+		p.eventAs(ctx, fork, domain.ActorVerifier, domain.EventVerifyFinished, report.Summary, map[string]any{
 			"passed": report.Passed, "duration_seconds": report.Duration.Seconds(),
 		})
 
@@ -360,7 +368,7 @@ func (p *Pipeline) land(ctx context.Context, fork *domain.Fork, instanceID strin
 		if err := p.transition(ctx, fork, domain.ForkMerged, res.Summary); err != nil {
 			return err
 		}
-		p.event(ctx, fork, domain.EventForkMerged, res.Summary, map[string]any{"target": target})
+		p.eventAs(ctx, fork, domain.ActorReviewer, domain.EventForkMerged, res.Summary, map[string]any{"target": target})
 		return nil
 
 	case merge.OutcomeRejected:
@@ -433,15 +441,32 @@ func (p *Pipeline) failFork(ctx context.Context, fork *domain.Fork, cause error)
 	}
 }
 
-// event records an activity-feed entry.
+// event records an activity-feed entry attributed to the pipeline itself.
 func (p *Pipeline) event(ctx context.Context, fork *domain.Fork, kind domain.EventType, message string, data map[string]any) {
+	p.eventAs(ctx, fork, domain.ActorPipeline, kind, message, data)
+}
+
+// eventAs records an entry attributed to a particular actor, so the audit
+// trail distinguishes what the agent said from what the verifier found.
+func (p *Pipeline) eventAs(ctx context.Context, fork *domain.Fork, actor domain.Actor, kind domain.EventType, message string, data map[string]any) {
 	err := p.store.AppendEvent(ctx, &domain.Event{
-		UserID: fork.UserID, TaskID: fork.TaskID, ForkID: fork.ID,
-		Type: kind, Message: message, Data: data,
+		UserID: fork.UserID, RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+		Actor: actor, Type: kind, Message: message, Data: data,
 	})
 	if err != nil {
 		p.opts.Logger.Error("could not record event", "fork", fork.ID, "type", kind, "error", err)
 	}
+}
+
+// sortedKeys returns a map's keys in a stable order, for audit entries that
+// must read the same way every time.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // truncate clips text for storage in a feed entry.

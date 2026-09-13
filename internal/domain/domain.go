@@ -261,6 +261,36 @@ type Escalation struct {
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 
+// Actor names who or what performed an action.
+//
+// The split that matters for auditing is user versus system: everything the
+// user did through the control plane is attributed to them, and everything a
+// component did on its own is attributed to that component, so "what did I
+// approve" and "what did the agents do unattended" are both answerable.
+type Actor string
+
+// Actors.
+const (
+	// ActorUser is an action the user took through the control plane.
+	ActorUser Actor = "user"
+	// ActorOrchestrator is the planning and lifecycle layer.
+	ActorOrchestrator Actor = "orchestrator"
+	// ActorScheduler is fork admission.
+	ActorScheduler Actor = "scheduler"
+	// ActorPipeline is the per-fork runner.
+	ActorPipeline Actor = "pipeline"
+	// ActorAgent is the coding agent inside a fork VM.
+	ActorAgent Actor = "agent"
+	// ActorVerifier is the browser verification pass.
+	ActorVerifier Actor = "verifier"
+	// ActorReviewer is the merge and review gate.
+	ActorReviewer Actor = "reviewer"
+)
+
+// Automated reports whether the actor acted without the user asking. This is
+// what distinguishes the unattended half of the audit trail.
+func (a Actor) Automated() bool { return a != "" && a != ActorUser }
+
 // EventType names something worth recording on the activity feed.
 type EventType string
 
@@ -281,6 +311,20 @@ const (
 	EventPreviewReady    EventType = "preview.ready"
 	EventVMProvisioned   EventType = "vm.provisioned"
 	EventError           EventType = "error"
+
+	// User-initiated actions. These exist so the audit trail answers what a
+	// person did, not only what the system did on its own.
+	EventRepoCreated        EventType = "repo.created"
+	EventProjectsDiscovered EventType = "repo.projects_discovered"
+	EventProjectsConfirmed  EventType = "repo.projects_confirmed"
+	EventPlanAnswered       EventType = "task.plan_answered"
+	EventPlanApproved       EventType = "task.plan_approved"
+	EventTaskCancelled      EventType = "task.cancelled"
+	EventEscalationResolved EventType = "fork.escalation_resolved"
+	// Secret events record the name only. A value never reaches the audit
+	// trail, which is stored in the clear.
+	EventSecretSet     EventType = "secret.set"
+	EventSecretDeleted EventType = "secret.deleted"
 )
 
 // Event is an append-only record on a task or fork, powering both the audit
@@ -289,11 +333,16 @@ type Event struct {
 	ID string `json:"id"`
 	// Seq is the feed's monotonic cursor, assigned on write. Clients resume a
 	// stream by asking for events after the last Seq they saw.
-	Seq    int64     `json:"seq"`
-	UserID string    `json:"user_id"`
-	TaskID string    `json:"task_id,omitempty"`
-	ForkID string    `json:"fork_id,omitempty"`
-	Type   EventType `json:"type"`
+	Seq    int64  `json:"seq"`
+	UserID string `json:"user_id"`
+	// RepoID scopes the event to a repo, which is what lets one feed cover
+	// every repo at once and still be filterable down to one.
+	RepoID string `json:"repo_id,omitempty"`
+	TaskID string `json:"task_id,omitempty"`
+	ForkID string `json:"fork_id,omitempty"`
+	// Actor is who performed the action.
+	Actor Actor     `json:"actor,omitempty"`
+	Type  EventType `json:"type"`
 	// Message is a human-readable one-liner for the activity feed.
 	Message string `json:"message"`
 	// Data carries structured detail; its shape depends on Type.

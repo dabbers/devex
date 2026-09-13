@@ -426,6 +426,28 @@ func TestRunStopsWithContext(t *testing.T) {
 	}
 }
 
+func TestNothingIsAdmittedWithoutARunner(t *testing.T) {
+	f := newFixture(t, vm.Resources{VCPUs: 16, MemoryMiB: 16384, DiskGiB: 200}, Options{})
+	// A scheduler with nowhere to send admitted work must leave it queued
+	// rather than moving it into a state where it holds capacity and stalls.
+	f.sched.launcher = nil
+
+	fork := f.enqueue(t, "ratings", "")
+	result, err := f.sched.Tick(f.ctx)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(result.Admitted) != 0 {
+		t.Fatalf("admitted %v with no runner configured", result.Admitted)
+	}
+	if got := f.state(t, fork.ID); got != domain.ForkQueued {
+		t.Fatalf("fork state = %q, want it left queued", got)
+	}
+	if len(result.Waiting) != 1 || result.Waiting[0].Reason != ReasonNoLauncher {
+		t.Fatalf("waiting = %+v, want the missing-runner reason", result.Waiting)
+	}
+}
+
 func TestNudgeNeverBlocks(t *testing.T) {
 	f := newFixture(t, vm.Resources{VCPUs: 4, MemoryMiB: 4096, DiskGiB: 40}, Options{})
 	// Nobody is consuming nudges; none of these may block.

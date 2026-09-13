@@ -62,7 +62,8 @@ from inside the machine is not a working preview.
 | `internal/verify` | Driving a real browser against a live preview |
 | `internal/merge` | Quality gate and conflict resolution |
 | `internal/pipeline` | One fork, admission to merge |
-| `internal/api` | The web control plane |
+| `internal/api` | The control-plane HTTP API |
+| `internal/web` | The embedded control-plane UI |
 | `internal/config` | Configuration and startup validation |
 
 ## Lifecycles
@@ -141,6 +142,32 @@ port exhaustion says so rather than failing cryptically.
 **Everything is scoped by user id.** v1 is single-user; the scoping is there so
 multi-user support is additive rather than a migration of every table.
 
+## The audit trail
+
+Every action lands in one append-only log, and the UI's unified activity view
+is that log with filters applied rather than a separate summary that could
+drift from it.
+
+Each entry carries a **repo** and an **actor**. The repo is what lets one feed
+cover every repository at once and still narrow to one. The actor is what
+separates the two questions an audit trail exists to answer: what did I
+authorise, and what did the agents do unattended. User actions taken through
+the control plane — adding a repo, answering a planning question, approving a
+plan, cancelling, resolving an escalation, setting or deleting a secret — are
+attributed to the user; everything else is attributed to the component that
+did it (orchestrator, scheduler, pipeline, agent, verifier, reviewer).
+
+Two rules keep the trail safe to read. **Secret values never enter it**: a
+mutation records the name only, and provisioning records which names were
+injected into a fork's VM, because "which credentials did this agent get" is
+the auditable question. And the UI treats every entry as hostile input — agent
+output and verifier reports flow straight into the feed, so the page builds
+nodes and sets text rather than assigning HTML, which a test enforces.
+
+The feed is cursor-paged on the event sequence in both directions: forwards for
+a live stream that resumes exactly where it dropped, backwards for reading into
+the past.
+
 ## Two subtleties in the data layer
 
 **Event ordering.** Identifiers sort chronologically only to millisecond
@@ -159,8 +186,14 @@ trailing zeros, which breaks lexicographic ordering (`.1Z` sorts after
   implemented and tested. `Create`, `Destroy` and `Exec` return
   `vm.ErrNotSupported`. Until that lands, the control plane runs on the local
   driver.
-- **The web UI.** The API it needs exists, including the activity stream; the
-  workspace view (web shell, SSH, embedded editor, inline browser) does not.
+- **The workspace half of the UI.** The control plane, the unified audit trail,
+  the planning checkpoint, escalation handling and the embedded live preview
+  are built. The web shell, SSH access and the embedded editor are not: they
+  need interactive streaming into a VM, and `vm.Driver` exposes only
+  run-to-completion `Exec`. That is an interface change, not a missing screen.
+- **Provisioning the shared UI VM.** Verification needs one, and nothing
+  creates it yet; until it exists the daemon says so at startup and leaves
+  forks queued rather than admitting work that cannot run.
 - **The verifier harness.** dabberz hands the UI VM a JSON job and reads a JSON
   report back; the browser-driving program itself is not in this repository.
 - **The dabberz MCP toolset** given to coding agents (secrets, preview control,
@@ -176,6 +209,9 @@ cp configs/dabberz.example.yaml configs/dabberz.yaml
 export DABBERZ_MASTER_KEY=$(go run ./cmd/dabberzctl keygen | head -1)
 make run
 ```
+
+The UI is served by the daemon at its listen address, from assets embedded in
+the binary: there is no build step and no second process to deploy.
 
 Secrets stored under a master key cannot be recovered without it. The daemon
 warns at startup about any configuration that is valid but leaves part of the
