@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /v1/forks/{fork}", s.getFork)
 	mux.HandleFunc("POST /v1/forks/{fork}/resolve", s.resolveEscalation)
+	mux.HandleFunc("POST /v1/forks/{fork}/validate", s.validateFork)
 
 	mux.HandleFunc("GET /v1/events", s.listEvents)
 	mux.HandleFunc("GET /v1/events/stream", s.streamEvents)

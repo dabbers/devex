@@ -11,6 +11,7 @@ import (
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/store"
+	"github.com/dabbers/devex/internal/verify"
 )
 
 // startTask plans and approves a task, returning its forks.
@@ -395,3 +396,77 @@ func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
 var _ = llm.Response{}
 var _ = store.EventFilter{}
+
+func TestManualValidationRecordsWhoAskedAndWhatWasFound(t *testing.T) {
+	f := newFixture(t, planJSON(nil, oneWorkstream()))
+	_, forks := f.startTask(t, "add ratings")
+
+	fork, err := f.store.GetFork(f.ctx, forks[0].ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	fork.PreviewURL = "https://preview-web-ratings.dab.im"
+	if err := f.store.UpdateFork(f.ctx, fork); err != nil {
+		t.Fatalf("UpdateFork: %v", err)
+	}
+
+	var report verify.Report
+	if status := f.call(t, http.MethodPost, "/v1/forks/"+fork.ID+"/validate", nil, &report); status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if !report.Passed {
+		t.Fatalf("report = %+v", report)
+	}
+
+	// The sub-task must not move: the pipeline owns the verify/fix loop, and a
+	// manual run that changed state would race with it.
+	after, err := f.store.GetFork(f.ctx, fork.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	if after.State != fork.State {
+		t.Fatalf("a manual validation moved the sub-task from %q to %q", fork.State, after.State)
+	}
+
+	var feed struct {
+		Events []*domain.Event `json:"events"`
+	}
+	f.call(t, http.MethodGet, "/v1/audit?fork="+fork.ID+"&limit=50", nil, &feed)
+
+	var askedBy, foundBy domain.Actor
+	for _, event := range feed.Events {
+		if event.Data == nil || event.Data["manual"] != true {
+			continue
+		}
+		switch event.Type {
+		case domain.EventVerifyStarted:
+			askedBy = event.Actor
+		case domain.EventVerifyFinished:
+			foundBy = event.Actor
+		}
+	}
+	// Who asked and what was found are different facts about different actors.
+	if askedBy != domain.ActorUser {
+		t.Errorf("the request is attributed to %q, want the user", askedBy)
+	}
+	if foundBy != domain.ActorVerifier {
+		t.Errorf("the finding is attributed to %q, want the verifier", foundBy)
+	}
+}
+
+func TestManualValidationNeedsAPreview(t *testing.T) {
+	f := newFixture(t, planJSON(nil, oneWorkstream()))
+	_, forks := f.startTask(t, "add ratings")
+
+	// Nothing has booted yet, so there is nothing to drive a browser against.
+	if status := f.call(t, http.MethodPost, "/v1/forks/"+forks[0].ID+"/validate", nil, nil); status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 when there is no preview", status)
+	}
+}
+
+func TestManualValidationWithoutAUIVMIsUnavailable(t *testing.T) {
+	f := newFixtureWithoutVerifier(t)
+	if status := f.call(t, http.MethodPost, "/v1/forks/fork_x/validate", nil, nil); status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 with no UI VM configured", status)
+	}
+}

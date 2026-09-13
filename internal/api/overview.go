@@ -9,6 +9,7 @@ import (
 
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/store"
+	"github.com/dabbers/devex/internal/verify"
 )
 
 // Overview is everything in flight, across every repo, in one response.
@@ -362,4 +363,63 @@ func knownActors() []domain.Actor {
 		domain.ActorVerifier,
 		domain.ActorReviewer,
 	}
+}
+
+// validateFork re-runs browser validation against a sub-task's live preview on
+// request.
+//
+// This deliberately does not touch the fork's state. The pipeline owns the
+// verify/fix loop, and a manual run that moved the fork between states would
+// race with it. What this gives the user is a fresh answer to "does the
+// preview still work", recorded on the trail like any other validation; the
+// verifier's own queue keeps it from oversubscribing the shared UI VM.
+func (s *Server) validateFork(w http.ResponseWriter, r *http.Request) {
+	if s.verifier == nil {
+		writeStatus(w, http.StatusServiceUnavailable, "no shared UI VM is configured, so nothing can be validated")
+		return
+	}
+
+	ctx := r.Context()
+	fork, err := s.store.GetFork(ctx, r.PathValue("fork"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if fork.PreviewURL == "" {
+		writeStatus(w, http.StatusConflict, "this sub-task has no live preview yet")
+		return
+	}
+
+	// The request is the user's; the finding is the verifier's. Recording them
+	// separately is what makes the trail answer who asked and what was found.
+	s.audit(ctx, &domain.Event{
+		RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+		Type:    domain.EventVerifyStarted,
+		Message: "validation requested by hand",
+		Data:    map[string]any{"manual": true, "preview_url": fork.PreviewURL},
+	})
+
+	report, err := s.verifier.Verify(ctx, verify.Request{
+		ForkID:     fork.ID,
+		PreviewURL: fork.PreviewURL,
+		Intent:     fork.Description,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := s.store.AppendEvent(ctx, &domain.Event{
+		UserID: fork.UserID, RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+		Actor: domain.ActorVerifier, Type: domain.EventVerifyFinished,
+		Message: report.Summary,
+		Data: map[string]any{
+			"manual": true, "passed": report.Passed,
+			"duration_seconds": report.Duration.Seconds(),
+		},
+	}); err != nil {
+		s.logger.Error("could not record a manual validation", "fork", fork.ID, "error", err)
+	}
+
+	writeJSON(w, http.StatusOK, report)
 }

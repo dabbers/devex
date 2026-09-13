@@ -18,8 +18,26 @@ import (
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
+	"github.com/dabbers/devex/internal/verify"
+	"github.com/dabbers/devex/internal/vm"
 	"github.com/dabbers/devex/internal/web"
 )
+
+// uiVMDriver stands in for the shared UI VM: the verification harness always
+// reports a pass, so tests exercise the plumbing rather than a browser.
+type uiVMDriver struct{}
+
+func (uiVMDriver) Name() string                                  { return "stub-ui" }
+func (uiVMDriver) Capacity(context.Context) (vm.Capacity, error) { return vm.Capacity{}, nil }
+func (uiVMDriver) Create(context.Context, vm.Spec) (*vm.Instance, error) {
+	return nil, vm.ErrNotSupported
+}
+func (uiVMDriver) Get(context.Context, string) (*vm.Instance, error) { return nil, vm.ErrNotFound }
+func (uiVMDriver) List(context.Context) ([]*vm.Instance, error)      { return nil, nil }
+func (uiVMDriver) Destroy(context.Context, string) error             { return nil }
+func (uiVMDriver) Exec(context.Context, string, vm.Command) (*vm.ExecResult, error) {
+	return &vm.ExecResult{Stdout: `{"passed":true,"summary":"the preview renders"}`}, nil
+}
 
 type fixture struct {
 	store  *store.Store
@@ -45,6 +63,17 @@ func oneWorkstream() []map[string]any {
 }
 
 func newFixture(t *testing.T, responses ...llm.Response) *fixture {
+	t.Helper()
+	return buildFixture(t, true, responses...)
+}
+
+// newFixtureWithoutVerifier models a deployment with no shared UI VM.
+func newFixtureWithoutVerifier(t *testing.T) *fixture {
+	t.Helper()
+	return buildFixture(t, false)
+}
+
+func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *fixture {
 	t.Helper()
 	ctx := context.Background()
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -80,8 +109,16 @@ func newFixture(t *testing.T, responses ...llm.Response) *fixture {
 	if err != nil {
 		t.Fatalf("web.Handler: %v", err)
 	}
+	var verifier *verify.Verifier
+	if withVerifier {
+		if verifier, err = verify.New(uiVMDriver{}, verify.Config{UIInstanceID: "vm_ui", Profiles: 2}); err != nil {
+			t.Fatalf("verify.New: %v", err)
+		}
+	}
+
 	srv, err := New(Deps{
-		Store: st, Orch: orch, Vault: vault, Memory: mem, UI: ui, Owner: owner, Logger: quiet,
+		Store: st, Orch: orch, Vault: vault, Memory: mem, UI: ui,
+		Verifier: verifier, Owner: owner, Logger: quiet,
 	})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)

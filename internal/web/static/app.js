@@ -632,6 +632,7 @@ async function renderFork(forkID) {
     row: fork.preview_url ? [
       el("span", { class: "mono", text: fork.preview_url.replace(/^https?:\/\//, "") }),
       el("a", { class: "btn btn-secondary btn-sm", href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "Open ↗" }),
+      validateButton(fork),
     ] : [],
   }));
 
@@ -668,6 +669,27 @@ async function renderFork(forkID) {
   return live.subscribe(throttle((event) => {
     if (event.fork_id === forkID && currentPath().startsWith("#/fork/")) renderFork(forkID);
   }, 3000));
+}
+
+// validateButton drives a browser against this sub-task's preview on request.
+// It reports what was found without moving the sub-task: the pipeline owns the
+// verify/fix loop, and this is a second opinion, not a restart of it.
+function validateButton(fork) {
+  const button = el("button", { class: "btn btn-secondary btn-sm", text: "Run validation" });
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Validating…";
+    try {
+      const report = await api.send("POST", `/v1/forks/${fork.id}/validate`);
+      toast(report.passed ? "Validation passed." : `Validation failed: ${report.summary}`, !report.passed);
+      renderFork(fork.id);
+    } catch (err) {
+      toast(err.message, true);
+      button.disabled = false;
+      button.textContent = "Run validation";
+    }
+  });
+  return button;
 }
 
 function escalationPanel(fork) {
