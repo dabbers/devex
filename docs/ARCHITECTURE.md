@@ -135,6 +135,14 @@ approval blocks the merge. The target branch is merged into the fork, not the
 other way round, so a bad merge never reaches a shared branch; a claimed
 conflict resolution is checked against the git tree rather than trusted.
 
+**One UI VM, provisioned once and recognised again.** The shared UI VM is
+found by a role label rather than a remembered id, so a control-plane restart
+reuses the machine it was already using instead of stranding it and booting a
+second — which matters because nothing is reclaimed automatically. If it cannot
+be provisioned the daemon still starts and serves the control plane, and says
+that nothing can be verified, rather than refusing to start and leaving the
+operator without the UI that would explain why.
+
 **Nothing is reclaimed automatically.** A fork's VM and preview URL persist
 after merge or abandonment, so work can be revisited. Cleanup is manual, and
 port exhaustion says so rather than failing cryptically.
@@ -191,9 +199,6 @@ trailing zeros, which breaks lexicographic ordering (`.1Z` sorts after
   are built. The web shell, SSH access and the embedded editor are not: they
   need interactive streaming into a VM, and `vm.Driver` exposes only
   run-to-completion `Exec`. That is an interface change, not a missing screen.
-- **Provisioning the shared UI VM.** Verification needs one, and nothing
-  creates it yet; until it exists the daemon says so at startup and leaves
-  forks queued rather than admitting work that cannot run.
 - **The verifier harness.** dabberz hands the UI VM a JSON job and reads a JSON
   report back; the browser-driving program itself is not in this repository.
 - **The dabberz MCP toolset** given to coding agents (secrets, preview control,

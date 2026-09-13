@@ -45,6 +45,8 @@ type Config struct {
 	DriverCommand []string `yaml:"driver_command" json:"driver_command"`
 	// Timeout bounds one run.
 	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+	// VM describes the shared UI VM to provision when UIInstanceID is unset.
+	VM VMConfig `yaml:"vm" json:"vm"`
 }
 
 func (c Config) withDefaults() Config {

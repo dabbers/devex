@@ -158,6 +158,15 @@ type Instance struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Labels returns the instance's labels, never nil, so callers can look one up
+// without guarding for an instance that was created without any.
+func (i *Instance) Labels() map[string]string {
+	if i == nil || i.Spec.Labels == nil {
+		return map[string]string{}
+	}
+	return i.Spec.Labels
+}
+
 // Command is a single command to run inside an instance.
 type Command struct {
 	// Argv is the command and its arguments; it is never passed through a

@@ -247,10 +247,36 @@ func TestWarningsNameEveryLimitingGap(t *testing.T) {
 	warnings := strings.Join(cfg.Warnings(), "\n")
 	// A configuration can be valid and still unable to do the job; the daemon
 	// should say which parts are inert rather than failing later.
-	for _, want := range []string{"orchestrator API key", "Claude Code token", "shared UI VM", "local VM driver"} {
+	for _, want := range []string{"orchestrator API key", "Claude Code token", "local VM driver"} {
 		if !strings.Contains(warnings, want) {
 			t.Errorf("warnings do not mention %q:\n%s", want, warnings)
 		}
+	}
+	// The UI VM is provisioned automatically by default, so its absence from
+	// the config is not a gap worth warning about.
+	if strings.Contains(warnings, "shared UI VM") {
+		t.Errorf("warned about the UI VM despite auto-provisioning being on:\n%s", warnings)
+	}
+}
+
+func TestDisablingUIVMProvisioningIsWarnedAbout(t *testing.T) {
+	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
+	cfg, err := Load(writeConfig(t, `
+owner: me@example.com
+preview:
+  domain: dab.im
+verify:
+  vm:
+    auto_provision: false
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// With no UI VM and no way to get one, nothing can be verified and so
+	// nothing can reach the merge gate. That has to be said out loud.
+	warnings := strings.Join(cfg.Warnings(), "\n")
+	if !strings.Contains(warnings, "shared UI VM") {
+		t.Fatalf("turning off provisioning should warn:\n%s", warnings)
 	}
 }
 
@@ -267,6 +293,8 @@ caddy:
   wildcard_domain: dab.im
 verify:
   ui_instance_id: vm_ui
+  vm:
+    auto_provision: false
 driver:
   kind: firecracker
   firecracker:

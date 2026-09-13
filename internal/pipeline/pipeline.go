@@ -238,9 +238,17 @@ func (p *Pipeline) code(ctx context.Context, fork *domain.Fork, instanceID, prom
 		return true, err
 	}
 	p.eventAs(ctx, fork, domain.ActorAgent, domain.EventAgentMessage, truncate(res.Output, 400), map[string]any{
-		"cost_usd": res.Usage.CostUSD,
-		"tokens":   res.Usage.InputTokens + res.Usage.OutputTokens,
+		"cost_usd":       res.Usage.CostUSD,
+		"tokens":         res.Usage.InputTokens + res.Usage.OutputTokens,
+		"usage_reported": res.UsageReported,
 	})
+	if !res.UsageReported {
+		// Zero usage here means unaccounted, not free. Say so: the cost and
+		// token tripwires are not counting this run, and a budget that
+		// silently stops accruing is worse than one that is visibly wrong.
+		p.eventAs(ctx, fork, domain.ActorPipeline, domain.EventError,
+			"the coding agent did not report what this run cost; cost and token budgets are not counting it", nil)
+	}
 
 	// A rate limit is not a failure of the work; it is a pause, surfaced to
 	// the user rather than pre-empted by an artificial concurrency cap.

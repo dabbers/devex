@@ -173,11 +173,9 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	agentRunner := agent.New(driver, cfg.Agent)
 
-	var verifier *verify.Verifier
-	if cfg.Verify.UIInstanceID != "" {
-		if verifier, err = verify.New(driver, cfg.Verify); err != nil {
-			return nil, err
-		}
+	verifier, err := buildVerifier(ctx, driver, &cfg, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	var launcher scheduler.Launcher
@@ -306,6 +304,36 @@ func (unconfiguredModel) Complete(context.Context, llm.Request) (*llm.Response, 
 }
 
 func (unconfiguredModel) Model() string { return "unconfigured" }
+
+// buildVerifier resolves the shared UI VM and builds the verifier around it.
+//
+// One UI VM serves every verification, so it is provisioned once here rather
+// than per fork. Failing to get one is not fatal: the daemon still serves the
+// control plane and the audit trail, and says plainly that nothing can be
+// verified, which is better than refusing to start and leaving the operator
+// without the UI that would explain why.
+func buildVerifier(ctx context.Context, driver vm.Driver, cfg *config.Config, logger *slog.Logger) (*verify.Verifier, error) {
+	if cfg.Verify.UIInstanceID == "" {
+		if !cfg.Verify.VM.AutoProvision {
+			return nil, nil
+		}
+		instance, err := verify.EnsureUIVM(ctx, driver, cfg.Verify.VM)
+		if err != nil {
+			logger.Warn("could not provision the shared UI VM; verification is unavailable and forks will stay queued",
+				"error", err)
+			return nil, nil
+		}
+		cfg.Verify.UIInstanceID = instance.ID
+		logger.Info("shared UI VM ready",
+			"instance", instance.ID, "address", instance.Address, "profiles", cfg.Verify.Profiles)
+	}
+
+	verifier, err := verify.New(driver, cfg.Verify)
+	if err != nil {
+		return nil, err
+	}
+	return verifier, nil
+}
 
 // buildDriver selects the VM driver.
 func buildDriver(cfg config.Config, dataDir string) (vm.Driver, error) {

@@ -172,6 +172,33 @@ func TestRunParsesResultAmongProgressOutput(t *testing.T) {
 	}
 }
 
+func TestUnparseableOutputIsMarkedUnaccounted(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: "claude: command not found", ExitCode: 127}}
+	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Zero usage from an unparseable run means unaccounted, not free. Without
+	// this flag the cost and token tripwires would silently stop counting.
+	if res.UsageReported {
+		t.Fatal("usage should not be reported as accounted when nothing could be parsed")
+	}
+	if res.Usage.CostUSD != 0 {
+		t.Fatalf("cost = %v, want zero for an unaccounted run", res.Usage.CostUSD)
+	}
+}
+
+func TestParsedRunIsMarkedAccounted(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.25)}}
+	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.UsageReported {
+		t.Fatal("a parsed result should count as accounted")
+	}
+}
+
 func TestRunFallsBackToRawOutput(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{
 		Stdout:   "claude: command not found",

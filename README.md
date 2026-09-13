@@ -26,6 +26,11 @@ much budget each workstream has left — backed by a single audit trail that
 records every action across every repo, attributed to the user or to the
 component that took it. Secret values never enter that trail.
 
+A task runs end to end on the local driver: plan, approval checkpoint, fork
+scheduling with fork-time serialization, preview allocation, coding, browser
+verification, the merge gate, and completion — with spend accounted against
+each workstream's tripwire budget.
+
 Booting real Firecracker guests is **not** implemented yet — the driver's
 networking, layout and machine configuration are, but the boot path reports
 `ErrNotSupported`. See [Architecture](docs/ARCHITECTURE.md#what-is-not-implemented)

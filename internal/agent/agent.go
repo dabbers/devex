@@ -97,6 +97,12 @@ type Result struct {
 	// error and handled like any other pause rather than pre-empted with a
 	// concurrency cap.
 	RateLimited bool `json:"rate_limited"`
+	// UsageReported says whether the agent accounted for what the run cost.
+	// When it is false the Usage figures are zero because nothing could be
+	// parsed, not because the run was free -- and the cost and token
+	// tripwires are therefore not counting this run. Callers surface that
+	// rather than letting a budget silently stop accruing.
+	UsageReported bool `json:"usage_reported"`
 	// Raw is the agent's unparsed output, kept for the activity feed.
 	Raw string `json:"-"`
 }
@@ -177,6 +183,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 
 	parsed := parseResult(exec.Stdout)
 	if parsed != nil {
+		result.UsageReported = true
 		result.Output = parsed.Result
 		result.Failed = parsed.IsError
 		result.Usage.InputTokens = parsed.Usage.InputTokens + parsed.Usage.CacheCreationInputTokens + parsed.Usage.CacheReadInputTokens

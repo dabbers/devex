@@ -115,9 +115,15 @@ func Default() Config {
 		Scheduler: SchedulerConfig{Interval: 5 * time.Second},
 		Preview:   preview.Config{Domain: "dab.im", Scheme: "https"},
 		LLM:       llm.Config{BaseURL: llm.DefaultBaseURL, Model: llm.DefaultModel},
-		Verify:    verify.Config{Profiles: verify.DefaultProfiles},
-		Merge:     merge.Config{Remote: "origin", Push: true},
-		Tripwire:  tripwire.Defaults(),
+		Verify: verify.Config{
+			Profiles: verify.DefaultProfiles,
+			// Verification is required for anything to merge, so the machine
+			// that performs it is provisioned by default rather than being a
+			// step an operator has to discover.
+			VM: verify.VMConfig{AutoProvision: true},
+		},
+		Merge:    merge.Config{Remote: "origin", Push: true},
+		Tripwire: tripwire.Defaults(),
 	}
 }
 
@@ -207,8 +213,8 @@ func (c *Config) Warnings() []string {
 	if c.Agent.OAuthToken == "" {
 		warnings = append(warnings, "no Claude Code token ("+EnvClaudeToken+"); coding agents will not authenticate")
 	}
-	if c.Verify.UIInstanceID == "" {
-		warnings = append(warnings, "no shared UI VM (verify.ui_instance_id); verification cannot run, so no fork can reach the merge gate")
+	if c.Verify.UIInstanceID == "" && !c.Verify.VM.AutoProvision {
+		warnings = append(warnings, "no shared UI VM (verify.ui_instance_id is unset and verify.vm.auto_provision is off); verification cannot run, so no fork can reach the merge gate")
 	}
 	if c.Driver.Kind == "local" {
 		warnings = append(warnings, "using the local VM driver: agents run on the host with no isolation, which is for development only")

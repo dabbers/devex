@@ -101,10 +101,19 @@ agent:
 
 verify:
   # One shared UI VM serves every verifier: a single browser with N
-  # independently addressable profiles, not N browsers. Set this to the
-  # instance id of that VM.
+  # independently addressable profiles, not N browsers. Leave ui_instance_id
+  # empty to have one provisioned automatically; set it to pin an existing
+  # instance instead.
   ui_instance_id: ""
   profiles: 4
+  vm:
+    auto_provision: true
+    name: dabberz-ui
+    # A browser driving several profiles wants memory more than vCPUs.
+    resources:
+      vcpus: 2
+      memory_mib: 8192
+      disk_gib: 20
   driver_command: ["dabberz-verify"]
   timeout: 10m
 
