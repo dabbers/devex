@@ -20,11 +20,12 @@ driver: planning and the approval checkpoint, fork scheduling, preview
 allocation and Caddy routing, repo-scoped secrets, the per-repo memory store,
 the verify/fix loop, tripwires, and the merge gate.
 
-The web UI is served by the daemon at its listen address. It opens on a
-cross-repo overview — what needs you, what is in flight everywhere, and how
-much budget each workstream has left — backed by a single audit trail that
-records every action across every repo, attributed to the user or to the
-component that took it. Secret values never enter that trail.
+The web UI is served by the daemon at its listen address, set in the Broadsheet
+newsprint design system. It opens on your repositories and the projects under
+them; each project's sub-tasks carry their own machine, branch, preview URL and
+remaining budget. Behind it is a single audit trail recording every action
+across every repository, attributed either to you or to the component that took
+it. Secret values never enter that trail.
 
 A task runs end to end on the local driver: plan, approval checkpoint, fork
 scheduling with fork-time serialization, preview allocation, coding, browser

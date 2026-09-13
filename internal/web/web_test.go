@@ -140,3 +140,50 @@ func TestUIDoesNotAssignUntrustedHTML(t *testing.T) {
 		}
 	}
 }
+
+func TestStylesheetCarriesTheDesignSystemTokens(t *testing.T) {
+	root, err := FS()
+	if err != nil {
+		t.Fatalf("FS: %v", err)
+	}
+	styles, err := fs.ReadFile(root, "style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	sheet := string(styles)
+
+	// Broadsheet is a token system; colors and spacing come from variables so
+	// the look can be retuned in one place.
+	for _, token := range []string{"--color-accent:", "--color-bg:", "--font-heading:", "--space-3:", "--radius-md:"} {
+		if !strings.Contains(sheet, token) {
+			t.Errorf("stylesheet is missing the %s token", token)
+		}
+	}
+	// The serif is the chrome: no sans-serif UI font is introduced.
+	if strings.Contains(sheet, "system-ui, -apple-system") {
+		t.Error("a sans-serif UI stack was reintroduced; the serif is the chrome")
+	}
+	// A webfont that cannot be reached must fall back to a real serif, since a
+	// self-hosted control plane may have no route to Google Fonts.
+	if !strings.Contains(sheet, "Georgia") {
+		t.Error("the heading stack has no local serif fallback")
+	}
+}
+
+func TestUISpeaksTheProductVocabulary(t *testing.T) {
+	root, err := FS()
+	if err != nil {
+		t.Fatalf("FS: %v", err)
+	}
+	script, err := fs.ReadFile(root, "app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	// The interface says repository / project / sub-task where the API says
+	// repo / task / fork. Losing that mapping is how the two drift apart.
+	for _, word := range []string{"sub-task", "project", "machine"} {
+		if !strings.Contains(string(script), word) {
+			t.Errorf("the UI does not use the word %q anywhere", word)
+		}
+	}
+}

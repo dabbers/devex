@@ -47,6 +47,10 @@ type OverviewTotals struct {
 // RepoSummary is one repo's slice of the overview.
 type RepoSummary struct {
 	Repo *domain.Repo `json:"repo"`
+	// Tasks are this repo's tasks, newest first, each with its fork counts.
+	// They are included here so the dashboard can show a repo and the work
+	// under it without a request per repo.
+	Tasks []TaskSummary `json:"tasks"`
 	// ActiveTasks counts tasks still running in this repo.
 	ActiveTasks int `json:"active_tasks"`
 	Running     int `json:"running"`
@@ -55,6 +59,22 @@ type RepoSummary struct {
 	// LastActivity is the most recent event timestamp in this repo, which is
 	// what the list is ordered by.
 	LastActivity time.Time `json:"last_activity,omitempty"`
+}
+
+// TaskSummary is one task and how its forks are doing.
+type TaskSummary struct {
+	Task *domain.Task `json:"task"`
+	// Forks counts the task's workstreams by disposition, which is what the
+	// dashboard shows instead of listing them.
+	Forks     int `json:"forks"`
+	Running   int `json:"running"`
+	Queued    int `json:"queued"`
+	Escalated int `json:"escalated"`
+	Merged    int `json:"merged"`
+	// PreviewURL is a live preview belonging to one of this task's forks, so
+	// a finished project can be opened straight from the dashboard. Each fork
+	// has its own; this is simply the most recently updated one.
+	PreviewURL string `json:"preview_url,omitempty"`
 }
 
 // ForkView is a fork with the context needed to read it without a second
@@ -98,11 +118,18 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskTitles := make(map[string]string, len(tasks))
+	taskSummaries := make(map[string]*TaskSummary, len(tasks))
 	for _, task := range tasks {
 		taskTitles[task.ID] = task.Title
-		if summary := summaries[task.RepoID]; summary != nil && !task.State.Terminal() {
+		summary := summaries[task.RepoID]
+		if summary == nil {
+			continue
+		}
+		if !task.State.Terminal() {
 			summary.ActiveTasks++
 		}
+		summary.Tasks = append(summary.Tasks, TaskSummary{Task: task})
+		taskSummaries[task.ID] = &summary.Tasks[len(summary.Tasks)-1]
 	}
 
 	// A queued fork's reason comes from the scheduler, so the UI can say what
@@ -121,6 +148,23 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, fork := range forks {
+		if summary := taskSummaries[fork.TaskID]; summary != nil {
+			summary.Forks++
+			switch {
+			case fork.State == domain.ForkEscalated:
+				summary.Escalated++
+			case fork.State == domain.ForkQueued:
+				summary.Queued++
+			case fork.State == domain.ForkMerged:
+				summary.Merged++
+			case !fork.State.Terminal():
+				summary.Running++
+			}
+			if fork.PreviewURL != "" {
+				summary.PreviewURL = fork.PreviewURL
+			}
+		}
+
 		view := ForkView{
 			Fork:      fork,
 			RepoName:  repoNames[fork.RepoID],
@@ -175,7 +219,11 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 
 	overview.Repos = make([]RepoSummary, 0, len(summaries))
 	for _, repo := range repos {
-		overview.Repos = append(overview.Repos, *summaries[repo.ID])
+		summary := summaries[repo.ID]
+		if summary.Tasks == nil {
+			summary.Tasks = []TaskSummary{}
+		}
+		overview.Repos = append(overview.Repos, *summary)
 	}
 	// Repos with something happening float to the top; ties break on recency.
 	sort.SliceStable(overview.Repos, func(i, j int) bool {

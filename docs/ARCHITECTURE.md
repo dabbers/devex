@@ -150,6 +150,33 @@ port exhaustion says so rather than failing cryptically.
 **Everything is scoped by user id.** v1 is single-user; the scoping is there so
 multi-user support is additive rather than a migration of every table.
 
+## The interface
+
+The UI is set in Broadsheet, a newsprint system: near-black Source Serif 4 on
+a paper ground, the two process inks used small and deliberately, and structure
+carried by the serif scale and whitespace rather than by boxes or dividers. The
+serif is the chrome; no sans-serif is introduced. Broadsheet shows no dark
+surfaces, so the interface is light only.
+
+It speaks a different vocabulary from the domain, deliberately and one-to-one:
+
+| Interface | Domain | What it is |
+| --- | --- | --- |
+| repository | repo | the root of secrets, memory and config |
+| project | task | one prompt, decomposed |
+| sub-task | fork | one workstream, one machine, one preview URL |
+| machine | VM | the microVM a sub-task runs on |
+| validation | verification | a real browser driven against the preview |
+
+One point where the design and the system disagreed is worth recording. The
+design presented a project as a single machine working a queue of sub-tasks,
+with one preview URL. The requirements give each fork its own VM, running in
+parallel except where two would collide. The isolation model won: the project
+screen lists sub-tasks that each carry their own machine, branch and preview,
+and a serialized one says so. Keeping the design's framing would have made
+fork-time overlap detection meaningless, since nothing would ever run at the
+same time.
+
 ## The audit trail
 
 Every action lands in one append-only log, and the UI's unified activity view
@@ -216,7 +243,10 @@ make run
 ```
 
 The UI is served by the daemon at its listen address, from assets embedded in
-the binary: there is no build step and no second process to deploy.
+the binary: there is no build step and no second process to deploy. The tradeoff
+is that editing CSS or JS has no effect until the binary is rebuilt and the
+daemon restarted — `make build` tracks the assets as prerequisites, but the
+running process still holds the old copy.
 
 Secrets stored under a master key cannot be recovered without it. The daemon
 warns at startup about any configuration that is valid but leaves part of the

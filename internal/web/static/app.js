@@ -1,9 +1,14 @@
-// dabberz control plane.
+// dabberz control plane, set in the Broadsheet system.
+//
+// Vocabulary: the interface says repository / project / sub-task where the API
+// says repo / task / fork. The mapping is deliberate and one-to-one; only the
+// words differ, so "project" below always means one task and "sub-task" always
+// means one fork with its own machine and its own preview URL.
 //
 // Everything rendered here is untrusted: agent output, verifier reports and
-// commit messages all flow into the activity feed. Nothing is ever assigned to
-// innerHTML; the `el` helper builds nodes and sets text through textContent,
-// so a workstream named "<img onerror=...>" is displayed, not executed.
+// workstream names all flow into these views. Nothing is ever assigned to
+// innerHTML; `el` builds nodes and sets text, so a name containing markup is
+// displayed rather than executed.
 
 const api = {
   async get(path) {
@@ -55,8 +60,8 @@ const clear = (node) => { while (node.firstChild) node.removeChild(node.firstChi
 
 // ---------------------------------------------------------------- formatting
 
-// States are grouped by what they mean for the reader, not by name: is this
-// working, waiting on the machine, waiting on me, or done.
+// One status scale across tasks and forks: quiet when nothing is needed, cyan
+// while work is moving, maroon when it wants a person.
 const STATE_TONE = {
   queued: "idle",
   provisioning: "busy",
@@ -69,7 +74,6 @@ const STATE_TONE = {
   escalated: "warn",
   failed: "bad",
   abandoned: "idle",
-  // Task states share the scale.
   draft: "idle",
   planning: "busy",
   awaiting_plan: "wait",
@@ -78,10 +82,31 @@ const STATE_TONE = {
   cancelled: "idle",
 };
 
-const stateLabel = (state) => String(state || "").replace(/_/g, " ");
+// What each state means in the interface's own words, rather than the
+// lifecycle's. A person reading the dashboard wants to know what is happening,
+// not which node of a state machine this is.
+const STATE_WORDS = {
+  queued: "queued",
+  provisioning: "booting machine",
+  coding: "working",
+  verifying: "validating",
+  fixing: "fixing",
+  awaiting_merge: "ready to merge",
+  merging: "merging",
+  merged: "merged",
+  escalated: "needs you",
+  failed: "failed",
+  abandoned: "abandoned",
+  draft: "draft",
+  planning: "planning",
+  awaiting_plan: "awaiting approval",
+  running: "running",
+  completed: "complete",
+  cancelled: "cancelled",
+};
 
-const badge = (state, extra = "") =>
-  el("span", { class: `badge ${STATE_TONE[state] || "idle"} ${extra}`.trim(), text: stateLabel(state) });
+const stateLabel = (state) => STATE_WORDS[state] || String(state || "").replace(/_/g, " ");
+const tag = (state) => el("span", { class: `tag tag-${STATE_TONE[state] || "idle"}`, text: stateLabel(state) });
 
 function relativeTime(iso) {
   const then = new Date(iso).getTime();
@@ -98,12 +123,13 @@ function relativeTime(iso) {
 const clockTime = (iso) => {
   const at = new Date(iso);
   return Number.isFinite(at.getTime())
-    ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
     : "";
 };
 
 const money = (usd) => `$${(usd || 0).toFixed(2)}`;
 const count = (n) => (n || 0).toLocaleString();
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
 
 function duration(ns) {
   const seconds = Math.round((ns || 0) / 1e9);
@@ -113,17 +139,13 @@ function duration(ns) {
   return `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
 }
 
-// A meter reads as spent when nothing is left, low under a quarter. The point
-// is to show a fork approaching its tripwire before it stops.
 function meter(label, used, limit, format = (v) => String(v)) {
   if (!limit) return null;
   const ratio = Math.max(0, Math.min(1, used / limit));
   const tone = ratio >= 1 ? "spent" : ratio > 0.75 ? "low" : "";
-  // The number matters more than the bar: "3/8 cycles" says how close this
-  // fork is to its tripwire, which a bare bar does not.
   return el("span", { class: `meter ${tone}`.trim(), title: `${label}: ${format(used)} of ${format(limit)}` },
     el("span", { class: "track" }, el("span", { class: "fill", style: `width:${ratio * 100}%` })),
-    el("span", { class: "value", text: `${format(used)}/${format(limit)} ${label}` }));
+    `${format(used)}/${format(limit)} ${label}`);
 }
 
 function toast(message, bad = false) {
@@ -135,69 +157,8 @@ function toast(message, bad = false) {
   toast.timer = setTimeout(() => { node.hidden = true; }, bad ? 6000 : 3000);
 }
 
-// ---------------------------------------------------------------- components
-
-// forkRow renders one fork with enough context to be read on its own: which
-// repo and task it belongs to, what it is doing, and how much budget is left.
-function forkRow(view) {
-  const fork = view.fork;
-  const remaining = view.budget_remaining || {};
-  const usage = fork.usage || {};
-
-  const meters = [
-    meter("cycles", usage.cycles || 0, (usage.cycles || 0) + (remaining.cycles || 0)),
-    meter("spend", usage.cost_usd || 0, (usage.cost_usd || 0) + (remaining.cost_usd || 0), money),
-  ].filter(Boolean);
-
-  return el("a", { class: "fork", href: `#/fork/${fork.id}` },
-    el("div", { class: "fork-head" },
-      el("span", { class: "fork-name", text: fork.name }),
-      badge(fork.state),
-      el("span", { class: "fork-ctx" },
-        view.repo_name || "",
-        view.task_title ? el("span", { class: "sep", text: "›" }) : null,
-        view.task_title || "")),
-    el("div", { class: "fork-meta" },
-      fork.preview_url ? el("span", { text: "preview ready" }) : null,
-      view.waiting_for ? el("span", { text: view.waiting_for }) : null,
-      ...meters,
-      el("span", { class: "muted", text: relativeTime(fork.updated_at) })));
-}
-
-// eventRow renders one audit entry. Structured data is available but folded
-// away, so the feed stays readable while remaining complete.
-function eventRow(event, isNew = false) {
-  const where = [];
-  if (event.fork_id) where.push(el("a", { href: `#/fork/${event.fork_id}`, text: "fork" }));
-  if (event.task_id) where.push(el("a", { href: `#/task/${event.task_id}`, text: "task" }));
-  if (event.repo_id) where.push(el("a", { href: `#/repo/${event.repo_id}`, text: "repo" }));
-
-  const linked = [];
-  where.forEach((node, index) => {
-    if (index) linked.push(" · ");
-    linked.push(node);
-  });
-
-  return el("div", { class: `event${isNew ? " new" : ""}` },
-    el("time", { datetime: event.created_at, title: event.created_at, text: clockTime(event.created_at) }),
-    el("span", { class: `actor ${event.actor === "user" ? "user" : ""}`.trim(), text: event.actor || "system" }),
-    el("div", { class: "body" },
-      el("div", { class: "msg" },
-        el("span", { class: "type", text: event.type }),
-        event.message || ""),
-      linked.length ? el("div", { class: "where" }, ...linked) : null,
-      event.data && Object.keys(event.data).length
-        ? el("details", { class: "data" },
-            el("summary", { text: "details" }),
-            el("pre", { text: JSON.stringify(event.data, null, 2) }))
-        : null));
-}
-
 // ---------------------------------------------------------------- live stream
 
-// Live keeps one EventSource open and hands every subscriber the events it
-// asked for. The cursor is the sequence number, so a reconnect resumes exactly
-// where it left off rather than replaying or skipping.
 const live = {
   source: null,
   cursor: 0,
@@ -206,8 +167,6 @@ const live = {
 
   start() {
     this.connect();
-    // A tab that comes back after sleeping reconnects immediately rather than
-    // waiting out the backoff.
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && (!this.source || this.source.readyState === 2)) this.connect();
     });
@@ -220,24 +179,16 @@ const live = {
     const source = new EventSource(`/v1/events/stream?after=${this.cursor}`);
     this.source = source;
 
-    source.onopen = () => {
-      this.retry = 1000;
-      setConnection("live");
-    };
+    source.onopen = () => { this.retry = 1000; setConnection("live"); };
     source.onmessage = (message) => {
       let event;
-      try {
-        event = JSON.parse(message.data);
-      } catch {
-        return;
-      }
+      try { event = JSON.parse(message.data); } catch { return; }
       if (event.seq > this.cursor) this.cursor = event.seq;
       for (const listener of this.listeners) listener(event);
     };
     source.onerror = () => {
       setConnection("down");
       source.close();
-      // Back off, but keep trying: the daemon restarting is a normal event.
       setTimeout(() => this.connect(), this.retry);
       this.retry = Math.min(this.retry * 2, 15000);
     };
@@ -264,105 +215,553 @@ async function refreshStatus() {
     const strip = document.getElementById("status-strip");
     clear(strip);
 
+    const machines = capacity.active_forks || 0;
+    strip.append(el("span", {},
+      machines ? el("b", { text: count(machines) }) : "no",
+      machines ? ` ${machines === 1 ? "machine" : "machines"} running` : " machines running"));
+
+    if (capacity.queued_forks) {
+      strip.append(el("span", {}, el("b", { text: count(capacity.queued_forks) }), " queued"));
+    }
     const machine = capacity.machine;
     if (machine) {
-      const used = machine.used || {};
-      const total = machine.total || {};
+      const used = machine.used || {}, total = machine.total || {};
       strip.append(el("span", {}, "vcpu ", el("b", { text: `${used.vcpus || 0}/${total.vcpus || 0}` })));
-      strip.append(el("span", {}, "mem ", el("b", { text: `${Math.round((used.memory_mib || 0) / 1024)}/${Math.round((total.memory_mib || 0) / 1024)}G` })));
-    }
-    strip.append(el("span", {}, "running ", el("b", { text: count(capacity.active_forks) })));
-    if (capacity.queued_forks) {
-      strip.append(el("span", {}, "queued ", el("b", { text: count(capacity.queued_forks) })));
     }
     const verification = capacity.verification;
-    if (verification) {
-      strip.append(el("span", {}, "verify ", el("b", { text: `${verification.held}/${verification.capacity}` }),
-        verification.waiting ? ` +${verification.waiting} queued` : ""));
+    if (verification && (verification.held || verification.waiting)) {
+      strip.append(el("span", {}, "validating ", el("b", { text: `${verification.held}/${verification.capacity}` })));
     }
   } catch (err) {
-    // The status strip is decoration; a failure here must not blank the page.
     console.warn("status unavailable", err);
   }
+}
+
+// ---------------------------------------------------------------- components
+
+function pageHead(title, { crumbs = [], lede = null, aside = null, row = [] } = {}) {
+  const head = el("div", { class: "page-head" });
+
+  if (crumbs.length) {
+    const crumb = el("div", { class: "crumb" });
+    crumbs.forEach((entry, index) => {
+      if (index) crumb.append(" › ");
+      crumb.append(entry.href ? el("a", { href: entry.href, text: entry.label }) : entry.label);
+    });
+    head.append(crumb);
+  }
+
+  head.append(el("div", { class: "headline-row" },
+    el("div", {}, el("h1", { text: title }), lede ? el("p", { class: "lede" }, lede) : null),
+    aside));
+
+  if (row.filter(Boolean).length) head.append(el("div", { class: "row" }, ...row));
+  return head;
+}
+
+const section = (title, ...body) =>
+  el("section", { class: "section" }, title ? el("h6", { text: title }) : null, ...body);
+
+const empty = (message) => el("p", { class: "empty", text: message });
+
+// eventRow renders one audit entry.
+function eventRow(event, isNew = false) {
+  const where = [];
+  if (event.fork_id) where.push(el("a", { href: `#/fork/${event.fork_id}`, text: "sub-task" }));
+  if (event.task_id) where.push(el("a", { href: `#/task/${event.task_id}`, text: "project" }));
+  if (event.repo_id) where.push(el("a", { href: `#/repo/${event.repo_id}`, text: "repository" }));
+
+  const linked = [];
+  where.forEach((node, index) => { if (index) linked.push(" · "); linked.push(node); });
+
+  return el("div", { class: `event${isNew ? " new" : ""}` },
+    el("time", { datetime: event.created_at, title: event.created_at, text: clockTime(event.created_at) }),
+    el("span", { class: `actor ${event.actor === "user" ? "user" : ""}`.trim(), text: event.actor || "system" }),
+    el("div", { class: "body" },
+      el("div", { class: "msg" }, el("span", { class: "type", text: event.type }), event.message || ""),
+      linked.length ? el("div", { class: "where" }, ...linked) : null,
+      event.data && Object.keys(event.data).length
+        ? el("details", { class: "data" },
+            el("summary", { text: "details" }),
+            el("pre", { text: JSON.stringify(event.data, null, 2) }))
+        : null));
+}
+
+async function feed(path) {
+  const data = await api.get(path);
+  return data.events?.length
+    ? el("div", {}, ...data.events.map((event) => eventRow(event)))
+    : empty("Nothing recorded yet.");
+}
+
+// budgetMeters renders how close a sub-task is to its tripwire.
+function budgetMeters(usage = {}, remaining = {}) {
+  return [
+    meter("cycles", usage.cycles || 0, (usage.cycles || 0) + (remaining.cycles || 0)),
+    meter("spend", usage.cost_usd || 0, (usage.cost_usd || 0) + (remaining.cost_usd || 0), money),
+  ].filter(Boolean);
 }
 
 // ---------------------------------------------------------------- views
 
 const view = () => document.getElementById("view");
 
-function pageHead(title, crumbs = [], ...trailing) {
-  const crumb = el("div", { class: "crumb" });
-  crumbs.forEach((entry, index) => {
-    if (index) crumb.append(" › ");
-    crumb.append(entry.href ? el("a", { href: entry.href, text: entry.label }) : entry.label);
-  });
-  return el("div", { class: "page-head" },
-    crumbs.length ? crumb : null,
-    el("h1", { text: title }),
-    trailing.length ? el("div", { class: "row" }, ...trailing) : null);
-}
-
-function section(title, countLabel, ...body) {
-  return el("section", { class: "section" },
-    el("h2", {}, title, countLabel !== null && countLabel !== undefined
-      ? el("span", { class: "count", text: String(countLabel) }) : null),
-    ...body);
-}
-
-const emptyPanel = (message) => el("div", { class: "panel" }, el("div", { class: "empty", text: message }));
-
-// Overview: everything in flight across every repo, with whatever needs the
-// user first.
-async function renderOverview() {
+// Repositories: every repo, with the projects under it.
+async function renderRepos() {
   const data = await api.get("/v1/overview");
   const root = view();
   clear(root);
 
-  root.append(pageHead("Overview"));
+  const totals = data.totals || {};
+  const lede = [
+    plural(totals.repos || 0, "repository", "repositories") + " onboarded",
+    `${totals.running || 0} working`,
+    totals.escalated ? `${totals.escalated} needs your review` : null,
+  ].filter(Boolean).join(" · ");
 
-  if (data.needs_attention?.length) {
-    root.append(section("Needs you", data.needs_attention.length,
-      el("div", { class: "panel" }, ...data.needs_attention.map(forkRow))));
+  root.append(pageHead("Your repositories", {
+    lede,
+    aside: el("a", { class: "btn btn-secondary", href: "#/new", text: "New project" }),
+  }));
+
+  if (!data.repos?.length) {
+    root.append(empty("No repositories yet. Add one with: dabberzctl repos add <name> <remote-url>"));
+    return live.subscribe(throttle(() => { if (currentPath() === "#/") renderRepos(); }, 2500));
   }
 
-  const attention = new Set((data.needs_attention || []).map((view) => view.fork.id));
-  const running = (data.work || []).filter((view) => !attention.has(view.fork.id));
-  root.append(section("In flight", running.length,
-    running.length
-      ? el("div", { class: "panel" }, ...running.map(forkRow))
-      : emptyPanel(attention.size ? "Everything else is finished." : "Nothing running. Start a task from a repo.")));
+  for (const summary of data.repos) root.append(repoBlock(summary));
 
-  root.append(section("Repos", data.repos?.length || 0,
-    data.repos?.length
-      ? el("div", { class: "grid cards" }, ...data.repos.map(repoCard))
-      : emptyPanel("No repos yet.")));
-
-  // A short tail of the unified trail, as a way into the full feed.
-  const recent = await api.get("/v1/audit?limit=12");
-  const feed = el("div", { class: "panel" },
-    ...(recent.events?.length ? recent.events.map((event) => eventRow(event)) : [el("div", { class: "empty", text: "No activity yet." })]));
-  root.append(section("Recent activity", null,
-    feed,
-    el("div", { class: "row-actions" }, el("a", { class: "card", href: "#/activity", text: "Open the full audit trail →" }))));
-
-  // Any event at all can change this page, so it simply refreshes, throttled.
-  return live.subscribe(throttle(() => { if (currentRoute() === "#/") renderOverview(); }, 2500));
+  return live.subscribe(throttle(() => { if (currentPath() === "#/") renderRepos(); }, 2500));
 }
 
-function repoCard(summary) {
+function repoBlock(summary) {
   const repo = summary.repo;
-  return el("a", { class: "card", href: `#/repo/${repo.id}` },
+  const tasks = summary.tasks || [];
+  const working = summary.running + summary.queued + summary.escalated;
+
+  // Repos with something happening open by default; quiet ones stay folded.
+  const expanded = working > 0 || tasks.length > 0;
+
+  const body = el("div", { class: "repo-body", hidden: !expanded });
+  const head = el("button", {
+    class: "repo-head",
+    "aria-expanded": String(expanded),
+    onclick: (e) => {
+      const open = body.hidden;
+      body.hidden = !open;
+      e.currentTarget.setAttribute("aria-expanded", String(open));
+    },
+  },
+    el("span", { class: "caret", text: "▶" }),
     el("h3", { text: repo.name }),
-    el("div", { class: "sub", text: repo.remote_url }),
-    el("div", { class: "row" },
-      summary.running ? el("span", { class: "badge busy", text: `${summary.running} running` }) : null,
-      summary.queued ? el("span", { class: "badge idle", text: `${summary.queued} queued` }) : null,
-      summary.escalated ? el("span", { class: "badge warn", text: `${summary.escalated} needs you` }) : null,
-      !repo.discovered ? el("span", { class: "badge plain", text: "not yet discovered" }) : null,
+    el("span", { class: "repo-right" },
+      summary.escalated ? el("span", { class: "tag tag-warn", text: `${summary.escalated} needs you` })
+        : summary.running ? el("span", { class: "tag tag-busy", text: `${summary.running} running` })
+        : el("span", { class: "muted", text: "idle" }),
       summary.last_activity ? el("span", { class: "muted", text: relativeTime(summary.last_activity) }) : null));
+
+  if (tasks.length) {
+    const rows = tasks.map((entry) => {
+      const task = entry.task;
+      return el("tr", {},
+        el("td", {},
+          el("a", { href: `#/task/${task.id}` }, el("strong", { text: task.title })),
+          el("div", { class: "muted", style: "font-size:13px", text: projectSubtitle(task, entry) })),
+        el("td", { class: "num" }, entry.forks
+          ? `${entry.forks} · ${entry.running ? `${entry.running} running` : entry.merged === entry.forks ? "complete" : `${entry.queued} queued`}`
+          : "—"),
+        el("td", {}, tag(task.state)));
+    });
+
+    body.append(el("table", { class: "table" },
+      el("thead", {}, el("tr", {},
+        el("th", { text: "Project" }),
+        el("th", { class: "num", text: "Sub-tasks" }),
+        el("th", { text: "State" }))),
+      el("tbody", {}, ...rows)));
+  } else {
+    body.append(empty("No projects in this repository yet."));
+  }
+
+  body.append(el("div", { class: "row-actions" },
+    el("a", { class: "btn btn-ghost btn-sm", href: `#/new?repo=${repo.id}`, text: "+ New project in this repo" }),
+    el("a", { class: "btn btn-ghost btn-sm", href: `#/repo/${repo.id}`, text: "Repository settings →" })));
+
+  return el("div", { class: "repo" },
+    head,
+    el("div", { class: "repo-meta", text: [repo.default_branch, plural(tasks.length, "project"), repo.discovered ? null : "not yet discovered"].filter(Boolean).join(" · ") }),
+    body);
 }
 
-// Activity: the unified audit trail, filterable but always the same log.
+// New project: one prompt, scoped to a repository.
+async function renderNew(params) {
+  const root = view();
+  clear(root);
+
+  const { repos } = await api.get("/v1/repos").catch(() => ({ repos: [] }));
+  root.append(pageHead("New project", {
+    crumbs: [{ label: "Repositories", href: "#/" }],
+    lede: "One prompt, as many sub-tasks as it takes. Scope it to a repository first.",
+  }));
+
+  if (!repos?.length) {
+    root.append(empty("Add a repository before starting a project."));
+    return;
+  }
+
+  const preselect = params.get("repo");
+  const repoSelect = el("select", { class: "input" },
+    ...repos.map((repo) => el("option", { value: repo.id, text: repo.name, selected: repo.id === preselect })));
+
+  const prompt = el("textarea", {
+    class: "input",
+    rows: "5",
+    placeholder: "Describe the work. It will be split into sub-tasks you approve before anything runs.",
+  });
+
+  // Where finished sub-tasks land, and when, are per-project choices; neither
+  // is assumed.
+  const target = el("select", { class: "input" },
+    el("option", { value: "default_branch", text: "the repository's default branch" }),
+    el("option", { value: "integration_branch", text: "one shared branch for this project" }));
+  const timing = el("select", { class: "input" },
+    el("option", { value: "immediate", text: "as soon as each one is verified" }),
+    el("option", { value: "batch", text: "together, once every sub-task is done" }));
+
+  const submit = el("button", { class: "btn btn-primary", text: "Draft a plan" });
+  submit.addEventListener("click", async () => {
+    if (!prompt.value.trim()) { toast("Describe the work first.", true); return; }
+    submit.disabled = true;
+    try {
+      const task = await api.send("POST", "/v1/tasks", {
+        repo_id: repoSelect.value,
+        request: prompt.value.trim(),
+        merge_target: target.value,
+        merge_timing: timing.value,
+        plan: true,
+      });
+      location.hash = `#/task/${task.id}`;
+    } catch (err) {
+      toast(err.message, true);
+      submit.disabled = false;
+    }
+  });
+
+  root.append(
+    el("div", { style: "max-width:620px" },
+      el("div", { class: "field" }, el("label", { text: "Repository" }), repoSelect),
+      el("div", { class: "field" }, el("label", { text: "What should happen?" }), prompt),
+      el("div", { class: "field" }, el("label", { text: "Finished sub-tasks merge to" }), target),
+      el("div", { class: "field" }, el("label", { text: "Merge them" }), timing),
+      el("div", { class: "row-actions" }, submit,
+        el("a", { class: "btn btn-secondary", href: "#/", text: "Cancel" }))),
+    section("How a project runs",
+      el("p", { class: "muted", style: "max-width:620px" },
+        "Your prompt is split into sub-tasks you approve. Each one gets its own machine, " +
+        "its own branch and its own preview URL, and they run in parallel — except where " +
+        "two would collide, which are run one after another. A validation agent drives a " +
+        "real browser against each preview and reports back.")));
+}
+
+// Project: one task and the sub-tasks under it.
+async function renderTask(taskID) {
+  const data = await api.get(`/v1/tasks/${taskID}`);
+  const task = data.task;
+  const forks = data.forks || [];
+  const root = view();
+  clear(root);
+
+  const running = forks.filter((f) => !["merged", "abandoned", "failed", "queued", "escalated"].includes(f.state)).length;
+  const lede = forks.length
+    ? `${running} of ${plural(forks.length, "sub-task")} running`
+    : task.state === "awaiting_plan" ? "Awaiting your approval" : stateLabel(task.state);
+
+  root.append(pageHead(task.title, {
+    crumbs: [{ label: "Repositories", href: "#/" }, { label: "Project" }],
+    lede,
+    aside: tag(task.state),
+  }));
+
+  const promptText = String(task.request || "").replace(/\s+/g, " ").trim();
+  if (promptText && !promptText.startsWith(String(task.title || "").replace(/…$/, "").trim())) {
+    root.append(el("p", { class: "muted", style: "max-width:70ch", text: promptText }));
+  }
+
+  const plan = task.plan;
+  if (plan) {
+    const open = (plan.questions || []).filter((q) => !q.answer);
+    if (open.length) {
+      root.append(section("Questions before anything runs", questionPanel(task, open)));
+    }
+
+    if (task.state === "awaiting_plan") {
+      root.append(section(`Proposed plan · round ${plan.round}`,
+        plan.summary ? el("p", { class: "muted", style: "max-width:70ch", text: plan.summary }) : null,
+        ...(plan.workstreams || []).map((workstream, index) =>
+          el("div", { class: "workstream" },
+            el("h5", {}, `${index + 1}. `, workstream.name),
+            el("p", { text: workstream.description }),
+            workstream.serialize_group
+              ? el("div", { class: "group" },
+                  `runs after the other "${workstream.serialize_group}" sub-tasks`,
+                  workstream.overlap_rationale ? ` — ${workstream.overlap_rationale}` : "")
+              : null)),
+        open.length
+          ? el("p", { class: "muted" }, "Answer the questions above before approving.")
+          : approvePanel(task, plan)));
+    }
+  }
+
+  if (forks.length) {
+    root.append(section("Sub-tasks", ...forks.map(subtaskRow)));
+  }
+
+  if (!["completed", "cancelled", "failed"].includes(task.state)) {
+    root.append(el("div", { class: "row-actions" },
+      el("button", {
+        class: "btn btn-secondary btn-sm",
+        text: "Cancel project",
+        onclick: async () => {
+          if (!confirm("Cancel this project? Unfinished sub-tasks are abandoned; their machines are left running.")) return;
+          try {
+            await api.send("POST", `/v1/tasks/${task.id}/cancel`, { reason: "cancelled from the control plane" });
+            toast("Project cancelled.");
+            renderTask(taskID);
+          } catch (err) { toast(err.message, true); }
+        },
+      })));
+  }
+
+  root.append(section("Activity", await feed(`/v1/audit?task=${taskID}&limit=60`)));
+
+  return live.subscribe(throttle((event) => {
+    if (event.task_id === taskID && currentPath().startsWith("#/task/")) renderTask(taskID);
+  }, 3000));
+}
+
+function approvePanel(task, plan) {
+  const button = el("button", { class: "btn btn-primary", text: "Approve & boot machines" });
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await api.send("POST", `/v1/tasks/${task.id}/approve`);
+      toast("Approved. Machines are being provisioned.");
+      renderTask(task.id);
+    } catch (err) {
+      toast(err.message, true);
+      button.disabled = false;
+    }
+  });
+
+  const n = plan.workstreams?.length || 0;
+  return el("div", { class: "row-actions" }, button,
+    el("span", { class: "muted", text: `${plural(n, "machine")}, ${plural(n, "sub-task")}, ${plural(n, "preview URL")}` }));
+}
+
+function subtaskRow(fork) {
+  return el("div", { class: "subtask" },
+    el("div", { class: "subtask-head" },
+      el("h5", {}, el("a", { href: `#/fork/${fork.id}`, style: "text-decoration:none", text: fork.name })),
+      tag(fork.state),
+      fork.serialize_group ? el("span", { class: "muted", style: "font-size:13px", text: `serialized · ${fork.serialize_group}` }) : null),
+    fork.description ? el("p", { class: "muted", style: "margin:4px 0 0;font-size:14px", text: fork.description }) : null,
+    el("div", { class: "subtask-meta" },
+      el("span", { class: "mono", text: fork.branch }),
+      fork.preview_url
+        ? el("a", { href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+        : null,
+      el("a", { href: `#/fork/${fork.id}`, text: "machine →" }),
+      ...budgetMeters(fork.usage)));
+}
+
+function questionPanel(task, questions) {
+  const panel = el("div", {});
+  const answers = {};
+
+  for (const question of questions) {
+    const input = el("textarea", {
+      class: "input", rows: "2", placeholder: "Your answer",
+      oninput: (e) => { answers[question.id] = e.target.value; },
+    });
+    panel.append(el("div", { class: "question" },
+      el("p", { text: question.text }),
+      question.options?.length
+        ? el("div", { class: "options" }, ...question.options.map((option) =>
+            el("button", {
+              class: "btn btn-secondary btn-sm", text: option,
+              onclick: () => { input.value = option; answers[question.id] = option; },
+            })))
+        : null,
+      input));
+  }
+
+  const send = el("button", { class: "btn btn-primary", text: "Send answers and replan" });
+  send.addEventListener("click", async () => {
+    const filled = Object.fromEntries(Object.entries(answers).filter(([, v]) => v && v.trim()));
+    if (!Object.keys(filled).length) { toast("Answer at least one question first.", true); return; }
+    send.disabled = true;
+    try {
+      await api.send("POST", `/v1/tasks/${task.id}/answers`, { answers: filled });
+      toast("Answers sent; replanning.");
+      renderTask(task.id);
+    } catch (err) { toast(err.message, true); send.disabled = false; }
+  });
+
+  panel.append(el("div", { class: "row-actions" }, send));
+  return panel;
+}
+
+// Sub-task: its machine, its preview, its transcript.
+async function renderFork(forkID) {
+  const data = await api.get(`/v1/forks/${forkID}`);
+  const fork = data.fork;
+  const usage = fork.usage || {};
+  const remaining = data.budget_remaining || {};
+
+  const root = view();
+  clear(root);
+
+  root.append(pageHead(fork.name, {
+    crumbs: [
+      { label: "Repositories", href: "#/" },
+      { label: "Project", href: `#/task/${fork.task_id}` },
+      { label: "Sub-task" },
+    ],
+    lede: fork.state_reason || stateLabel(fork.state),
+    aside: tag(fork.state),
+    row: fork.preview_url ? [
+      el("span", { class: "mono", text: fork.preview_url.replace(/^https?:\/\//, "") }),
+      el("a", { class: "btn btn-secondary btn-sm", href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "Open ↗" }),
+    ] : [],
+  }));
+
+  if (fork.escalation && fork.state === "escalated") root.append(escalationPanel(fork));
+
+  root.append(section("Machine",
+    el("dl", { class: "kv" },
+      el("dt", { text: "Status" }), el("dd", {}, stateLabel(fork.state)),
+      el("dt", { text: "Machine" }), el("dd", { class: "mono", text: fork.instance_id || "not provisioned" }),
+      el("dt", { text: "Branch" }), el("dd", { class: "mono", text: fork.branch }),
+      fork.serialize_group ? el("dt", { text: "Serialized with" }) : null,
+      fork.serialize_group ? el("dd", { text: fork.serialize_group }) : null,
+      el("dt", { text: "Started" }), el("dd", { text: fork.started_at ? relativeTime(fork.started_at) : "not yet" }),
+      el("dt", { text: "Validation rounds" }),
+      el("dd", {}, `${usage.cycles || 0}`, remaining.cycles !== undefined ? el("span", { class: "muted", text: ` · ${remaining.cycles} left` }) : null),
+      el("dt", { text: "Tokens" }), el("dd", { text: count((usage.input_tokens || 0) + (usage.output_tokens || 0)) }),
+      el("dt", { text: "Spend" }),
+      el("dd", {}, money(usage.cost_usd), remaining.cost_usd !== undefined ? el("span", { class: "muted", text: ` · ${money(remaining.cost_usd)} left` }) : null),
+      el("dt", { text: "Working time" }), el("dd", { text: duration(usage.wall_ns) })),
+    el("div", { class: "row-actions" }, ...budgetMeters(usage, remaining))));
+
+  if (fork.preview_url) {
+    root.append(section("Live preview",
+      el("p", { class: "muted", style: "margin-bottom:10px" },
+        "Reloads on every agent commit. This is the same URL the validation agent drives."),
+      el("iframe", {
+        class: "preview-frame", src: fork.preview_url, loading: "lazy",
+        sandbox: "allow-scripts allow-same-origin allow-forms",
+      })));
+  }
+
+  root.append(section("Transcript", await feed(`/v1/audit?fork=${forkID}&limit=100`)));
+
+  return live.subscribe(throttle((event) => {
+    if (event.fork_id === forkID && currentPath().startsWith("#/fork/")) renderFork(forkID);
+  }, 3000));
+}
+
+function escalationPanel(fork) {
+  const escalation = fork.escalation;
+  const response = el("textarea", { class: "input", rows: "3", placeholder: "Tell the agent what to do" });
+  const resume = el("select", { class: "input", style: "width:auto" },
+    ...["coding", "fixing", "verifying", "merging"].map((state) =>
+      el("option", { value: state, text: `resume at ${stateLabel(state)}` })));
+
+  const send = el("button", { class: "btn btn-primary", text: "Answer and resume" });
+  send.addEventListener("click", async () => {
+    if (!response.value.trim()) { toast("Write an answer first.", true); return; }
+    send.disabled = true;
+    try {
+      await api.send("POST", `/v1/forks/${fork.id}/resolve`, {
+        response: response.value.trim(), resume: resume.value,
+      });
+      toast("Sub-task resumed.");
+      renderFork(fork.id);
+    } catch (err) { toast(err.message, true); send.disabled = false; }
+  });
+
+  return el("div", { class: "callout" },
+    el("h4", { text: `Waiting for you — ${stateLabel(escalation.kind)}` }),
+    el("p", { text: escalation.message }),
+    escalation.detail ? el("pre", { text: escalation.detail }) : null,
+    response,
+    el("div", { class: "row-actions" }, resume, send));
+}
+
+// Repository: what dabberz knows about one repo.
+async function renderRepo(repoID) {
+  const [repo, projects, secrets, overview] = await Promise.all([
+    api.get(`/v1/repos/${repoID}`),
+    api.get(`/v1/repos/${repoID}/projects`).catch(() => ({ projects: [] })),
+    api.get(`/v1/repos/${repoID}/secrets`).catch(() => ({ secrets: [] })),
+    api.get("/v1/overview").catch(() => ({ repos: [] })),
+  ]);
+
+  const summary = (overview.repos || []).find((entry) => entry.repo.id === repoID);
+  const root = view();
+  clear(root);
+
+  root.append(pageHead(repo.name, {
+    crumbs: [{ label: "Repositories", href: "#/" }],
+    lede: repo.remote_url,
+    aside: el("a", { class: "btn btn-secondary", href: `#/new?repo=${repoID}`, text: "New project" }),
+    row: [
+      el("span", { class: "muted", text: `default branch ${repo.default_branch}` }),
+      repo.discovered ? null : el("span", { class: "tag tag-idle", text: "layout not yet confirmed" }),
+    ],
+  }));
+
+  if (summary?.tasks?.length) {
+    root.append(section("Projects", ...summary.tasks.map((entry) =>
+      el("div", { class: "subtask" },
+        el("div", { class: "subtask-head" },
+          el("h5", {}, el("a", { href: `#/task/${entry.task.id}`, style: "text-decoration:none", text: entry.task.title })),
+          tag(entry.task.state)),
+        el("div", { class: "subtask-meta" },
+          el("span", { text: entry.forks ? plural(entry.forks, "sub-task") : "no sub-tasks yet" }),
+          entry.preview_url
+            ? el("a", { href: entry.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+            : null)))));
+  }
+
+  root.append(section("Detected projects",
+    projects.projects?.length
+      ? el("table", { class: "table" },
+          el("thead", {}, el("tr", {},
+            el("th", { text: "Name" }), el("th", { text: "Path" }),
+            el("th", { text: "Toolchain" }), el("th", { text: "Confirmed" }))),
+          el("tbody", {}, ...projects.projects.map((project) =>
+            el("tr", {},
+              el("td", { text: project.name }),
+              el("td", { class: "mono", text: project.path }),
+              el("td", { text: project.toolchain || "—" }),
+              el("td", {}, project.confirmed
+                ? el("span", { class: "tag tag-good", text: "confirmed" })
+                : el("span", { class: "tag tag-idle", text: "inferred" }))))))
+      : empty("The repository layout has not been inspected yet.")));
+
+  root.append(section("Secrets",
+    secrets.secrets?.length
+      ? el("div", { class: "row-actions" }, ...secrets.secrets.map((name) =>
+          el("span", { class: "tag tag-idle mono", text: name })))
+      : empty("No secrets set for this repository."),
+    el("p", { class: "muted", style: "font-size:13px;margin-top:10px" },
+      "Inherited by every sub-task under this repository. Values are never displayed.")));
+
+  root.append(section("Activity", await feed(`/v1/audit?repo=${repoID}&limit=40`)));
+}
+
+// Activity: the unified trail, across every repository.
 async function renderActivity(params) {
   const root = view();
   clear(root);
@@ -373,58 +772,51 @@ async function renderActivity(params) {
     follow: params.get("follow") !== "0",
   };
 
-  root.append(pageHead("Activity", [], el("span", { class: "muted", text: "Every action, across every repo." })));
+  root.append(pageHead("Activity", { lede: "Every action, across every repository." }));
 
-  const repos = await api.get("/v1/repos").catch(() => ({ repos: [] }));
-  const feed = el("div", { class: "panel" });
+  const { repos } = await api.get("/v1/repos").catch(() => ({ repos: [] }));
+  const rows = el("div", {});
 
-  const repoSelect = el("select", { onchange: (e) => { state.repo = e.target.value; reload(); } },
-    el("option", { value: "", text: "All repos" }),
-    ...(repos.repos || []).map((repo) =>
-      el("option", { value: repo.id, text: repo.name, selected: repo.id === state.repo })));
+  const repoSelect = el("select", { class: "input", style: "width:auto", onchange: (e) => { state.repo = e.target.value; reload(); } },
+    el("option", { value: "", text: "All repositories" }),
+    ...(repos || []).map((repo) => el("option", { value: repo.id, text: repo.name, selected: repo.id === state.repo })));
 
-  const actorSelect = el("select", { onchange: (e) => { state.actor = e.target.value; reload(); } },
-    el("option", { value: "", text: "All actors" }));
+  const actorSelect = el("select", { class: "input", style: "width:auto", onchange: (e) => { state.actor = e.target.value; reload(); } },
+    el("option", { value: "", text: "Everyone" }));
 
-  const followBox = el("input", {
-    type: "checkbox",
-    checked: state.follow,
-    onchange: (e) => { state.follow = e.target.checked; },
-  });
+  const followBox = el("input", { type: "checkbox", checked: state.follow, onchange: (e) => { state.follow = e.target.checked; } });
 
   root.append(el("div", { class: "filters" },
-    repoSelect,
-    actorSelect,
+    repoSelect, actorSelect,
     el("label", { class: "toggle" }, followBox, "Follow live"),
-    el("button", { onclick: () => reload(), text: "Refresh" })));
-  root.append(feed);
+    el("button", { class: "btn btn-secondary btn-sm", onclick: () => reload(), text: "Refresh" })));
+  root.append(rows);
 
   const more = el("div", { class: "row-actions" });
   root.append(more);
+  let oldest = 0;
 
-  let oldestSeq = 0;
-
-  async function reload() {
+  async function load(before) {
     const query = new URLSearchParams({ limit: "100" });
     if (state.repo) query.set("repo", state.repo);
     if (state.actor) query.set("actor", state.actor);
+    if (before) query.set("before", String(before));
+    return api.get(`/v1/audit?${query}`);
+  }
 
-    const data = await api.get(`/v1/audit?${query}`);
-    clear(feed);
+  async function reload() {
+    const data = await load(0);
+    clear(rows);
     clear(more);
 
     if (!data.events?.length) {
-      feed.append(el("div", { class: "empty", text: "No activity matches this filter." }));
+      rows.append(empty("No activity matches this filter."));
     } else {
-      for (const event of data.events) feed.append(eventRow(event));
-      oldestSeq = data.events[data.events.length - 1].seq;
-      if (data.events.length >= 100) {
-        more.append(el("button", { onclick: loadOlder, text: "Load older" }));
-      }
+      for (const event of data.events) rows.append(eventRow(event));
+      oldest = data.events[data.events.length - 1].seq;
+      if (data.events.length >= 100) more.append(el("button", { class: "btn btn-secondary btn-sm", onclick: older, text: "Load older" }));
     }
 
-    // The actor list comes from the server so the filter cannot drift from
-    // the actors that actually exist.
     if (actorSelect.options.length === 1 && data.actors) {
       for (const actor of data.actors) {
         actorSelect.append(el("option", { value: actor, text: actor, selected: actor === state.actor }));
@@ -432,353 +824,49 @@ async function renderActivity(params) {
     }
   }
 
-  async function loadOlder() {
-    const query = new URLSearchParams({ limit: "100", before: String(oldestSeq) });
-    if (state.repo) query.set("repo", state.repo);
-    if (state.actor) query.set("actor", state.actor);
-    const data = await api.get(`/v1/audit?${query}`);
+  async function older() {
+    const data = await load(oldest);
     clear(more);
     if (!data.events?.length) {
       more.append(el("span", { class: "muted", text: "Beginning of the trail." }));
       return;
     }
-    for (const event of data.events) feed.append(eventRow(event));
-    oldestSeq = data.events[data.events.length - 1].seq;
-    more.append(el("button", { onclick: loadOlder, text: "Load older" }));
+    for (const event of data.events) rows.append(eventRow(event));
+    oldest = data.events[data.events.length - 1].seq;
+    more.append(el("button", { class: "btn btn-secondary btn-sm", onclick: older, text: "Load older" }));
   }
 
   await reload();
 
-  // New events are prepended in place, so following does not reorder or
-  // reload what is already on screen.
   return live.subscribe((event) => {
     if (!state.follow) return;
     if (state.repo && event.repo_id !== state.repo) return;
     if (state.actor && event.actor !== state.actor) return;
-    const placeholder = feed.querySelector(".empty");
+    const placeholder = rows.querySelector(".empty");
     if (placeholder) placeholder.remove();
-    feed.prepend(eventRow(event, true));
+    rows.prepend(eventRow(event, true));
   });
-}
-
-async function renderRepos() {
-  const data = await api.get("/v1/overview");
-  const root = view();
-  clear(root);
-  root.append(pageHead("Repos"));
-  root.append(data.repos?.length
-    ? el("div", { class: "grid cards" }, ...data.repos.map(repoCard))
-    : emptyPanel("No repos yet. Add one with: dabberzctl repos add <name> <remote-url>"));
-}
-
-async function renderRepo(repoID) {
-  const [repo, projects, secrets, tasks] = await Promise.all([
-    api.get(`/v1/repos/${repoID}`),
-    api.get(`/v1/repos/${repoID}/projects`).catch(() => ({ projects: [] })),
-    api.get(`/v1/repos/${repoID}/secrets`).catch(() => ({ secrets: [] })),
-    api.get(`/v1/tasks?repo=${repoID}`).catch(() => ({ tasks: [] })),
-  ]);
-
-  const root = view();
-  clear(root);
-  root.append(pageHead(repo.name, [{ label: "Repos", href: "#/repos" }],
-    el("span", { class: "mono muted", text: repo.remote_url }),
-    badge(repo.discovered ? "completed" : "draft", "plain")));
-
-  root.append(section("Projects", projects.projects?.length || 0,
-    projects.projects?.length
-      ? el("div", { class: "panel" }, ...projects.projects.map((project) =>
-          el("div", { class: "workstream" },
-            el("h4", { text: project.name }),
-            el("p", { class: "mono", text: project.path }),
-            el("div", { class: "row" },
-              project.toolchain ? el("span", { class: "badge plain", text: project.toolchain }) : null,
-              project.confirmed ? el("span", { class: "badge good", text: "confirmed" })
-                                : el("span", { class: "badge warn", text: "unconfirmed" })))))
-      : emptyPanel("No projects discovered yet.")));
-
-  root.append(section("Tasks", tasks.tasks?.length || 0,
-    tasks.tasks?.length
-      ? el("div", { class: "panel" }, ...tasks.tasks.map((task) =>
-          el("a", { class: "fork", href: `#/task/${task.id}` },
-            el("div", { class: "fork-head" },
-              el("span", { class: "fork-name", text: task.title }),
-              badge(task.state)),
-            el("div", { class: "fork-meta" },
-              el("span", { text: `merges to ${stateLabel(task.merge_target)}` }),
-              el("span", { text: `${stateLabel(task.merge_timing)} timing` }),
-              el("span", { class: "muted", text: relativeTime(task.updated_at) })))))
-      : emptyPanel("No tasks yet.")));
-
-  // Names only: the control plane never shows a secret's value.
-  root.append(section("Secrets", secrets.secrets?.length || 0,
-    el("div", { class: "panel pad" },
-      secrets.secrets?.length
-        ? el("div", { class: "row" }, ...secrets.secrets.map((name) =>
-            el("span", { class: "badge plain mono", text: name })))
-        : el("span", { class: "muted", text: "No secrets set for this repo." }),
-      el("p", { class: "muted", style: "margin:10px 0 0;font-size:12px",
-        text: "Inherited by every fork under this repo. Values are never displayed." }))));
-
-  root.append(section("Activity", null,
-    await feedPanel(`/v1/audit?repo=${repoID}&limit=40`)));
-}
-
-async function feedPanel(path) {
-  const data = await api.get(path);
-  return el("div", { class: "panel" },
-    ...(data.events?.length
-      ? data.events.map((event) => eventRow(event))
-      : [el("div", { class: "empty", text: "No activity yet." })]));
-}
-
-async function renderTask(taskID) {
-  const data = await api.get(`/v1/tasks/${taskID}`);
-  const task = data.task;
-  const root = view();
-  clear(root);
-
-  root.append(pageHead(task.title, [
-    { label: "Repos", href: "#/repos" },
-    { label: "Task", href: `#/task/${task.id}` },
-  ], badge(task.state),
-    el("span", { class: "muted", text: `merges to ${stateLabel(task.merge_target)}, ${stateLabel(task.merge_timing)}` })));
-
-  root.append(el("div", { class: "panel pad", style: "margin-bottom:18px" },
-    el("div", { class: "muted", style: "font-size:12px;margin-bottom:4px", text: "Request" }),
-    el("div", { text: task.request })));
-
-  const plan = task.plan;
-  if (plan) {
-    const open = (plan.questions || []).filter((q) => !q.answer);
-
-    root.append(section(`Plan (round ${plan.round})`, plan.workstreams?.length || 0,
-      el("div", { class: "panel" },
-        plan.summary ? el("div", { class: "pad", style: "border-bottom:1px solid var(--line)" },
-          el("span", { text: plan.summary })) : null,
-        ...(plan.workstreams || []).map((workstream) =>
-          el("div", { class: "workstream" },
-            el("h4", { text: workstream.name }),
-            el("p", { text: workstream.description }),
-            workstream.serialize_group
-              ? el("div", { class: "group" },
-                  `runs one at a time with the "${workstream.serialize_group}" group`,
-                  workstream.overlap_rationale ? ` — ${workstream.overlap_rationale}` : "")
-              : null)))));
-
-    if (open.length) {
-      root.append(section("Questions before starting", open.length, questionPanel(task, open)));
-    } else if (task.state === "awaiting_plan") {
-      root.append(el("div", { class: "callout" },
-        el("h3", { text: "Ready to start" }),
-        el("p", { text: `Approving starts ${plan.workstreams?.length || 0} workstream(s), each on its own machine.` }),
-        el("button", {
-          class: "primary",
-          text: "Approve and start",
-          onclick: async (e) => {
-            e.target.disabled = true;
-            try {
-              await api.send("POST", `/v1/tasks/${task.id}/approve`);
-              toast("Plan approved; workstreams queued.");
-              renderTask(taskID);
-            } catch (err) {
-              toast(err.message, true);
-              e.target.disabled = false;
-            }
-          },
-        })));
-    }
-  }
-
-  root.append(section("Workstreams", data.forks?.length || 0,
-    data.forks?.length
-      ? el("div", { class: "panel" }, ...data.forks.map((fork) =>
-          forkRow({ fork, task_title: "", repo_name: "" })))
-      : emptyPanel("No workstreams yet.")));
-
-  if (!task.state.match(/completed|cancelled|failed/)) {
-    root.append(el("div", { class: "row-actions" },
-      el("button", {
-        text: "Cancel task",
-        onclick: async () => {
-          if (!confirm("Cancel this task? Unfinished workstreams are abandoned; their VMs are left in place.")) return;
-          try {
-            await api.send("POST", `/v1/tasks/${task.id}/cancel`, { reason: "cancelled from the control plane" });
-            toast("Task cancelled.");
-            renderTask(taskID);
-          } catch (err) {
-            toast(err.message, true);
-          }
-        },
-      })));
-  }
-
-  root.append(section("Activity", null, await feedPanel(`/v1/audit?task=${taskID}&limit=60`)));
-
-  return live.subscribe(throttle((event) => {
-    if (event.task_id === taskID && currentRoute().startsWith("#/task/")) renderTask(taskID);
-  }, 3000));
-}
-
-function questionPanel(task, questions) {
-  const panel = el("div", { class: "panel" });
-  const answers = {};
-
-  for (const question of questions) {
-    const input = el("textarea", {
-      placeholder: "Your answer",
-      oninput: (e) => { answers[question.id] = e.target.value; },
-    });
-    const options = el("div", { class: "options" },
-      ...(question.options || []).map((option) =>
-        el("button", {
-          text: option,
-          onclick: () => { input.value = option; answers[question.id] = option; },
-        })));
-
-    panel.append(el("div", { class: "question" },
-      el("p", { text: question.text }),
-      question.options?.length ? options : null,
-      input));
-  }
-
-  panel.append(el("div", { class: "pad" },
-    el("button", {
-      class: "primary",
-      text: "Send answers and replan",
-      onclick: async (e) => {
-        const filled = Object.fromEntries(Object.entries(answers).filter(([, v]) => v && v.trim()));
-        if (!Object.keys(filled).length) {
-          toast("Answer at least one question first.", true);
-          return;
-        }
-        e.target.disabled = true;
-        try {
-          await api.send("POST", `/v1/tasks/${task.id}/answers`, { answers: filled });
-          toast("Answers sent; replanning.");
-          renderTask(task.id);
-        } catch (err) {
-          toast(err.message, true);
-          e.target.disabled = false;
-        }
-      },
-    })));
-  return panel;
-}
-
-async function renderFork(forkID) {
-  const data = await api.get(`/v1/forks/${forkID}`);
-  const fork = data.fork;
-  const usage = fork.usage || {};
-  const remaining = data.budget_remaining || {};
-
-  const root = view();
-  clear(root);
-  root.append(pageHead(fork.name, [
-    { label: "Overview", href: "#/" },
-    { label: "Task", href: `#/task/${fork.task_id}` },
-  ], badge(fork.state), fork.state_reason ? el("span", { class: "muted", text: fork.state_reason }) : null));
-
-  if (fork.escalation && fork.state === "escalated") {
-    root.append(escalationPanel(fork));
-  }
-
-  root.append(el("div", { class: "panel pad", style: "margin-bottom:18px" },
-    el("dl", { class: "kv" },
-      el("dt", { text: "Branch" }), el("dd", { class: "mono", text: fork.branch }),
-      el("dt", { text: "Machine" }), el("dd", { class: "mono", text: fork.instance_id || "not provisioned" }),
-      fork.serialize_group ? el("dt", { text: "Serialized with" }) : null,
-      fork.serialize_group ? el("dd", { text: fork.serialize_group }) : null,
-      el("dt", { text: "Verify/fix rounds" }),
-      el("dd", {}, `${usage.cycles || 0}`, remaining.cycles !== undefined ? el("span", { class: "muted", text: ` (${remaining.cycles} left)` }) : null),
-      el("dt", { text: "Tokens" }),
-      el("dd", { text: count((usage.input_tokens || 0) + (usage.output_tokens || 0)) }),
-      el("dt", { text: "Spend" }),
-      el("dd", {}, money(usage.cost_usd), remaining.cost_usd !== undefined ? el("span", { class: "muted", text: ` (${money(remaining.cost_usd)} left)` }) : null),
-      el("dt", { text: "Working time" }), el("dd", { text: duration(usage.wall_ns) }))));
-
-  if (fork.preview_url) {
-    root.append(section("Live preview", null,
-      el("div", {},
-        el("div", { class: "row-actions", style: "margin:0 0 8px" },
-          el("a", { class: "card", href: fork.preview_url, target: "_blank", rel: "noopener noreferrer",
-            style: "display:inline-block;padding:6px 12px", text: `Open ${fork.preview_url} ↗` })),
-        // The preview is reached over the network exactly as the verifier and
-        // an external user reach it.
-        el("iframe", { class: "preview-frame", src: fork.preview_url, loading: "lazy",
-          sandbox: "allow-scripts allow-same-origin allow-forms" }))));
-  }
-
-  root.append(section("Activity", null, await feedPanel(`/v1/audit?fork=${forkID}&limit=100`)));
-
-  return live.subscribe(throttle((event) => {
-    if (event.fork_id === forkID && currentRoute().startsWith("#/fork/")) renderFork(forkID);
-  }, 3000));
-}
-
-function escalationPanel(fork) {
-  const escalation = fork.escalation;
-  const response = el("textarea", { placeholder: "Tell the agent what to do" });
-
-  const resumeSelect = el("select", {},
-    ...["coding", "fixing", "verifying", "merging"].map((state) =>
-      el("option", { value: state, text: `resume at ${state}` })));
-
-  return el("div", { class: `callout ${escalation.kind === "tripwire" ? "bad" : ""}`.trim() },
-    el("h3", { text: `Waiting for you — ${stateLabel(escalation.kind)}` }),
-    el("p", { text: escalation.message }),
-    escalation.detail ? el("pre", { text: escalation.detail }) : null,
-    response,
-    el("div", { class: "row-actions" },
-      resumeSelect,
-      el("button", {
-        class: "primary",
-        text: "Answer and resume",
-        onclick: async (e) => {
-          if (!response.value.trim()) {
-            toast("Write an answer first.", true);
-            return;
-          }
-          e.target.disabled = true;
-          try {
-            await api.send("POST", `/v1/forks/${fork.id}/resolve`, {
-              response: response.value.trim(),
-              resume: resumeSelect.value,
-            });
-            toast("Fork resumed.");
-            renderFork(fork.id);
-          } catch (err) {
-            toast(err.message, true);
-            e.target.disabled = false;
-          }
-        },
-      })));
 }
 
 // ---------------------------------------------------------------- routing
 
-const currentRoute = () => location.hash || "#/";
+const currentPath = () => (location.hash || "#/").split("?")[0];
 
 let disposeView = null;
 
 const ROUTES = [
-  [/^#\/$/, () => renderOverview(), "overview"],
-  [/^#\/activity/, (_, params) => renderActivity(params), "activity"],
-  [/^#\/repos$/, () => renderRepos(), "repos"],
+  [/^#\/$/, () => renderRepos(), "repos"],
+  [/^#\/activity$/, (_, params) => renderActivity(params), "activity"],
+  [/^#\/new$/, (_, params) => renderNew(params), "repos"],
   [/^#\/repo\/([\w-]+)$/, (m) => renderRepo(m[1]), "repos"],
-  [/^#\/task\/([\w-]+)$/, (m) => renderTask(m[1]), "overview"],
-  [/^#\/fork\/([\w-]+)$/, (m) => renderFork(m[1]), "overview"],
+  [/^#\/task\/([\w-]+)$/, (m) => renderTask(m[1]), "repos"],
+  [/^#\/fork\/([\w-]+)$/, (m) => renderFork(m[1]), "repos"],
 ];
 
 async function route() {
-  // Each view owns a live subscription; dropping it on navigation is what
-  // stops a background page re-rendering over the one being read.
-  if (disposeView) {
-    disposeView();
-    disposeView = null;
-  }
+  if (disposeView) { disposeView(); disposeView = null; }
 
-  const [path, queryString = ""] = currentRoute().split("?");
+  const [path, queryString = ""] = (location.hash || "#/").split("?");
   const params = new URLSearchParams(queryString);
 
   for (const [pattern, render, tab] of ROUTES) {
@@ -792,43 +880,51 @@ async function route() {
       const root = view();
       clear(root);
       root.append(pageHead("Something went wrong"));
-      root.append(el("div", { class: "panel pad" },
-        el("p", { text: err.message }),
-        el("button", { text: "Retry", onclick: () => route() })));
+      root.append(el("p", { text: err.message }));
+      root.append(el("button", { class: "btn btn-secondary", text: "Retry", onclick: () => route() }));
     }
+    window.scrollTo(0, 0);
     return;
   }
 
   const root = view();
   clear(root);
   root.append(pageHead("Not found"));
-  root.append(el("div", { class: "panel pad" }, el("a", { href: "#/", text: "Back to the overview" })));
+  root.append(el("a", { href: "#/", text: "Back to your repositories" }));
 }
 
 function highlightTab(active) {
-  for (const tab of document.querySelectorAll(".tabs a")) {
-    tab.classList.toggle("active", tab.dataset.route === active);
+  for (const anchor of document.querySelectorAll(".tabs a")) {
+    anchor.classList.toggle("active", anchor.dataset.route === active);
   }
 }
 
-// throttle runs fn at most once per interval, keeping the trailing call so a
-// burst of events still ends in an up-to-date render.
 function throttle(fn, interval) {
   let last = 0;
   let timer = null;
   return (...args) => {
     const wait = interval - (Date.now() - last);
     clearTimeout(timer);
-    if (wait <= 0) {
-      last = Date.now();
-      fn(...args);
-    } else {
-      timer = setTimeout(() => {
-        last = Date.now();
-        fn(...args);
-      }, wait);
-    }
+    if (wait <= 0) { last = Date.now(); fn(...args); }
+    else timer = setTimeout(() => { last = Date.now(); fn(...args); }, wait);
   };
+}
+
+// projectSubtitle describes the shape of a project rather than repeating its
+// title. A title auto-derived from the prompt is the prompt, so echoing it
+// underneath tells the reader nothing.
+function projectSubtitle(task, counts = {}) {
+  const request = String(task.request || "").replace(/\s+/g, " ").trim();
+  const title = String(task.title || "").replace(/…$/, "").trim();
+  if (request && !request.startsWith(title)) return truncate(request, 90);
+  if (counts.forks) return `One prompt, ${plural(counts.forks, "sub-task")}`;
+  if (task.plan?.workstreams?.length) return `One prompt, ${plural(task.plan.workstreams.length, "sub-task")} proposed`;
+  return "Not yet planned";
+}
+
+function truncate(text, limit) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length <= limit ? clean : clean.slice(0, limit) + "…";
 }
 
 window.addEventListener("hashchange", route);

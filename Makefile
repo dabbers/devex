@@ -52,6 +52,13 @@ check: fmt vet test
 run: build
 	$(BIN)/dabberzd --config configs/dabberz.yaml
 
+# The web UI is compiled into the binary, so editing CSS or JS has no effect
+# until the binary is rebuilt and the daemon restarted. This does both.
+.PHONY: dev
+dev:
+	$(MAKE) build
+	@echo "restart dabberzd to pick up the rebuilt UI"
+
 .PHONY: clean
 clean:
 	rm -rf $(BIN) coverage.out
