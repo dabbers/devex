@@ -1,0 +1,206 @@
+# Direction: from batch orchestrator to live workspace
+
+This document records a mid-build reframing of what dabberz is, what that
+changes, and what it does not. `REQUIREMENTS.md` is the original spec and is
+left as written; `ARCHITECTURE.md` describes what exists today. This file
+describes where the product is going and why, so the reasoning survives the
+conversation it came out of.
+
+## The reframing
+
+The original spec describes a **batch orchestrator**: the user writes a
+request, an LLM decomposes it into parallel workstreams, the user approves the
+plan, N VMs run to completion, each verifies itself, and the results merge. The
+user's attention is needed twice — at the planning checkpoint and at the merge
+gate — and the work in between is meant to be unattended.
+
+The product the user actually wants is closer to **Lovable or Replit Agent**:
+you describe a change, see it running within seconds, look at it, say "no, the
+spacing is wrong", and see that too. The loop is conversational and the
+feedback is visual. Where those tools stop short is the part dabberz already
+has: they run one agent against one app in one container, they do not verify
+their own work in a browser, and they do not isolate anything at the kernel
+level.
+
+Both modes are wanted. The conversational one should be primary, because it is
+the one used minute to minute; the batch one becomes a mode you enter from it
+("take these four things and do them in parallel") rather than the only way in.
+
+## What this changes
+
+### 1. A workspace becomes a first-class entity
+
+Today the longest-lived thing in the model is a `Task`, which is born from a
+request and dies at the merge gate. A `Fork` is created by a plan and ends in
+`merged` or `abandoned`. There is no entity meaning "the environment I come
+back to".
+
+A `Workspace` is that entity: a repo, a branch, a VM, a set of running
+services, and a conversation. It outlives any individual request. A `Fork`
+then becomes a special case — a workspace on a scratch branch, created by a
+plan instead of by a human, with a lifecycle that ends at merge. The scheduler,
+the serialization groups, the verify/fix loop and the merge gate all keep
+working unchanged, because they operate on forks.
+
+### 2. Previews become per-service, not per-fork
+
+This is the concrete blocker for "apps/multiple services". Today:
+
+- `domain.Project` carries a single `PreviewCommand` and a single
+  `PreviewPort`.
+- `domain.Fork` carries a single `ProjectID` and a single `PreviewURL`.
+- `preview.Allocator.Allocate` takes one fork and one project and returns one
+  hostname bound to one upstream port.
+
+A repo may hold several projects, and a fork may target any one of them, but a
+fork cannot run a web app *and* its API *and* a worker *and* a database at the
+same time. Lovable papers over this by hardcoding one shape (React plus
+Supabase). The honest fix is a `Service` model: each service has its own
+command, port, health check, log stream and preview route, and a workspace runs
+a set of them. The preview allocator already allocates per (fork, project); it
+needs to allocate per (workspace, service) and the route table grows a
+subdomain level or a path prefix.
+
+Service definitions should come from discovery where they can be inferred
+(compose files, Procfiles, package scripts) and be editable by hand, because
+inference will be wrong often enough that an unfixable wrong answer is worse
+than no answer.
+
+### 3. Agent sessions become resumable
+
+`internal/agent` runs `claude -p --output-format json` once per invocation and
+exits. It parses `session_id` out of the result and throws it away — the field
+exists on the internal `claudeResult` struct and is referenced nowhere else.
+Every fix cycle therefore starts from an empty context and rebuilds its
+understanding from the prompt.
+
+Claude Code supports resuming: `--resume <session_id>`, or `--session-id <uuid>`
+to choose the id up front rather than parsing it back out. `--fork-session`
+branches a conversation. For live output, `--output-format stream-json
+--verbose --include-partial-messages` emits incremental text events and a final
+`result` message; `--input-format stream-json` keeps a single process alive
+across turns.
+
+Two consequences worth recording:
+
+- **Sessions live in the machine's `~/.claude` store.** A VM must persist that
+  directory (or `CLAUDE_CONFIG_DIR`) across restarts for resume to work. This
+  is a golden-image and volume-layout requirement, not an application detail.
+- **Resumed sessions report cumulative cost.** `total_cost_usd` on a resumed
+  run is the whole conversation's total, not the turn's. The tripwire
+  accounting in `domain.Usage` adds each run's figures, so switching to resume
+  without subtracting the previous total would multiply the cost it thinks it
+  has spent. `--max-budget-usd` is available as a second line of defence.
+
+Steering a run in flight is not supported. The documented pattern is interrupt,
+then send the next message: SIGINT ends a turn cleanly (SIGTERM exits 143 and
+leaves the turn unfinished with no result recorded). Set
+`CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1` to continue an interrupted turn rather
+than start fresh.
+
+### 4. The client surface has to assume a phone
+
+"Run these agent sessions anywhere" means the UI is the product, not a console
+for it. The current UI is a server-rendered page plus an SSE stream, which is
+the right foundation — there is no client-side framework to make work on a
+phone. What is missing is the layout work and, more substantively, the fact
+that a web shell and an embedded editor are not usable on a phone. The phone
+view should be: conversation, preview, activity, approvals. Shell and editor
+stay desktop-only and that is fine.
+
+## Authentication: the subscription question
+
+Can this run on a personal Claude Code subscription rather than API keys? For
+personal, single-user use: yes. As a hosted product serving other people: no.
+
+Claude Code's own legal and compliance documentation states:
+
+> OAuth authentication is intended exclusively for purchasers of Claude Free,
+> Pro, Max, Ultra, Team, and Enterprise subscription plans and is designed to
+> support ordinary use of Claude Code and other native Anthropic applications.
+
+> developers building products or services that interact with Claude's
+> capabilities, including those using the Agent SDK, should use API key
+> authentication through Claude Console or a supported cloud provider.
+
+> Anthropic does not permit third-party developers to offer Claude.ai login
+> into their own applications, or to route requests through Free, Pro, Max, or
+> Ultra plan credentials on behalf of their users. Moreover, developers may not
+> collect, store, or intermediate Claude.ai credentials or session tokens.
+
+> Customers may not pay for, resell, or intermediate Claude usage on their end
+> users' behalf.
+
+The same documentation says an end user may sign in to the **unmodified**
+binary with their own subscription even where a platform hosts it, and that
+preinstalling Claude Code in hosted sandboxes or agent infrastructure requires
+agreeing to Commercial Terms unless otherwise agreed. Advertised Pro, Max and
+Ultra limits "assume ordinary, individual usage of Claude Code and the Agent
+SDK"; no concurrency limit is published.
+
+The practical reading:
+
+- **Single-user dabberz on the owner's own subscription is within ordinary
+  use.** `claude setup-token` produces a one-year OAuth token exported as
+  `CLAUDE_CODE_OAUTH_TOKEN`. Running several agents in parallel against one
+  subscription is not separately prohibited, but it consumes the same session
+  and weekly windows, so the ceiling is practical rather than legal.
+- **The moment anyone else's work runs through that subscription, it is the
+  prohibited case.** That path needs API keys, per-tenant workspaces for spend
+  isolation, and a look at whether marking up Claude usage needs a commercial
+  agreement.
+- Design the credential layer so the token is **per user**, supplied by that
+  user, never held centrally. That keeps the single-user path legal today and
+  the multi-tenant path possible later without a rewrite.
+
+Two mechanics that matter for how the agent is invoked:
+
+- `-p` defaults to Manual permission mode in recent versions, which **denies**
+  calls that would need approval. Unattended runs need `--permission-prompts
+  none`; runs that should surface approvals in the dabberz UI need
+  `--permission-prompt-tool` or a `PermissionRequest` hook.
+- `--bare` never reads OAuth credentials or the keychain, and is recommended
+  for scripted use; without it, `-p` loads project hooks and `.mcp.json` even
+  in untrusted folders. Since dabberz runs agents over repositories it did not
+  write, that distinction is a security decision, not a convenience one.
+
+Pin the Claude Code version in the golden image: many of these flags have
+minimum versions.
+
+## What survives unchanged
+
+Most of the infrastructure. The reframing is about the loop around it, not the
+machinery underneath:
+
+- **The VM driver abstraction** (`internal/vm`) and the Firecracker
+  implementation. A workspace needs a machine for the same reasons a fork does:
+  the agent runs real builds, a real browser and real servers, and a kernel
+  boundary is the only honest answer to running other people's code.
+- **Preview routing** (`internal/proxy`, `internal/preview`) — wildcard DNS-01
+  TLS and whole-config regeneration. The allocation key changes; the mechanism
+  does not.
+- **The browser verify loop** (`internal/verify`). This is the thing Lovable
+  and Replit do not have: the agent's own claim that it works is checked
+  against a real page in a real browser. It becomes more valuable in a
+  conversational loop, not less.
+- **The audit trail** (`internal/store/audit`, the unified activity surface).
+  Every actor is attributed and every action is appended. Nothing about that
+  changes when forks become workspaces.
+- **Tripwires, secrets and the merge gate.** The tripwire accounting needs the
+  cumulative-cost correction described above; otherwise it stands.
+- **The web shell** (`internal/api/shell.go`). A persistent workspace is
+  exactly where a shell earns its place.
+
+## Order of work
+
+1. `Service` model: schema, discovery, per-service preview routes, per-service
+   logs and health. This is what unblocks "apps and multiple services", and it
+   is additive — a single-service project is a set of one.
+2. `Workspace` entity: long-lived, owns a VM and a service set, with `Fork`
+   re-expressed on top of it.
+3. Resumable streaming agent sessions, with the cost-accounting fix and
+   `~/.claude` persisted in the image.
+4. Conversational entry: a workspace conversation that drives the agent
+   directly, with the plan-and-fork path reachable from it rather than being
+   the only door.
+5. Mobile layout for the four surfaces that make sense on a phone.
