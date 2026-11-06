@@ -1,0 +1,9 @@
+# Keep the build context small and deterministic. The version string comes from
+# a build arg rather than `git describe`, so .git is not needed.
+.git
+.github
+bin
+var
+coverage.out
+docs
+*.md

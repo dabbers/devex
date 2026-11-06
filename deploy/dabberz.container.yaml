@@ -1,0 +1,105 @@
+# dabberz configuration for the containerized control plane.
+#
+# This is NOT the production shape. A container cannot boot Firecracker VMs
+# (no /dev/kvm, no golden rootfs), and there is no Caddy alongside it to
+# publish preview routes. Everything below that differs from
+# configs/dabberz.example.yaml differs for one of those two reasons, and the
+# consequence is stated where it applies rather than left to be discovered.
+#
+# Credentials come from the environment, never from this file:
+#
+#   DABBERZ_MASTER_KEY            required; secrets key (dabberzctl keygen)
+#   DABBERZ_ORCHESTRATOR_API_KEY  optional; without it planning is unavailable
+#   CLAUDE_CODE_OAUTH_TOKEN       optional; without it the agent cannot run
+
+owner: dabitp@gmail.com
+
+# Mounted volume. Without a mount a redeploy silently starts from an empty
+# database, which looks like data loss and is worse than a failure.
+data_dir: /var/lib/dabberz
+
+server:
+  # Containers are reached from outside their own loopback, so this binds all
+  # interfaces. The access boundary is in front of the container, not here:
+  # the control plane has no authentication of its own, and /api/shell hands
+  # out a PTY on this machine to anyone the proxy lets through.
+  addr: 0.0.0.0:8080
+  read_timeout: 30s
+  # No write timeout: the activity feed is a long-lived streaming response.
+  write_timeout: 0s
+
+driver:
+  # "local" runs work in this container with no isolation. It is here so the
+  # machine list, the shell and the fork lifecycle are demonstrable; it is not
+  # a substitute for the Firecracker driver and must not be used to run code
+  # that was not written by the operator.
+  kind: local
+  image: dabberz-golden
+  fork_resources:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+  local:
+    total:
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 10
+
+scheduler:
+  interval: 5s
+  head_of_line_blocking: true
+
+preview:
+  # Hostnames are still allocated so the UI shows what a fork would get, but
+  # with no Caddy to publish to (see below) nothing resolves to them. Treat a
+  # preview URL from this deployment as a label, not a link.
+  domain: dab.im
+  scheme: https
+  port_start: 41000
+  port_end: 42999
+
+caddy:
+  # Empty wildcard_domain selects the discard router: preview routes are
+  # recorded in the database and published nowhere. The alternative is
+  # pointing at a Caddy admin API that is not there, which fails on every
+  # allocation instead of once, here, in a comment.
+  wildcard_domain: ""
+
+llm:
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  timeout: 120s
+  max_retries: 3
+
+agent:
+  binary: claude
+  timeout: 45m
+
+verify:
+  # Auto-provisioning under the local driver yields a workspace in this
+  # container rather than a browser VM, which is enough to keep the pipeline
+  # wired end to end. Real verification needs the Firecracker driver.
+  ui_instance_id: ""
+  profiles: 2
+  vm:
+    auto_provision: true
+    name: dabberz-ui
+    resources:
+      vcpus: 1
+      memory_mib: 512
+      disk_gib: 2
+  driver_command: ["dabberz-verify"]
+  timeout: 10m
+
+merge:
+  git_binary: git
+  remote: origin
+  # Nothing in this deployment is allowed to push. It exists to be looked at.
+  push: false
+  skip_quality_gate: false
+
+tripwire:
+  max_cycles: 8
+  max_tokens: 4000000
+  max_cost_usd: 25
+  max_wall_clock: 4h
