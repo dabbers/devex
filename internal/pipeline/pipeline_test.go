@@ -171,9 +171,16 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	if err := st.CreateRepo(ctx, repo); err != nil {
 		t.Fatalf("CreateRepo: %v", err)
 	}
-	project := &domain.Project{RepoID: repo.ID, Name: "web", Path: ".", PreviewPort: 5173}
+	project := &domain.Project{RepoID: repo.ID, Name: "web", Path: "."}
 	if err := st.CreateProject(ctx, project); err != nil {
 		t.Fatalf("CreateProject: %v", err)
+	}
+	service := &domain.Service{
+		ProjectID: project.ID, Name: "web", Kind: domain.ServiceWeb,
+		Command: "npm run dev", Port: 5173, Exposed: true, Primary: true,
+	}
+	if err := st.CreateService(ctx, service); err != nil {
+		t.Fatalf("CreateService: %v", err)
 	}
 
 	timing := opts.mergeTiming

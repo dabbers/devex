@@ -51,7 +51,7 @@ from inside the machine is not a working preview.
 | `internal/vm/firecracker` | Production driver: layout, networking, jailer, machine config |
 | `internal/vm/local` | Development driver: host directories and processes |
 | `internal/scheduler` | Fork admission, plus the FIFO gate the verifier queue uses |
-| `internal/preview` | Per-fork hostname and port allocation |
+| `internal/preview` | Per-service, per-fork hostname and port allocation |
 | `internal/proxy`, `internal/proxy/caddy` | Publishing routes to the reverse proxy |
 | `internal/secrets` | Repo-scoped secrets, encrypted at rest |
 | `internal/memory` | The out-of-repo notes store, one markdown folder per repo |
@@ -78,7 +78,8 @@ draft ──▶ planning ──▶ awaiting_plan ──▶ running ──▶ com
         (user answers questions; a new round refines the plan)
 ```
 
-A **fork** is one workstream, owning exactly one VM and one preview URL:
+A **fork** is one workstream, owning exactly one VM and one preview hostname
+per exposed service:
 
 ```
 queued ──▶ provisioning ──▶ coding ──▶ verifying ──▶ awaiting_merge ──▶ merging ──▶ merged
@@ -143,9 +144,35 @@ be provisioned the daemon still starts and serves the control plane, and says
 that nothing can be verified, rather than refusing to start and leaving the
 operator without the UI that would explain why.
 
-**Nothing is reclaimed automatically.** A fork's VM and preview URL persist
+**Nothing is reclaimed automatically.** A fork's VM and preview URLs persist
 after merge or abandonment, so work can be revisited. Cleanup is manual, and
 port exhaustion says so rather than failing cryptically.
+
+**A project runs a set of services, not a dev server.** A project used to carry
+one preview command and one port, which could describe a single-stack web app
+and nothing else. It now owns a set of services -- web, api, worker, datastore
+-- each with its own command, port, health path and dependencies. Consequences
+worth stating:
+
+- Only a web or api service is ever given a public hostname. A datastore keeps
+  its port, because that is real information, but is never published: a
+  publicly reachable database is not something anyone asked for.
+- One hostname per service, never a path prefix. A dev server assumes it is
+  mounted at the root, so a prefix breaks absolute asset URLs, redirects,
+  root-scoped cookies and hot-reload websockets unless every project is
+  configured to match -- which cannot be done for arbitrary repositories, and
+  is exactly the assumption that ties a tool to one stack.
+- At most one service is the *front door*: the URL handed to the coding agent
+  and driven by the verifier. A backend-only project has none, and that is
+  reported rather than papered over with a URL that serves JSON.
+- Services start in dependency order. A web app brought up before the database
+  it reads produces a broken preview for reasons unrelated to the change being
+  made, and the agent then spends a cycle chasing it.
+- Discovery proposes service sets and will get them wrong, so proposals are
+  *repaired* rather than trusted or rejected: duplicate names dropped, cycles
+  broken, impossible kinds reassigned, one front door elected. Every repair is
+  written to the audit trail, because the user confirming a layout needs to see
+  what was changed and why.
 
 **Everything is scoped by user id.** v1 is single-user; the scoping is there so
 multi-user support is additive rather than a migration of every table.
@@ -164,7 +191,7 @@ It speaks a different vocabulary from the domain, deliberately and one-to-one:
 | --- | --- | --- |
 | repository | repo | the root of secrets, memory and config |
 | project | task | one prompt, decomposed |
-| sub-task | fork | one workstream, one machine, one preview URL |
+| sub-task | fork | one workstream, one machine, one preview URL per service |
 | machine | VM | the microVM a sub-task runs on |
 | validation | verification | a real browser driven against the preview |
 

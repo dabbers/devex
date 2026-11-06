@@ -2,49 +2,85 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
-// PreviewRoute is a published mapping from a public hostname to the port a
-// fork's dev server is reachable on.
+const previewRouteColumns = "fork_id, service_id, hostname, upstream_host, upstream_port, created_at"
+
+// PreviewRoute is a published mapping from a public hostname to the port one
+// service of one fork is reachable on.
+//
+// A fork has as many routes as it has exposed services. Path-based routing was
+// rejected: a dev server assumes it is mounted at the root, so absolute asset
+// paths, absolute redirects, root-scoped cookies and HMR websockets all break
+// behind a prefix unless every project is configured to match -- which cannot
+// be done for arbitrary repositories.
 type PreviewRoute struct {
 	ForkID       string    `json:"fork_id"`
+	ServiceID    string    `json:"service_id"`
 	Hostname     string    `json:"hostname"`
 	UpstreamHost string    `json:"upstream_host"`
 	UpstreamPort int       `json:"upstream_port"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-// PutPreviewRoute records a fork's preview route, replacing any existing one.
+// PutPreviewRoute records the route for one service of one fork, replacing any
+// existing one.
 func (s *Store) PutPreviewRoute(ctx context.Context, r *PreviewRoute) error {
+	if r.ServiceID == "" {
+		return errors.New("store: a preview route needs a service")
+	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now().UTC()
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO preview_routes (fork_id, hostname, upstream_host, upstream_port, created_at)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT (fork_id) DO UPDATE SET
+		`INSERT INTO preview_routes (fork_id, service_id, hostname, upstream_host, upstream_port, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (fork_id, service_id) DO UPDATE SET
 		     hostname = excluded.hostname,
 		     upstream_host = excluded.upstream_host,
 		     upstream_port = excluded.upstream_port`,
-		r.ForkID, r.Hostname, r.UpstreamHost, r.UpstreamPort, formatTime(r.CreatedAt),
+		r.ForkID, r.ServiceID, r.Hostname, r.UpstreamHost, r.UpstreamPort, formatTime(r.CreatedAt),
 	)
 	return wrapErr("put preview route", err)
 }
 
-// GetPreviewRoute returns a fork's published route.
-func (s *Store) GetPreviewRoute(ctx context.Context, forkID string) (*PreviewRoute, error) {
+// GetPreviewRoute returns the route published for one service of one fork.
+func (s *Store) GetPreviewRoute(ctx context.Context, forkID, serviceID string) (*PreviewRoute, error) {
 	row := s.db.QueryRowContext(ctx,
-		"SELECT fork_id, hostname, upstream_host, upstream_port, created_at FROM preview_routes WHERE fork_id = ?",
-		forkID)
+		"SELECT "+previewRouteColumns+" FROM preview_routes WHERE fork_id = ? AND service_id = ?",
+		forkID, serviceID)
 	return scanPreviewRoute(row)
+}
+
+// ListForkPreviewRoutes returns every route a fork has published, which is
+// what the UI shows and what the agent is told it can open.
+func (s *Store) ListForkPreviewRoutes(ctx context.Context, forkID string) ([]*PreviewRoute, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+previewRouteColumns+" FROM preview_routes WHERE fork_id = ? ORDER BY hostname",
+		forkID)
+	if err != nil {
+		return nil, wrapErr("list fork preview routes", err)
+	}
+	defer rows.Close()
+
+	var routes []*PreviewRoute
+	for rows.Next() {
+		r, err := scanPreviewRoute(rows)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, r)
+	}
+	return routes, wrapErr("list fork preview routes", rows.Err())
 }
 
 // ListPreviewRoutes returns every published route, which is what the proxy
 // configuration is regenerated from.
 func (s *Store) ListPreviewRoutes(ctx context.Context) ([]*PreviewRoute, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT fork_id, hostname, upstream_host, upstream_port, created_at FROM preview_routes ORDER BY hostname")
+		"SELECT "+previewRouteColumns+" FROM preview_routes ORDER BY hostname")
 	if err != nil {
 		return nil, wrapErr("list preview routes", err)
 	}
@@ -61,11 +97,11 @@ func (s *Store) ListPreviewRoutes(ctx context.Context) ([]*PreviewRoute, error) 
 	return routes, wrapErr("list preview routes", rows.Err())
 }
 
-// DeletePreviewRoute withdraws a fork's route. Routes outlive merges and
-// abandonment, so this only runs on explicit manual cleanup.
-func (s *Store) DeletePreviewRoute(ctx context.Context, forkID string) error {
+// DeletePreviewRoutes withdraws every route a fork published. Routes outlive
+// merges and abandonment, so this only runs on explicit manual cleanup.
+func (s *Store) DeletePreviewRoutes(ctx context.Context, forkID string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM preview_routes WHERE fork_id = ?", forkID)
-	return wrapErr("delete preview route", err)
+	return wrapErr("delete preview routes", err)
 }
 
 // UsedPreviewPorts returns the set of allocated upstream ports, so the
@@ -93,7 +129,8 @@ func scanPreviewRoute(row rowScanner) (*PreviewRoute, error) {
 		r       PreviewRoute
 		created string
 	)
-	if err := row.Scan(&r.ForkID, &r.Hostname, &r.UpstreamHost, &r.UpstreamPort, &created); err != nil {
+	if err := row.Scan(&r.ForkID, &r.ServiceID, &r.Hostname, &r.UpstreamHost,
+		&r.UpstreamPort, &created); err != nil {
 		return nil, wrapErr("get preview route", err)
 	}
 	var err error

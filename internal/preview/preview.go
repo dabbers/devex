@@ -1,9 +1,16 @@
 // Package preview allocates and publishes the live URL for each fork.
 //
-// Every fork gets its own hostname under a wildcard domain, pointed at that
-// fork's dev server. There is no deploy step, cache to clear or refresh to
-// trigger: the user and the verifier both open the same in-flight preview the
-// coding agent is editing.
+// Every exposed service of every fork gets its own hostname under a wildcard
+// domain, pointed at that service inside that fork's VM. There is no deploy
+// step, cache to clear or refresh to trigger: the user and the verifier both
+// open the same in-flight preview the coding agent is editing.
+//
+// One hostname per service, not one path per service. A dev server assumes it
+// is mounted at the root, so a path prefix breaks absolute asset URLs,
+// redirects, root-scoped cookies and hot-reload websockets unless every
+// project is configured to match -- which is not possible for arbitrary
+// repositories, and is the assumption that makes a tool specific to one
+// stack.
 package preview
 
 import (
@@ -83,15 +90,27 @@ func New(st *store.Store, router proxy.Router, cfg Config) (*Allocator, error) {
 	return &Allocator{store: st, router: router, cfg: cfg.withDefaults()}, nil
 }
 
-// Allocate assigns a fork its hostname and host port and records the route.
-// It is idempotent: a fork that already has a route keeps it, so republishing
-// after a restart does not move a preview URL the user may have bookmarked.
-func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *domain.Project, upstreamHost string) (*store.PreviewRoute, error) {
+// Allocate assigns one service of one fork its hostname and host port and
+// records the route. It is idempotent: a service that already has a route
+// keeps it, so republishing after a restart does not move a preview URL the
+// user may have bookmarked.
+//
+// An unexposed service is refused rather than quietly skipped. A caller asking
+// for a public hostname for a worker or a database has misunderstood something,
+// and a silent no-op would hide that.
+func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *domain.Project, service *domain.Service, upstreamHost string) (*store.PreviewRoute, error) {
 	if upstreamHost == "" {
 		return nil, fmt.Errorf("preview: fork %s has no upstream address yet", fork.ID)
 	}
+	if service == nil {
+		return nil, fmt.Errorf("preview: fork %s needs a service to allocate a route for", fork.ID)
+	}
+	if !service.Exposed {
+		return nil, fmt.Errorf("preview: service %q of fork %s is not exposed, so it gets no public hostname",
+			service.Name, fork.ID)
+	}
 
-	if existing, err := a.store.GetPreviewRoute(ctx, fork.ID); err == nil {
+	if existing, err := a.store.GetPreviewRoute(ctx, fork.ID, service.ID); err == nil {
 		existing.UpstreamHost = upstreamHost
 		if err := a.store.PutPreviewRoute(ctx, existing); err != nil {
 			return nil, err
@@ -101,7 +120,7 @@ func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *do
 		return nil, err
 	}
 
-	hostname, err := a.hostname(ctx, fork, project)
+	hostname, err := a.hostname(ctx, fork, project, service)
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +131,7 @@ func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *do
 
 	route := &store.PreviewRoute{
 		ForkID:       fork.ID,
+		ServiceID:    service.ID,
 		Hostname:     hostname,
 		UpstreamHost: upstreamHost,
 		UpstreamPort: port,
@@ -120,6 +140,31 @@ func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *do
 		return nil, err
 	}
 	return route, nil
+}
+
+// AllocateAll assigns routes for every exposed service in the set and returns
+// them keyed by service id, together with the front door's URL.
+//
+// Services with no public hostname -- workers, datastores -- are skipped
+// without comment: they are expected in any real project, and a fork whose
+// project is backend-only legitimately has no front door at all.
+func (a *Allocator) AllocateAll(ctx context.Context, fork *domain.Fork, project *domain.Project, services []*domain.Service, upstreamHost string) (map[string]*store.PreviewRoute, string, error) {
+	routes := make(map[string]*store.PreviewRoute, len(services))
+	primaryURL := ""
+	for _, service := range services {
+		if !service.Exposed {
+			continue
+		}
+		route, err := a.Allocate(ctx, fork, project, service, upstreamHost)
+		if err != nil {
+			return nil, "", err
+		}
+		routes[service.ID] = route
+		if service.Primary {
+			primaryURL = a.URL(route)
+		}
+	}
+	return routes, primaryURL, nil
 }
 
 // URL renders the public address of a route.
@@ -153,24 +198,30 @@ func (a *Allocator) Publish(ctx context.Context) error {
 // Withdraw removes a fork's route and republishes. Preview URLs outlive merges
 // and abandonment by design, so this only runs on explicit manual cleanup.
 func (a *Allocator) Withdraw(ctx context.Context, forkID string) error {
-	if err := a.store.DeletePreviewRoute(ctx, forkID); err != nil {
+	if err := a.store.DeletePreviewRoutes(ctx, forkID); err != nil {
 		return err
 	}
 	return a.Publish(ctx)
 }
 
-// hostname builds a unique preview hostname for a fork.
-func (a *Allocator) hostname(ctx context.Context, fork *domain.Fork, project *domain.Project) (string, error) {
+// hostname builds a unique preview hostname for one service of one fork.
+//
+// The whole zone is previews, so the label is just what distinguishes one from
+// another: service, project, fork. Everything lives in a single DNS label so
+// one wildcard certificate covers every preview and a new fork is reachable
+// the moment it starts, without waiting on issuance.
+func (a *Allocator) hostname(ctx context.Context, fork *domain.Fork, project *domain.Project, service *domain.Service) (string, error) {
 	projectLabel := "app"
 	if project != nil {
 		projectLabel = firstNonEmpty(Slug(project.Name), Slug(project.Path), "app")
 	}
 	forkLabel := firstNonEmpty(Slug(fork.Name), "fork")
+	serviceLabel := firstNonEmpty(Slug(service.Name), "svc")
 
-	base := truncateLabel("preview-" + projectLabel + "-" + forkLabel)
+	base := truncateLabel(serviceLabel + "-" + projectLabel + "-" + forkLabel)
 	candidate := base + "." + a.cfg.Domain
 
-	taken, err := a.takenHostnames(ctx, fork.ID)
+	taken, err := a.takenHostnames(ctx, fork.ID, service.ID)
 	if err != nil {
 		return "", err
 	}
@@ -183,20 +234,22 @@ func (a *Allocator) hostname(ctx context.Context, fork *domain.Fork, project *do
 	suffix := "-" + shortID(fork.ID)
 	candidate = truncateLabel(base, len(suffix)) + suffix + "." + a.cfg.Domain
 	if taken[candidate] {
-		return "", fmt.Errorf("preview: could not find a free hostname for fork %s", fork.ID)
+		return "", fmt.Errorf("preview: could not find a free hostname for service %q of fork %s",
+			service.Name, fork.ID)
 	}
 	return candidate, nil
 }
 
-// takenHostnames returns the hostnames already claimed by other forks.
-func (a *Allocator) takenHostnames(ctx context.Context, exceptForkID string) (map[string]bool, error) {
+// takenHostnames returns the hostnames already claimed by anything other than
+// this one service of this one fork.
+func (a *Allocator) takenHostnames(ctx context.Context, exceptForkID, exceptServiceID string) (map[string]bool, error) {
 	routes, err := a.store.ListPreviewRoutes(ctx)
 	if err != nil {
 		return nil, err
 	}
 	taken := make(map[string]bool, len(routes))
 	for _, r := range routes {
-		if r.ForkID == exceptForkID {
+		if r.ForkID == exceptForkID && r.ServiceID == exceptServiceID {
 			continue
 		}
 		taken[r.Hostname] = true

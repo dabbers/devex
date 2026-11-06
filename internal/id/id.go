@@ -19,6 +19,7 @@ const (
 	User      = "usr"
 	Repo      = "repo"
 	Project   = "proj"
+	Service   = "svc"
 	Task      = "task"
 	Fork      = "fork"
 	Event     = "evt"

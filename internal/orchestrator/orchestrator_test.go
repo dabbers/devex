@@ -720,8 +720,12 @@ func TestCancelAbandonsUnfinishedForks(t *testing.T) {
 
 func TestDiscoverProjectsInfersLayoutWithoutAManifest(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"projects": []map[string]any{
-		{"name": "web", "path": "apps/web", "toolchain": "node", "preview_command": "npm run dev", "preview_port": 5173},
-		{"name": "api", "path": "./services/api/", "toolchain": "go", "preview_port": 8080},
+		{"name": "web", "path": "apps/web", "toolchain": "node", "services": []map[string]any{
+			{"name": "web", "kind": "web", "command": "npm run dev", "port": 5173},
+		}},
+		{"name": "api", "path": "./services/api/", "toolchain": "go", "services": []map[string]any{
+			{"name": "api", "kind": "api", "command": "go run ./cmd/api", "port": 8080},
+		}},
 		{"name": "duplicate", "path": "apps/web"},
 	}})
 	f := newFixture(t, llm.Response{Content: string(body), FinishReason: "stop"})
@@ -745,8 +749,19 @@ func TestDiscoverProjectsInfersLayoutWithoutAManifest(t *testing.T) {
 	if _, ok := byPath["services/api"]; !ok {
 		t.Fatalf("paths were not normalised: %v", byPath)
 	}
-	if byPath["apps/web"].PreviewCommand != "npm run dev" {
-		t.Fatalf("preview command lost: %+v", byPath["apps/web"])
+	// The preview command now lives on a service, not on the project.
+	services, err := f.store.ListServices(f.ctx, byPath["apps/web"].ID)
+	if err != nil {
+		t.Fatalf("ListServices: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("got %d services for apps/web, want 1: %+v", len(services), services)
+	}
+	if services[0].Command != "npm run dev" {
+		t.Fatalf("preview command lost: %+v", services[0])
+	}
+	if !services[0].Primary || !services[0].Exposed {
+		t.Fatalf("the only web service should be the exposed front door: %+v", services[0])
 	}
 }
 

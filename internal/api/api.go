@@ -509,10 +509,41 @@ func (s *Server) getFork(w http.ResponseWriter, r *http.Request) {
 		// budget a running fork has left.
 		"budget_remaining": s.orch.Thresholds().Remaining(fork.Usage),
 	}
+	// Every service's route, not just the front door: a fork of a project
+	// with a web app and an API has two addresses worth opening, and the UI
+	// cannot show what the API expects if it only knows about one.
 	if s.preview != nil {
-		if route, err := s.store.GetPreviewRoute(r.Context(), fork.ID); err == nil {
-			response["preview"] = route
+		routes, err := s.store.ListForkPreviewRoutes(r.Context(), fork.ID)
+		if err != nil {
+			writeError(w, err)
+			return
 		}
+		services, err := s.store.ListServices(r.Context(), fork.ProjectID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		byID := make(map[string]*domain.Service, len(services))
+		for _, sv := range services {
+			byID[sv.ID] = sv
+		}
+		previews := make([]map[string]any, 0, len(routes))
+		for _, route := range routes {
+			entry := map[string]any{
+				"service_id": route.ServiceID,
+				"hostname":   route.Hostname,
+				"url":        s.preview.URL(route),
+				"port":       route.UpstreamPort,
+			}
+			if sv := byID[route.ServiceID]; sv != nil {
+				entry["service"] = sv.Name
+				entry["kind"] = sv.Kind
+				entry["primary"] = sv.Primary
+			}
+			previews = append(previews, entry)
+		}
+		response["previews"] = previews
+		response["services"] = services
 	}
 	writeJSON(w, http.StatusOK, response)
 }

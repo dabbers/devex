@@ -46,6 +46,7 @@ type fixture struct {
 	user    *domain.User
 	repo    *domain.Repo
 	project *domain.Project
+	service *domain.Service
 	task    *domain.Task
 	ctx     context.Context
 }
@@ -68,9 +69,16 @@ func newFixture(t *testing.T, cfg Config) *fixture {
 	if err := st.CreateRepo(ctx, repo); err != nil {
 		t.Fatalf("CreateRepo: %v", err)
 	}
-	project := &domain.Project{RepoID: repo.ID, Name: "Web App", Path: "apps/web", PreviewPort: 5173}
+	project := &domain.Project{RepoID: repo.ID, Name: "Web App", Path: "apps/web"}
 	if err := st.CreateProject(ctx, project); err != nil {
 		t.Fatalf("CreateProject: %v", err)
+	}
+	service := &domain.Service{
+		ProjectID: project.ID, Name: "web", Kind: domain.ServiceWeb,
+		Command: "npm run dev", Port: 5173, Exposed: true, Primary: true,
+	}
+	if err := st.CreateService(ctx, service); err != nil {
+		t.Fatalf("CreateService: %v", err)
 	}
 	task := &domain.Task{UserID: user.ID, RepoID: repo.ID, Title: "t", Request: "r", State: domain.TaskRunning}
 	if err := st.CreateTask(ctx, task); err != nil {
@@ -82,7 +90,7 @@ func newFixture(t *testing.T, cfg Config) *fixture {
 	if err != nil {
 		t.Fatalf("preview.New: %v", err)
 	}
-	return &fixture{store: st, router: router, alloc: alloc, user: user, repo: repo, project: project, task: task, ctx: ctx}
+	return &fixture{store: st, router: router, alloc: alloc, user: user, repo: repo, project: project, service: service, task: task, ctx: ctx}
 }
 
 func (f *fixture) fork(t *testing.T, name string) *domain.Fork {
@@ -109,21 +117,21 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
-func TestAllocateBuildsAPerForkHostname(t *testing.T) {
+func TestAllocateBuildsAPerServicePerForkHostname(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "Photo Upload")
 
-	route, err := f.alloc.Allocate(f.ctx, fork, f.project, "172.30.0.2")
+	route, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	if route.Hostname != "preview-web-app-photo-upload.dab.im" {
+	if route.Hostname != "web-web-app-photo-upload.dab.im" {
 		t.Fatalf("hostname = %q", route.Hostname)
 	}
 	if route.UpstreamPort < DefaultPortStart || route.UpstreamPort > DefaultPortEnd {
 		t.Fatalf("port %d is outside the configured range", route.UpstreamPort)
 	}
-	if got := f.alloc.URL(route); got != "https://preview-web-app-photo-upload.dab.im" {
+	if got := f.alloc.URL(route); got != "https://web-web-app-photo-upload.dab.im" {
 		t.Fatalf("URL = %q", got)
 	}
 }
@@ -132,13 +140,13 @@ func TestAllocateIsIdempotentSoBookmarkedURLsSurvive(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "ratings")
 
-	first, err := f.alloc.Allocate(f.ctx, fork, f.project, "172.30.0.2")
+	first, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
 	// A fork's VM can come back on a different address, but its public URL
 	// must not move: the user may have it open.
-	second, err := f.alloc.Allocate(f.ctx, fork, f.project, "172.30.0.99")
+	second, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.99")
 	if err != nil {
 		t.Fatalf("Allocate (repeat): %v", err)
 	}
@@ -159,7 +167,7 @@ func TestAllocateGivesEveryForkADistinctHostnameAndPort(t *testing.T) {
 		// Same name every time: distinct workstreams in different tasks can
 		// legitimately collide on a label.
 		fork := f.fork(t, "ratings")
-		route, err := f.alloc.Allocate(f.ctx, fork, f.project, "172.30.0.2")
+		route, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
 		if err != nil {
 			t.Fatalf("Allocate: %v", err)
 		}
@@ -177,7 +185,7 @@ func TestAllocateGivesEveryForkADistinctHostnameAndPort(t *testing.T) {
 func TestAllocateRequiresAnUpstreamAddress(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "ratings")
-	if _, err := f.alloc.Allocate(f.ctx, fork, f.project, ""); err == nil {
+	if _, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, ""); err == nil {
 		t.Fatal("expected allocation to fail before the VM has an address")
 	}
 }
@@ -186,10 +194,10 @@ func TestAllocateReportsPortExhaustion(t *testing.T) {
 	// A range with exactly one port.
 	f := newFixture(t, Config{Domain: "dab.im", PortStart: 41000, PortEnd: 41000})
 
-	if _, err := f.alloc.Allocate(f.ctx, f.fork(t, "first"), f.project, "172.30.0.2"); err != nil {
+	if _, err := f.alloc.Allocate(f.ctx, f.fork(t, "first"), f.project, f.service, "172.30.0.2"); err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	_, err := f.alloc.Allocate(f.ctx, f.fork(t, "second"), f.project, "172.30.0.6")
+	_, err := f.alloc.Allocate(f.ctx, f.fork(t, "second"), f.project, f.service, "172.30.0.6")
 	if err == nil {
 		t.Fatal("expected port exhaustion to be reported")
 	}
@@ -203,7 +211,7 @@ func TestAllocateReportsPortExhaustion(t *testing.T) {
 func TestPublishSendsEveryRecordedRoute(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	for _, name := range []string{"ratings", "photos"} {
-		if _, err := f.alloc.Allocate(f.ctx, f.fork(t, name), f.project, "172.30.0.2"); err != nil {
+		if _, err := f.alloc.Allocate(f.ctx, f.fork(t, name), f.project, f.service, "172.30.0.2"); err != nil {
 			t.Fatalf("Allocate(%s): %v", name, err)
 		}
 	}
@@ -235,7 +243,7 @@ func TestWithdrawRemovesARouteAndRepublishes(t *testing.T) {
 	keep := f.fork(t, "ratings")
 	drop := f.fork(t, "photos")
 	for _, fork := range []*domain.Fork{keep, drop} {
-		if _, err := f.alloc.Allocate(f.ctx, fork, f.project, "172.30.0.2"); err != nil {
+		if _, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2"); err != nil {
 			t.Fatalf("Allocate: %v", err)
 		}
 	}
@@ -290,7 +298,7 @@ func TestHostnameLabelStaysWithinTheDNSLimit(t *testing.T) {
 	long := strings.Repeat("extremely-long-workstream-name-", 6)
 	fork := f.fork(t, long)
 
-	route, err := f.alloc.Allocate(f.ctx, fork, f.project, "172.30.0.2")
+	route, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
@@ -306,11 +314,170 @@ func TestHostnameLabelStaysWithinTheDNSLimit(t *testing.T) {
 func TestHostnameFallsBackWhenTheProjectIsUnknown(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "ratings")
-	route, err := f.alloc.Allocate(f.ctx, fork, nil, "172.30.0.2")
+	route, err := f.alloc.Allocate(f.ctx, fork, nil, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	if route.Hostname != "preview-app-ratings.dab.im" {
+	if route.Hostname != "web-app-ratings.dab.im" {
 		t.Fatalf("hostname = %q, want the generic project label", route.Hostname)
+	}
+}
+
+// multiService gives the fixture's project a realistic set: a database, an API
+// that needs it, a web front door that needs the API, and a worker.
+func (f *fixture) multiService(t *testing.T) []*domain.Service {
+	t.Helper()
+	services := []*domain.Service{
+		{ProjectID: f.project.ID, Name: "db", Kind: domain.ServiceDatastore, Port: 5432},
+		{ProjectID: f.project.ID, Name: "worker", Kind: domain.ServiceWorker, Command: "./worker"},
+		{ProjectID: f.project.ID, Name: "api", Kind: domain.ServiceAPI, Port: 8080,
+			Exposed: true, DependsOn: []string{"db"}},
+	}
+	for _, sv := range services {
+		if err := f.store.CreateService(f.ctx, sv); err != nil {
+			t.Fatalf("CreateService(%s): %v", sv.Name, err)
+		}
+	}
+	// f.service is already the exposed, primary web service.
+	return append(services, f.service)
+}
+
+func TestAllocateAllGivesEveryExposedServiceItsOwnHostname(t *testing.T) {
+	f := newFixture(t, Config{Domain: "dab.im"})
+	services := f.multiService(t)
+	fork := f.fork(t, "ratings")
+
+	routes, primaryURL, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.2")
+	if err != nil {
+		t.Fatalf("AllocateAll: %v", err)
+	}
+
+	// Two exposed services, two hostnames. The worker and the datastore get
+	// none: a publicly reachable database is not something anyone asked for.
+	if len(routes) != 2 {
+		t.Fatalf("got %d routes, want one each for web and api: %+v", len(routes), routes)
+	}
+	byService := map[string]string{}
+	ports := map[int]bool{}
+	for _, sv := range services {
+		if route, ok := routes[sv.ID]; ok {
+			byService[sv.Name] = route.Hostname
+			if ports[route.UpstreamPort] {
+				t.Fatalf("two services were given the same host port %d", route.UpstreamPort)
+			}
+			ports[route.UpstreamPort] = true
+		}
+	}
+	if _, ok := byService["db"]; ok {
+		t.Fatal("the datastore was given a public hostname")
+	}
+	if _, ok := byService["worker"]; ok {
+		t.Fatal("the worker was given a public hostname")
+	}
+	if byService["web"] != "web-web-app-ratings.dab.im" {
+		t.Fatalf("web hostname = %q", byService["web"])
+	}
+	if byService["api"] != "api-web-app-ratings.dab.im" {
+		t.Fatalf("api hostname = %q", byService["api"])
+	}
+	// The front door is what the agent is told to check and the verifier drives.
+	if primaryURL != "https://web-web-app-ratings.dab.im" {
+		t.Fatalf("primary URL = %q, want the web service", primaryURL)
+	}
+}
+
+func TestAllocateAllIsIdempotentPerService(t *testing.T) {
+	f := newFixture(t, Config{Domain: "dab.im"})
+	services := f.multiService(t)
+	fork := f.fork(t, "ratings")
+
+	first, _, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.2")
+	if err != nil {
+		t.Fatalf("AllocateAll: %v", err)
+	}
+	// A restart re-provisions the VM at a new address. Hostnames and ports
+	// must not move: the URLs may be bookmarked.
+	second, _, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.99")
+	if err != nil {
+		t.Fatalf("AllocateAll (again): %v", err)
+	}
+	if len(first) != len(second) {
+		t.Fatalf("route count changed: %d then %d", len(first), len(second))
+	}
+	for id, before := range first {
+		after, ok := second[id]
+		if !ok {
+			t.Fatalf("service %s lost its route on the second pass", id)
+		}
+		if after.Hostname != before.Hostname || after.UpstreamPort != before.UpstreamPort {
+			t.Fatalf("route moved for %s: %+v then %+v", id, before, after)
+		}
+		if after.UpstreamHost != "172.30.0.99" {
+			t.Fatalf("upstream address was not refreshed: %+v", after)
+		}
+	}
+}
+
+func TestAllocateRefusesAServiceThatIsNotExposed(t *testing.T) {
+	f := newFixture(t, Config{Domain: "dab.im"})
+	fork := f.fork(t, "ratings")
+	worker := &domain.Service{
+		ProjectID: f.project.ID, Name: "worker", Kind: domain.ServiceWorker, Command: "./worker",
+	}
+	if err := f.store.CreateService(f.ctx, worker); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	// Asking for a public hostname for a worker is a misunderstanding, and a
+	// silent no-op would hide it.
+	_, err := f.alloc.Allocate(f.ctx, fork, f.project, worker, "172.30.0.2")
+	if err == nil {
+		t.Fatal("a worker was given a public hostname")
+	}
+	if !strings.Contains(err.Error(), "not exposed") {
+		t.Fatalf("error %q does not explain the refusal", err)
+	}
+}
+
+func TestAllocateAllReportsNoFrontDoorForABackendOnlyProject(t *testing.T) {
+	f := newFixture(t, Config{Domain: "dab.im"})
+	fork := f.fork(t, "ratings")
+	api := &domain.Service{
+		ProjectID: f.project.ID, Name: "api", Kind: domain.ServiceAPI, Port: 8080, Exposed: true,
+	}
+	if err := f.store.CreateService(f.ctx, api); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	routes, primaryURL, err := f.alloc.AllocateAll(f.ctx, fork, f.project, []*domain.Service{api}, "172.30.0.2")
+	if err != nil {
+		t.Fatalf("AllocateAll: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("got %d routes, want 1: %+v", len(routes), routes)
+	}
+	// Empty rather than a fabricated URL: the caller decides what that means.
+	if primaryURL != "" {
+		t.Fatalf("primary URL = %q, want empty for a project with no web service", primaryURL)
+	}
+}
+
+func TestWithdrawRemovesEveryServiceRouteForAFork(t *testing.T) {
+	f := newFixture(t, Config{Domain: "dab.im"})
+	services := f.multiService(t)
+	fork := f.fork(t, "ratings")
+
+	if _, _, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.2"); err != nil {
+		t.Fatalf("AllocateAll: %v", err)
+	}
+	if err := f.alloc.Withdraw(f.ctx, fork.ID); err != nil {
+		t.Fatalf("Withdraw: %v", err)
+	}
+	remaining, err := f.store.ListForkPreviewRoutes(f.ctx, fork.ID)
+	if err != nil {
+		t.Fatalf("ListForkPreviewRoutes: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("%d routes survived withdrawal: %+v", len(remaining), remaining)
 	}
 }

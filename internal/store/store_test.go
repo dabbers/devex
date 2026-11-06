@@ -34,11 +34,25 @@ func seed(t *testing.T, s *Store, ctx context.Context) (*domain.User, *domain.Re
 	if err := s.CreateRepo(ctx, r); err != nil {
 		t.Fatalf("CreateRepo: %v", err)
 	}
-	p := &domain.Project{RepoID: r.ID, Name: "web", Path: "apps/web", Toolchain: "node", PreviewPort: 5173}
+	p := &domain.Project{RepoID: r.ID, Name: "web", Path: "apps/web", Toolchain: "node"}
 	if err := s.CreateProject(ctx, p); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	return u, r, p
+}
+
+// seedService gives a project one exposed web service, which is what a
+// preview route has to belong to.
+func seedService(t *testing.T, s *Store, ctx context.Context, projectID string) *domain.Service {
+	t.Helper()
+	sv := &domain.Service{
+		ProjectID: projectID, Name: "web", Kind: domain.ServiceWeb,
+		Command: "npm run dev", Port: 5173, Exposed: true, Primary: true,
+	}
+	if err := s.CreateService(ctx, sv); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	return sv
 }
 
 func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
@@ -136,7 +150,7 @@ func TestUpsertProjectReplacesBySamePath(t *testing.T) {
 	// A later discovery pass re-reports the same path with better information.
 	revised := &domain.Project{
 		RepoID: r.ID, Name: "web-app", Path: "apps/web",
-		Toolchain: "node", PreviewCommand: "npm run dev", PreviewPort: 3000, Confirmed: true,
+		Toolchain: "node", Confirmed: true,
 	}
 	if err := s.UpsertProject(ctx, revised); err != nil {
 		t.Fatalf("UpsertProject: %v", err)
@@ -152,7 +166,7 @@ func TestUpsertProjectReplacesBySamePath(t *testing.T) {
 	if len(projects) != 1 {
 		t.Fatalf("got %d projects, want 1", len(projects))
 	}
-	if projects[0].PreviewCommand != "npm run dev" || !projects[0].Confirmed {
+	if projects[0].Name != "web-app" || !projects[0].Confirmed {
 		t.Fatalf("upsert did not apply the revision: %+v", projects[0])
 	}
 }
@@ -435,7 +449,11 @@ func TestPreviewRoutesUpsertAndReportUsedPorts(t *testing.T) {
 		t.Fatalf("CreateFork: %v", err)
 	}
 
-	route := &PreviewRoute{ForkID: fork.ID, Hostname: "preview-web-ratings.dab.im", UpstreamHost: "10.0.0.5", UpstreamPort: 41000}
+	sv := seedService(t, s, ctx, p.ID)
+	route := &PreviewRoute{
+		ForkID: fork.ID, ServiceID: sv.ID,
+		Hostname: "web-web-ratings.dab.im", UpstreamHost: "10.0.0.5", UpstreamPort: 41000,
+	}
 	if err := s.PutPreviewRoute(ctx, route); err != nil {
 		t.Fatalf("PutPreviewRoute: %v", err)
 	}

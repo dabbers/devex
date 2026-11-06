@@ -13,11 +13,10 @@ import (
 // discoverResponse is the JSON shape the discovery pass is asked for.
 type discoverResponse struct {
 	Projects []struct {
-		Name           string `json:"name"`
-		Path           string `json:"path"`
-		Toolchain      string `json:"toolchain"`
-		PreviewCommand string `json:"preview_command"`
-		PreviewPort    int    `json:"preview_port"`
+		Name      string              `json:"name"`
+		Path      string              `json:"path"`
+		Toolchain string              `json:"toolchain"`
+		Services  []discoveredService `json:"services"`
 	} `json:"projects"`
 }
 
@@ -71,12 +70,10 @@ func (o *Orchestrator) DiscoverProjects(ctx context.Context, repoID string, tree
 			name = projectNameFromPath(path)
 		}
 		project := &domain.Project{
-			RepoID:         repoID,
-			Name:           name,
-			Path:           path,
-			Toolchain:      strings.ToLower(strings.TrimSpace(p.Toolchain)),
-			PreviewCommand: strings.TrimSpace(p.PreviewCommand),
-			PreviewPort:    p.PreviewPort,
+			RepoID:    repoID,
+			Name:      name,
+			Path:      path,
+			Toolchain: strings.ToLower(strings.TrimSpace(p.Toolchain)),
 			// Discovery proposes; the user confirms. Nothing downstream should
 			// treat an inferred layout as settled.
 			Confirmed: false,
@@ -85,6 +82,25 @@ func (o *Orchestrator) DiscoverProjects(ctx context.Context, repoID string, tree
 		// instead of duplicating them.
 		if err := o.store.UpsertProject(ctx, project); err != nil {
 			return nil, err
+		}
+
+		services, warnings := servicesFromDiscovery(project.ID, p.Services)
+		// A model pass will propose impossible sets: two front doors, an
+		// exposed database, a dependency on a service it did not list. Those
+		// are corrected rather than rejected, because a repaired set is more
+		// useful than a failed discovery -- but each repair is recorded, so
+		// the user confirming the layout can see what was changed and why.
+		if err := o.store.ReplaceServices(ctx, project.ID, services); err != nil {
+			return nil, err
+		}
+		if len(warnings) > 0 {
+			o.event(ctx, &domain.Event{
+				UserID: repo.UserID, RepoID: repoID,
+				Actor: domain.ActorOrchestrator, Type: domain.EventProjectsDiscovered,
+				Message: fmt.Sprintf("corrected %d problem(s) in the proposed services for %s",
+					len(warnings), project.Name),
+				Data: map[string]any{"project": project.Path, "corrections": warnings},
+			})
 		}
 		projects = append(projects, project)
 	}

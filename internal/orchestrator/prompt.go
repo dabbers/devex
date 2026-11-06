@@ -53,11 +53,30 @@ Respond with a single JSON object and nothing else:
 // discoverSystemPrompt drives the monorepo discovery pass. No manifest file is
 // required: the layout is inferred and then confirmed with the user once per
 // repo.
-const discoverSystemPrompt = `You are inspecting a git repository to work out which distinct projects it contains.
+const discoverSystemPrompt = `You are inspecting a git repository to work out which distinct projects it contains,
+and what each project has to run in order to be used.
 
 A repository may hold one project or several (a monorepo). A project is a separately buildable and
 runnable unit: it has its own dependency manifest, its own build, and usually its own dev server.
 Directories that merely group source files are not projects.
+
+A project usually needs more than one process running before anyone can look at it: a web app, the
+API it calls, a database, a queue worker. List every one of them as a service. Do not collapse them
+into a single dev server command, and do not invent services the repository shows no evidence of.
+Read compose files, Procfiles, Makefiles and package scripts: they are where this is usually stated
+outright.
+
+Service kinds:
+  web        serves pages to a person. This is what a preview is for.
+  api        serves other programs over HTTP or RPC.
+  worker     listens on no port: a queue consumer, a scheduler, a batch job.
+  datastore  a database, cache or message broker.
+
+Rules:
+  - "port" is the port the service listens on inside its own machine. Use 0 for a worker.
+  - "depends_on" lists the names of other services in the SAME project that must be running first.
+    A web app that reads a database depends on it. Do not create cycles.
+  - Name services by what they are ("web", "api", "worker", "postgres"), lowercase, hyphenated.
 
 Respond with a single JSON object and nothing else:
 {
@@ -66,8 +85,16 @@ Respond with a single JSON object and nothing else:
       "name": "short human-readable name",
       "path": "repo-relative path, \".\" for the repository root",
       "toolchain": "go | node | rust | python | ruby | java | other",
-      "preview_command": "the command that starts this project's dev server, if it has one",
-      "preview_port": 3000
+      "services": [
+        {
+          "name": "web",
+          "kind": "web",
+          "command": "the command that starts it, run from the project root",
+          "port": 3000,
+          "health_path": "an HTTP path that returns 200 when ready, or \"\" if there is none",
+          "depends_on": ["api"]
+        }
+      ]
     }
   ]
 }`

@@ -282,12 +282,31 @@ func TestBuildPromptStatesTheParallelModelAndEscalationProtocol(t *testing.T) {
 	repo := &domain.Repo{Name: "devex"}
 	project := &domain.Project{Name: "web", Path: "apps/web"}
 
-	prompt := BuildPrompt(fork, repo, project, "https://preview-web-photo-upload.dab.im", "/srv/memory/repo_1")
+	services := []*domain.Service{
+		{Name: "db", Kind: domain.ServiceDatastore, Command: "postgres -D data", Port: 5432},
+		{Name: "api", Kind: domain.ServiceAPI, Command: "go run ./cmd/api", Port: 8080, Exposed: true, DependsOn: []string{"db"}},
+		{Name: "web", Kind: domain.ServiceWeb, Command: "npm run dev", Port: 5173, Exposed: true, Primary: true, DependsOn: []string{"api"}},
+	}
+	previews := Previews{
+		Primary: "https://web-web-photo-upload.dab.im",
+		URLs: map[string]string{
+			"web": "https://web-web-photo-upload.dab.im",
+			"api": "https://api-web-photo-upload.dab.im",
+		},
+	}
+
+	prompt := BuildPrompt(fork, repo, project, services, previews, "/srv/memory/repo_1")
 
 	for _, want := range []string{
 		"photo-upload",
 		"dabberz/photo-upload-abc123",
-		"https://preview-web-photo-upload.dab.im",
+		"https://web-web-photo-upload.dab.im",
+		// Every service, so the agent does not read a missing worker or
+		// database as a bug in the code it is changing.
+		"api (api) on port 8080",
+		"db (datastore) on port 5432, internal only",
+		"needs api running first",
+		"start with: npm run dev",
 		"/srv/memory/repo_1",
 		"DABBERZ-ESCALATE[ambiguous]",
 		"DABBERZ-ESCALATE[conflicts_instructions]",

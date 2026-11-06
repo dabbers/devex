@@ -654,7 +654,9 @@ async function renderFork(forkID) {
       el("dt", { text: "Working time" }), el("dd", { text: duration(usage.wall_ns) })),
     el("div", { class: "row-actions" }, ...budgetMeters(usage, remaining))));
 
-  root.append(workspacePanel(fork));
+  if (data.services && data.services.length) root.append(servicesSection(data.services, data.previews));
+
+  root.append(workspacePanel(fork, data.previews || []));
 
   root.append(section("Transcript", await feed(`/v1/audit?fork=${forkID}&limit=100`)));
 
@@ -700,23 +702,110 @@ function validateButton(fork) {
   return button;
 }
 
-// workspacePanel is the sub-task's workspace: the live preview it produces and
+// servicesSection lists everything the project runs, not only what is
+// reachable. An agent or a person debugging a broken preview needs to know a
+// worker or a database is part of this project; its absence from the list
+// would read as "there isn't one" rather than "it has no URL".
+function servicesSection(services, previews) {
+  const urlFor = {};
+  for (const entry of previews || []) {
+    if (entry.service_id) urlFor[entry.service_id] = entry.url;
+  }
+
+  const rows = services.map((service) => {
+    const url = urlFor[service.id];
+    const detail = [];
+    if (service.port) detail.push(`port ${service.port}`);
+    if (service.health_path) detail.push(`health ${service.health_path}`);
+    if (service.depends_on && service.depends_on.length) {
+      detail.push(`needs ${service.depends_on.join(", ")}`);
+    }
+
+    return el("div", { class: "service-row" },
+      el("div", {},
+        el("span", { class: "service-name", text: service.name }),
+        el("span", { class: "muted", text: ` ${service.kind}` }),
+        service.primary ? el("span", { class: "muted", text: " · front door" }) : null),
+      el("div", { class: "muted", text: detail.join(" · ") }),
+      service.command
+        ? el("div", { class: "mono muted service-command", text: service.command })
+        : null,
+      el("div", {},
+        url
+          ? el("a", {
+              class: "mono", href: url, target: "_blank", rel: "noopener noreferrer",
+              text: url.replace(/^https?:\/\//, ""),
+            })
+          // Say why rather than leaving a blank: "internal only" is a design
+          // decision, and a datastore with a public URL would be a bug.
+          : el("span", { class: "muted", text: service.exposed ? "not reachable yet" : "internal only" })));
+  });
+
+  return section("Services", el("div", { class: "services" }, ...rows));
+}
+
+// workspacePanel is the sub-task's workspace: the live previews it produces and
 // a shell on the machine producing it.
-function workspacePanel(fork) {
+//
+// A project runs a set of services, so there may be several addresses worth
+// looking at. The pane shows one at a time with a switcher, because an iframe
+// per service would load every dev server at once.
+function workspacePanel(fork, previews) {
   const body = el("div", {});
   const tabs = el("div", { class: "tabs-inline", role: "tablist" });
   let shell = null;
 
+  // Front door first: it is what the validation agent drives.
+  const reachable = previews.slice().sort((a, b) => (b.primary === true) - (a.primary === true));
+  let shownService = reachable.length ? reachable[0] : null;
+
+  const previewPane = () => {
+    if (!shownService) {
+      return empty(previews.length
+        ? "No service in this project is reachable yet."
+        : "No preview yet. It appears once the machine has booted.");
+    }
+    const frame = el("iframe", {
+      class: "preview-frame", src: shownService.url, loading: "lazy",
+      sandbox: "allow-scripts allow-same-origin allow-forms",
+    });
+    const note = shownService.primary
+      ? "Reloads on every agent commit. This is the same URL the validation agent drives."
+      : `Reloads on every agent commit. This is the ${shownService.service} service, not the page the validation agent drives.`;
+
+    const header = el("div", { class: "row-actions", style: "margin-bottom:10px" });
+    if (reachable.length > 1) {
+      // One button per reachable service. Switching replaces the iframe, so
+      // only the service being looked at is ever loaded.
+      for (const entry of reachable) {
+        const label = entry.primary ? `${entry.service} (front door)` : entry.service;
+        const button = el("button", {
+          class: entry.service_id === shownService.service_id ? "btn btn-sm" : "btn btn-secondary btn-sm",
+          text: label,
+        });
+        button.addEventListener("click", () => {
+          if (entry.service_id === shownService.service_id) return;
+          shownService = entry;
+          show("preview", true);
+        });
+        header.append(button);
+      }
+    }
+    header.append(el("a", {
+      class: "btn btn-secondary btn-sm", href: shownService.url,
+      target: "_blank", rel: "noopener noreferrer", text: "Open ↗",
+    }));
+
+    return el("div", {},
+      header,
+      el("p", { class: "muted", style: "margin-bottom:10px" }, note),
+      el("p", { class: "mono muted", style: "margin-bottom:10px" },
+        shownService.url.replace(/^https?:\/\//, "")),
+      frame);
+  };
+
   const panes = {
-    preview: () => fork.preview_url
-      ? el("div", {},
-          el("p", { class: "muted", style: "margin-bottom:10px" },
-            "Reloads on every agent commit. This is the same URL the validation agent drives."),
-          el("iframe", {
-            class: "preview-frame", src: fork.preview_url, loading: "lazy",
-            sandbox: "allow-scripts allow-same-origin allow-forms",
-          }))
-      : empty("No preview yet. It appears once the machine has booted."),
+    preview: previewPane,
     shell: () => {
       if (!fork.instance_id) return empty("No machine yet, so there is nothing to attach to.");
       const host = el("div", { class: "shell" });
@@ -733,8 +822,8 @@ function workspacePanel(fork) {
   let active = "preview";
   const content = el("div", {});
 
-  const show = (name) => {
-    if (name === active && content.firstChild) return;
+  const show = (name, force) => {
+    if (name === active && content.firstChild && !force) return;
     active = name;
     // Leaving the shell tab closes the session rather than leaving a terminal
     // running on the machine behind a tab nobody is looking at.

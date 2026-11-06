@@ -124,13 +124,21 @@ func (p *Pipeline) run(ctx context.Context, fork *domain.Fork) error {
 	if err != nil {
 		return err
 	}
+	// Dependency order, so nothing is started before what it reads. A web app
+	// brought up before its database produces a broken preview for reasons
+	// that have nothing to do with the change being made, and the agent then
+	// spends a cycle chasing it.
+	services, err := p.store.ListServices(ctx, fork.ProjectID)
+	if err != nil {
+		return err
+	}
 
 	env, err := p.environment(ctx, fork.RepoID)
 	if err != nil {
 		return err
 	}
 
-	instance, previewURL, err := p.provision(ctx, fork, repo, project, env)
+	instance, previews, err := p.provision(ctx, fork, repo, project, services, env)
 	if err != nil {
 		return err
 	}
@@ -139,7 +147,7 @@ func (p *Pipeline) run(ctx context.Context, fork *domain.Fork) error {
 	if err := p.transition(ctx, fork, domain.ForkCoding, "coding agent started"); err != nil {
 		return err
 	}
-	prompt := agent.BuildPrompt(fork, repo, project, previewURL, p.opts.MemoryMount)
+	prompt := agent.BuildPrompt(fork, repo, project, services, previews, p.opts.MemoryMount)
 	stopped, err := p.code(ctx, fork, instance.ID, prompt, env)
 	if err != nil || stopped {
 		return err
@@ -150,7 +158,7 @@ func (p *Pipeline) run(ctx context.Context, fork *domain.Fork) error {
 	// reworked code is never offered to the gate unverified. The tripwire's
 	// cycle counter is what bounds this loop.
 	for {
-		if err := p.verifyLoop(ctx, fork, instance.ID, previewURL, env); err != nil {
+		if err := p.verifyLoop(ctx, fork, instance.ID, previews.Primary, env); err != nil {
 			return err
 		}
 		if fork.State != domain.ForkAwaitingMerge {
@@ -166,8 +174,9 @@ func (p *Pipeline) run(ctx context.Context, fork *domain.Fork) error {
 	}
 }
 
-// provision boots the fork's VM and publishes its preview.
-func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domain.Repo, project *domain.Project, env map[string]string) (*vm.Instance, string, error) {
+// provision boots the fork's VM and publishes a preview hostname for every
+// exposed service.
+func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domain.Repo, project *domain.Project, services []*domain.Service, env map[string]string) (*vm.Instance, agent.Previews, error) {
 	instance, err := p.driver.Create(ctx, vm.Spec{
 		ForkID:    fork.ID,
 		Name:      fork.Name,
@@ -181,12 +190,12 @@ func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domai
 		},
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("pipeline: provision VM for %s: %w", fork.ID, err)
+		return nil, agent.Previews{}, fmt.Errorf("pipeline: provision VM for %s: %w", fork.ID, err)
 	}
 
 	fork.InstanceID = instance.ID
 	if err := p.store.UpdateFork(ctx, fork); err != nil {
-		return nil, "", err
+		return nil, agent.Previews{}, err
 	}
 	// Record which credentials the fork was handed. Names only: the audit
 	// trail is stored in the clear, and "which secrets did this agent get" is
@@ -199,25 +208,51 @@ func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domai
 		"image":            p.opts.Image,
 	})
 
-	previewURL := ""
+	previews := agent.Previews{URLs: map[string]string{}}
 	if p.preview != nil {
-		route, err := p.preview.Allocate(ctx, fork, project, instance.Address)
+		routes, primaryURL, err := p.preview.AllocateAll(ctx, fork, project, services, instance.Address)
 		if err != nil {
-			return nil, "", err
+			return nil, agent.Previews{}, err
 		}
 		if err := p.preview.Publish(ctx); err != nil {
-			return nil, "", err
+			return nil, agent.Previews{}, err
 		}
-		previewURL = p.preview.URL(route)
-		fork.PreviewURL = previewURL
+		published := make(map[string]any, len(routes))
+		for _, service := range services {
+			route, ok := routes[service.ID]
+			if !ok {
+				continue
+			}
+			url := p.preview.URL(route)
+			previews.URLs[service.Name] = url
+			published[service.Name] = url
+		}
+		previews.Primary = primaryURL
+
+		// The fork's single PreviewURL is the front door, which is what a
+		// person clicks and what the verifier drives. The rest are reachable
+		// and recorded, but one of them has to be the default.
+		fork.PreviewURL = primaryURL
 		if err := p.store.UpdateFork(ctx, fork); err != nil {
-			return nil, "", err
+			return nil, agent.Previews{}, err
 		}
-		p.event(ctx, fork, domain.EventPreviewReady, "preview available at "+previewURL, map[string]any{
-			"url": previewURL, "port": route.UpstreamPort,
-		})
+
+		switch {
+		case primaryURL != "":
+			p.event(ctx, fork, domain.EventPreviewReady, "preview available at "+primaryURL,
+				map[string]any{"url": primaryURL, "services": published})
+		case len(published) > 0:
+			// Exposed services but no web front door: an API-only project.
+			// Saying so is better than reporting a preview nobody can open.
+			p.event(ctx, fork, domain.EventPreviewReady,
+				fmt.Sprintf("%d service(s) reachable; this project has no web front door", len(published)),
+				map[string]any{"services": published})
+		default:
+			p.event(ctx, fork, domain.EventPreviewReady,
+				"no service in this project is exposed, so there is nothing to preview", nil)
+		}
 	}
-	return instance, previewURL, nil
+	return instance, previews, nil
 }
 
 // code runs the coding agent once and routes the outcome. It reports whether

@@ -89,8 +89,13 @@ func (s *Store) Close() error { return s.db.Close() }
 // integration tests and maintenance commands.
 func (s *Store) DB() *sql.DB { return s.db }
 
-// migrate applies every embedded migration that has not yet been recorded, in
-// filename order, each inside its own transaction.
+// migrate applies every migration that has not yet been recorded, in filename
+// order, each inside its own transaction.
+//
+// Most migrations are embedded SQL. A few have to be written in Go, because
+// they need values SQLite cannot produce -- the prefixed, time-sortable
+// identifiers from internal/id, above all. Both kinds are named and ordered
+// the same way, so "which migrations have run" stays a single answer.
 func (s *Store) migrate(ctx context.Context) error {
 	const createTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
 		name       TEXT PRIMARY KEY,
@@ -109,18 +114,42 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("store: list migrations: %w", err)
 	}
-	sort.Strings(entries)
 
+	// SQL and Go steps share one ordered, recorded sequence. Sorting the
+	// combined names is what keeps a Go step from running before the schema it
+	// depends on, or twice.
+	names := make([]string, 0, len(entries)+len(goMigrations))
+	sqlBody := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		name := filepath.Base(entry)
-		if applied[name] {
-			continue
-		}
 		body, err := migrationFS.ReadFile(entry)
 		if err != nil {
 			return fmt.Errorf("store: read migration %s: %w", name, err)
 		}
-		if err := s.applyMigration(ctx, name, string(body)); err != nil {
+		sqlBody[name] = string(body)
+		names = append(names, name)
+	}
+	for name := range goMigrations {
+		if _, clash := sqlBody[name]; clash {
+			return fmt.Errorf("store: migration %s is defined both in SQL and in Go", name)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if applied[name] {
+			continue
+		}
+		step := goMigrations[name]
+		if step == nil {
+			body := sqlBody[name]
+			step = func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, body)
+				return err
+			}
+		}
+		if err := s.applyMigration(ctx, name, step); err != nil {
 			return err
 		}
 	}
@@ -145,14 +174,14 @@ func (s *Store) appliedMigrations(ctx context.Context) (map[string]bool, error) 
 	return applied, rows.Err()
 }
 
-func (s *Store) applyMigration(ctx context.Context, name, body string) error {
+func (s *Store) applyMigration(ctx context.Context, name string, step migrationStep) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin migration %s: %w", name, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once committed
 
-	if _, err := tx.ExecContext(ctx, body); err != nil {
+	if err := step(ctx, tx); err != nil {
 		return fmt.Errorf("store: apply migration %s: %w", name, err)
 	}
 	if _, err := tx.ExecContext(ctx,

@@ -1,14 +1,19 @@
 // Package domain defines the entities dabberz orchestrates and the rules
 // governing how they move between states.
 //
-// The hierarchy is repo -> project -> task -> fork. A repo is the root of the
-// secrets and memory hierarchy; a project is one buildable unit discovered
-// inside it (a repo may hold several); a task is one user request against a
-// repo; and a fork is a single independently parallelizable workstream within
-// that task, owning exactly one VM and one preview URL.
+// The hierarchy is repo -> project -> service, crossed with repo -> task ->
+// fork. A repo is the root of the secrets and memory hierarchy; a project is
+// one buildable unit discovered inside it (a repo may hold several); a service
+// is one long-running process a project needs in order to run (a project may
+// need several, and usually does); a task is one user request against a repo;
+// and a fork is a single independently parallelizable workstream within that
+// task, owning exactly one VM and one preview hostname per exposed service.
 package domain
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -47,14 +52,181 @@ type Project struct {
 	// Toolchain is the primary toolchain inferred during discovery ("go",
 	// "node", "rust", ...). It selects build and preview commands, not the VM
 	// image: every VM boots the same generic golden image.
-	Toolchain string `json:"toolchain"`
-	// PreviewCommand starts the project's dev server inside its fork VM.
-	PreviewCommand string `json:"preview_command"`
-	// PreviewPort is the in-VM port the dev server listens on.
-	PreviewPort int       `json:"preview_port"`
-	Confirmed   bool      `json:"confirmed"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Toolchain string    `json:"toolchain"`
+	Confirmed bool      `json:"confirmed"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ServiceKind says what a service is. It is not a label: it decides how the
+// service is treated. Only a web or api service is ever given a public
+// preview hostname, and only a web service can be a project's front door.
+type ServiceKind string
+
+const (
+	// ServiceWeb serves pages to a person. These are what a preview is for.
+	ServiceWeb ServiceKind = "web"
+	// ServiceAPI serves other programs. Worth exposing, because a web service
+	// in another fork may need to call it, but never a front door.
+	ServiceAPI ServiceKind = "api"
+	// ServiceWorker listens on nothing: a queue consumer, a cron runner.
+	ServiceWorker ServiceKind = "worker"
+	// ServiceDatastore is a database, cache or broker. Never exposed: a
+	// publicly reachable database is not something anyone asked for.
+	ServiceDatastore ServiceKind = "datastore"
+)
+
+// Valid reports whether the kind is one dabberz understands.
+func (k ServiceKind) Valid() bool {
+	switch k {
+	case ServiceWeb, ServiceAPI, ServiceWorker, ServiceDatastore:
+		return true
+	}
+	return false
+}
+
+// Exposable reports whether a service of this kind may be published to a
+// public preview hostname.
+func (k ServiceKind) Exposable() bool { return k == ServiceWeb || k == ServiceAPI }
+
+// Service is one long-running process a project needs in order to be looked
+// at: a web app, the API behind it, a worker, a database. A project runs a set
+// of them, and a single-service project is a set of one.
+//
+// This replaces the single preview command and port a project used to carry.
+// That shape could express "a React app with a dev server" and nothing else,
+// which is the limitation that made every tool built on it specific to one
+// stack.
+type Service struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	// Name is unique within the project and is what DependsOn refers to:
+	// "web", "api", "worker", "postgres".
+	Name string      `json:"name"`
+	Kind ServiceKind `json:"kind"`
+	// Command starts the service inside the fork VM, run from the project root.
+	Command string `json:"command"`
+	// Port is the in-VM port the service listens on, 0 for one that listens on
+	// nothing.
+	Port int `json:"port"`
+	// HealthPath is an HTTP path that reports readiness. Empty means readiness
+	// is "the port accepts a connection", which is all that can be assumed.
+	HealthPath string `json:"health_path,omitempty"`
+	// Exposed says the service gets its own public preview hostname. A
+	// service with no port cannot be exposed, and a datastore never is.
+	Exposed bool `json:"exposed"`
+	// Primary marks the project's front door: the URL handed to the coding
+	// agent and the one the verifier drives. At most one per project.
+	Primary bool `json:"primary"`
+	// DependsOn names services in the same project that must be healthy
+	// before this one starts.
+	DependsOn []string  `json:"depends_on,omitempty"`
+	Confirmed bool      `json:"confirmed"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Validate checks a service against the rules the rest of the system relies
+// on. These are enforced here rather than trusted from discovery, because
+// discovery is a model pass and will get them wrong.
+func (s *Service) Validate() error {
+	if strings.TrimSpace(s.Name) == "" {
+		return errors.New("domain: a service needs a name")
+	}
+	if !s.Kind.Valid() {
+		return fmt.Errorf("domain: service %q has unknown kind %q", s.Name, s.Kind)
+	}
+	if s.Port < 0 || s.Port > 65535 {
+		return fmt.Errorf("domain: service %q has port %d outside 1-65535", s.Name, s.Port)
+	}
+	if s.Exposed && s.Port == 0 {
+		return fmt.Errorf("domain: service %q is exposed but listens on no port", s.Name)
+	}
+	if s.Exposed && !s.Kind.Exposable() {
+		return fmt.Errorf("domain: a %s service (%q) is never exposed publicly", s.Kind, s.Name)
+	}
+	if s.Primary && !s.Exposed {
+		return fmt.Errorf("domain: service %q is the front door but is not exposed", s.Name)
+	}
+	if s.Primary && s.Kind != ServiceWeb {
+		return fmt.Errorf("domain: the front door must be a web service, not %s (%q)", s.Kind, s.Name)
+	}
+	for _, dep := range s.DependsOn {
+		if dep == s.Name {
+			return fmt.Errorf("domain: service %q depends on itself", s.Name)
+		}
+	}
+	return nil
+}
+
+// PrimaryService returns the project's front door, or nil when the set has
+// none. A set without one is legitimate -- a backend-only project has nothing
+// to show a person -- so callers decide what that means rather than being
+// handed a fabricated default.
+func PrimaryService(services []*Service) *Service {
+	for _, s := range services {
+		if s.Primary {
+			return s
+		}
+	}
+	return nil
+}
+
+// StartOrder returns the services in an order that satisfies every DependsOn,
+// and reports an error if the dependencies cannot be satisfied. Services with
+// no relationship keep their input order, so a listing stays stable.
+//
+// This exists because starting a web app before the database it reads produces
+// a preview that is broken for reasons that have nothing to do with the change
+// being made, and an agent then spends a cycle chasing it.
+func StartOrder(services []*Service) ([]*Service, error) {
+	byName := make(map[string]*Service, len(services))
+	for _, s := range services {
+		if _, dup := byName[s.Name]; dup {
+			return nil, fmt.Errorf("domain: two services are both named %q", s.Name)
+		}
+		byName[s.Name] = s
+	}
+
+	const (
+		unvisited = 0
+		active    = 1
+		done      = 2
+	)
+	state := make(map[string]int, len(services))
+	ordered := make([]*Service, 0, len(services))
+
+	var visit func(s *Service, path []string) error
+	visit = func(s *Service, path []string) error {
+		switch state[s.Name] {
+		case done:
+			return nil
+		case active:
+			return fmt.Errorf("domain: services depend on each other in a cycle: %s",
+				strings.Join(append(path, s.Name), " -> "))
+		}
+		state[s.Name] = active
+		for _, dep := range s.DependsOn {
+			target, ok := byName[dep]
+			if !ok {
+				return fmt.Errorf("domain: service %q depends on %q, which this project does not have",
+					s.Name, dep)
+			}
+			if err := visit(target, append(path, s.Name)); err != nil {
+				return err
+			}
+		}
+		state[s.Name] = done
+		ordered = append(ordered, s)
+		return nil
+	}
+
+	for _, s := range services {
+		if err := visit(s, nil); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
 }
 
 // MergeTarget selects where a finished fork lands. It is a per-task user

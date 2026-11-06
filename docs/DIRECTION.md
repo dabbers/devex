@@ -193,9 +193,12 @@ machinery underneath:
 
 ## Order of work
 
-1. `Service` model: schema, discovery, per-service preview routes, per-service
-   logs and health. This is what unblocks "apps and multiple services", and it
-   is additive — a single-service project is a set of one.
+1. ~~`Service` model: schema, discovery, per-service preview routes.~~ **Done.**
+   `domain.Service`, migration 0003 plus the 0004 backfill, per-service preview
+   allocation, discovery that proposes and repairs service sets, and a UI that
+   lists every service and switches the preview between them. Per-service log
+   streams and active health checking are not done: a service records a health
+   path but nothing polls it yet.
 2. `Workspace` entity: long-lived, owns a VM and a service set, with `Fork`
    re-expressed on top of it.
 3. Resumable streaming agent sessions, with the cost-accounting fix and
@@ -204,3 +207,39 @@ machinery underneath:
    directly, with the plan-and-fork path reachable from it rather than being
    the only door.
 5. Mobile layout for the four surfaces that make sense on a phone.
+
+
+## Later: the preview zone, and a Mac as a build runner
+
+Two decisions taken after the first draft of this document, recorded so the
+reasoning is not lost.
+
+**Previews live in their own hostname space, and are not access-controlled the
+way the control plane is.** The control plane has a root shell behind it and
+must be locked down; previews must not be, because the verifier's headless
+browser would otherwise need a service token, and because a preview you cannot
+open on your phone or send to someone is not serving its purpose.
+
+A CDN access policy is not an origin control. If the origin IP is reachable, a
+request carrying a forged Host header reaches the application and the policy
+never sees it. Closing the origin (a tunnel, or a firewall limited to the CDN's
+ranges) and authenticating inside the application are separate layers, and the
+application layer is the only one that holds regardless of network path. That
+is why authentication belongs in dabberz itself, behind a swappable
+`Authenticator` interface, rather than being delegated to whatever sits in
+front of it. The first implementation is a single-user signed session; a hosted
+identity provider becomes a second implementation, which is also what makes
+per-user GitHub and per-user agent credentials possible.
+
+**A Mac as a build runner, for iOS and simulator work.** Deferred to v2, and
+recorded here because it constrains the driver abstraction now. Firecracker
+cannot run macOS, so a Mac runner is not another `vm.Driver` in the same sense
+as the local and Firecracker drivers: it is a remote, long-lived, *unisolated*
+machine that happens to be able to run Xcode and a simulator. The shape that
+fits is a driver whose `Create` leases a workspace on a remote host over SSH
+rather than booting anything, with the simulator standing in for the browser in
+the verify loop. Nothing in the current abstraction forbids this -- `vm.Driver`
+already hides whether an instance is a microVM or a directory, and
+`vm.Interactive` is already an optional capability -- but it does mean resource
+accounting and reclamation cannot assume the machine is disposable, which the
+Firecracker path currently does.

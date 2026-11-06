@@ -466,3 +466,46 @@ details.data pre {
   .table tbody tr { display: block; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-divider); }
   .table .num { text-align: left; }
 }
+
+/* Services: one row per process the project runs. Rules rather than boxes,
+   so the list reads as a table of contents and not as a set of cards. */
+.services {
+  display: flex;
+  flex-direction: column;
+}
+
+.service-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-areas: "name detail url" "command command command";
+  gap: 2px var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.service-row:last-child {
+  border-bottom: none;
+}
+
+.service-row > :nth-child(1) { grid-area: name; }
+.service-row > :nth-child(2) { grid-area: detail; }
+.service-row > :nth-child(4) { grid-area: url; }
+
+.service-name {
+  font-weight: 600;
+}
+
+.service-command {
+  grid-area: command;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* At phone width the three columns cannot coexist, so each field takes its
+   own line in reading order. */
+@media (max-width: 640px) {
+  .service-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "name" "detail" "url" "command";
+  }
+}
