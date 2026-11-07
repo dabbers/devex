@@ -35,7 +35,11 @@ import (
 // hands everything else to a fallback handler, which is the control plane's
 // own API and UI.
 type Mux struct {
-	mu       sync.RWMutex
+	mu sync.RWMutex
+	// domain is the preview zone. A hostname inside it that has no route is
+	// NOT handed to the fallback, which is what keeps the control plane from
+	// being reachable under a preview hostname.
+	domain   string
 	routes   map[string]*route
 	fallback http.Handler
 	logger   *slog.Logger
@@ -46,14 +50,25 @@ type route struct {
 	proxy    *httputil.ReverseProxy
 }
 
-// New returns an empty Mux. Nothing is routed until Apply is called, so a
-// request arriving before the first publish reaches the fallback rather than
-// a half-built table.
-func New(logger *slog.Logger) *Mux {
+// New returns an empty Mux for the given preview domain. Nothing is routed
+// until Apply is called.
+//
+// The domain is not decoration. The panel and the previews share one
+// listener but must not share an access policy: whatever sits in front
+// authenticates the control plane's hostname and deliberately does not
+// authenticate the preview zone. If an unmatched preview hostname fell
+// through to the control plane, the panel would be reachable, unauthenticated,
+// at any name under the preview domain. So inside the zone an unknown
+// hostname is a dead end, and only hostnames outside it reach the fallback.
+func New(domain string, logger *slog.Logger) *Mux {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Mux{routes: map[string]*route{}, logger: logger}
+	return &Mux{
+		domain: strings.ToLower(strings.TrimPrefix(strings.TrimSpace(domain), ".")),
+		routes: map[string]*route{},
+		logger: logger,
+	}
 }
 
 // SetFallback installs the handler for hostnames that are not previews.
@@ -115,13 +130,22 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 
 // ServeHTTP routes by Host header.
 func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := normalizeHost(r.Host)
+
 	m.mu.RLock()
-	target := m.routes[normalizeHost(r.Host)]
+	target := m.routes[host]
 	fallback := m.fallback
 	m.mu.RUnlock()
 
 	if target != nil {
 		target.proxy.ServeHTTP(w, r)
+		return
+	}
+	if m.inPreviewZone(host) {
+		// Never the fallback. See New: the preview zone is not
+		// access-controlled, so serving the control plane here would publish
+		// the panel without authentication.
+		m.noSuchPreview(w, host)
 		return
 	}
 	if fallback == nil {
@@ -130,6 +154,27 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fallback.ServeHTTP(w, r)
+}
+
+// inPreviewZone reports whether a hostname belongs to the preview domain.
+func (m *Mux) inPreviewZone(host string) bool {
+	if m.domain == "" {
+		return false
+	}
+	return host == m.domain || strings.HasSuffix(host, "."+m.domain)
+}
+
+// noSuchPreview answers a preview hostname that nothing claims.
+//
+// Preview URLs outlive the forks that owned them -- nothing is reclaimed
+// automatically -- so a stale link is expected and gets a real page rather
+// than a connection error.
+func (m *Mux) noSuchPreview(w http.ResponseWriter, host string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	fmt.Fprintf(w, "No preview is published at %s.\n\n"+
+		"Either this link is from a sub-task whose preview has been withdrawn,\n"+
+		"or the service it pointed at no longer exists.\n", host)
 }
 
 // Routes returns the published hostname-to-upstream map, for diagnostics.

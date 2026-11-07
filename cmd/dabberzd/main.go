@@ -372,7 +372,7 @@ func buildRouter(cfg config.Config, logger *slog.Logger) (proxy.Router, *hostmux
 	case preview.RouterNone:
 		return proxy.Discard{}, nil
 	default:
-		mux := hostmux.New(logger)
+		mux := hostmux.New(cfg.Preview.Domain, logger)
 		return mux, mux
 	}
 }

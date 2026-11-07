@@ -55,7 +55,7 @@ func TestRoutesByHostAndFallsBackToTheControlPlane(t *testing.T) {
 		io.WriteString(w, "fork dev server: "+r.URL.Path)
 	}))
 
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "control plane")
 	}))
@@ -68,10 +68,63 @@ func TestRoutesByHostAndFallsBackToTheControlPlane(t *testing.T) {
 	if got := body(t, get(t, mux, "web-shop-cart.ondabberz.link", "/checkout")); got != "fork dev server: /checkout" {
 		t.Fatalf("preview hostname did not reach the fork: %q", got)
 	}
-	// The panel and the previews share a listener, so an unrouted hostname has
-	// to land on the control plane rather than 404.
+	// A hostname outside the preview zone is the control plane.
 	if got := body(t, get(t, mux, "dabberz.dab.im", "/")); got != "control plane" {
 		t.Fatalf("control-plane hostname was not served: %q", got)
+	}
+}
+
+// TestUnknownPreviewHostnameNeverReachesTheControlPlane is the security
+// property of sharing one listener between the panel and the previews.
+//
+// Whatever sits in front authenticates the control plane's hostname and
+// deliberately leaves the preview zone open, so if an unmatched preview
+// hostname fell through, the panel would be served without authentication at
+// any name under the preview domain.
+func TestUnknownPreviewHostnameNeverReachesTheControlPlane(t *testing.T) {
+	mux := New("ondabberz.link", nil)
+	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "control plane")
+	}))
+	if err := mux.Apply(context.Background(), nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	for _, host := range []string{
+		"ondabberz.link",
+		"anything.ondabberz.link",
+		"web-shop-cart.ondabberz.link",
+		"DEEP.NESTED.ondabberz.link",
+	} {
+		resp := get(t, mux, host, "/")
+		text := body(t, resp)
+		if strings.Contains(text, "control plane") {
+			t.Fatalf("%s served the control plane without authentication", host)
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s returned %d, want 404", host, resp.StatusCode)
+		}
+		// Preview URLs outlive their forks, so a stale link is expected and
+		// deserves an explanation rather than a bare status.
+		if !strings.Contains(text, "No preview is published") {
+			t.Fatalf("%s did not explain itself: %q", host, text)
+		}
+	}
+}
+
+// TestLookalikeDomainIsNotTreatedAsThePreviewZone guards the suffix check: a
+// naive strings.HasSuffix would match a domain somebody else controls.
+func TestLookalikeDomainIsNotTreatedAsThePreviewZone(t *testing.T) {
+	mux := New("ondabberz.link", nil)
+	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "control plane")
+	}))
+
+	// Not subdomains of ondabberz.link, so they are not previews.
+	for _, host := range []string{"notondabberz.link", "evil-ondabberz.link"} {
+		if got := body(t, get(t, mux, host, "/")); got != "control plane" {
+			t.Fatalf("%s was wrongly treated as a preview hostname: %q", host, got)
+		}
 	}
 }
 
@@ -82,7 +135,7 @@ func TestPreservesThePublicHostname(t *testing.T) {
 		io.WriteString(w, "ok")
 	}))
 
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
@@ -103,7 +156,7 @@ func TestMatchesHostRegardlessOfPortAndCase(t *testing.T) {
 		io.WriteString(w, "reached")
 	}))
 
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "fallback")
 	}))
@@ -129,7 +182,7 @@ func TestApplyReplacesTheWholeTable(t *testing.T) {
 		io.WriteString(w, "reached")
 	}))
 
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "fallback")
 	}))
@@ -147,7 +200,13 @@ func TestApplyReplacesTheWholeTable(t *testing.T) {
 		t.Fatalf("Apply (replacement): %v", err)
 	}
 
-	if got := body(t, get(t, mux, "old.ondabberz.link", "/")); got != "fallback" {
+	// Withdrawn, so it is a dead end inside the preview zone -- not the
+	// fallback, which would publish the panel unauthenticated.
+	withdrawn := get(t, mux, "old.ondabberz.link", "/")
+	if withdrawn.StatusCode != http.StatusNotFound {
+		t.Fatalf("a withdrawn route returned %d, want 404", withdrawn.StatusCode)
+	}
+	if got := body(t, withdrawn); strings.Contains(got, "reached") {
 		t.Fatalf("a withdrawn route still answered: %q", got)
 	}
 	if got := body(t, get(t, mux, "new.ondabberz.link", "/")); got != "reached" {
@@ -156,7 +215,7 @@ func TestApplyReplacesTheWholeTable(t *testing.T) {
 }
 
 func TestExplainsAnUpstreamThatIsNotListeningYet(t *testing.T) {
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	// Port 1 on loopback: a route that exists, pointing at nothing. This is
 	// the ordinary state while a VM boots and dependencies install.
 	if err := mux.Apply(context.Background(), []proxy.Route{
@@ -181,7 +240,7 @@ func TestExplainsAnUpstreamThatIsNotListeningYet(t *testing.T) {
 }
 
 func TestApplyRefusesDuplicateHostnames(t *testing.T) {
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.1", UpstreamPort: 3000},
 		{Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.2", UpstreamPort: 3000},
@@ -192,10 +251,11 @@ func TestApplyRefusesDuplicateHostnames(t *testing.T) {
 }
 
 func TestRequestBeforeTheFirstPublishIsNotAFailure(t *testing.T) {
-	mux := New(nil)
-	// No Apply and no fallback: the window during startup. It must say the
-	// control plane is not ready rather than report a missing page.
-	resp := get(t, mux, "anything.ondabberz.link", "/")
+	mux := New("ondabberz.link", nil)
+	// No Apply and no fallback: the window during startup. A hostname outside
+	// the preview zone must say the control plane is not ready rather than
+	// report a missing page.
+	resp := get(t, mux, "dabberz.dab.im", "/")
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 while still wiring", resp.StatusCode)
 	}
@@ -217,7 +277,7 @@ func TestStreamingResponsesAreFlushedThrough(t *testing.T) {
 		flusher.Flush()
 	}))
 
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "web.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
@@ -229,7 +289,7 @@ func TestStreamingResponsesAreFlushedThrough(t *testing.T) {
 }
 
 func TestRoutesAreReportedForDiagnostics(t *testing.T) {
-	mux := New(nil)
+	mux := New("ondabberz.link", nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "web.ondabberz.link", UpstreamHost: "172.30.0.2", UpstreamPort: 41000},
 	}); err != nil {
