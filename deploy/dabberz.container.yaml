@@ -50,19 +50,20 @@ scheduler:
   head_of_line_blocking: true
 
 preview:
-  # Hostnames are still allocated so the UI shows what a fork would get, but
-  # with no Caddy to publish to (see below) nothing resolves to them. Treat a
-  # preview URL from this deployment as a label, not a link.
-  domain: dab.im
+  # A separate zone from the control plane's hostname, wildcard-proxied by the
+  # CDN to this host. The CDN terminates TLS, so this container serves preview
+  # hostnames over plain HTTP and never needs a certificate.
+  domain: ondabberz.link
   scheme: https
   port_start: 41000
   port_end: 42999
+  # dabberzd answers preview hostnames on its own listener and hands every
+  # other hostname to the control plane. There is no Caddy in this container
+  # and, behind a CDN, no reason for one.
+  router: inprocess
 
 caddy:
-  # Empty wildcard_domain selects the discard router: preview routes are
-  # recorded in the database and published nowhere. The alternative is
-  # pointing at a Caddy admin API that is not there, which fails on every
-  # allocation instead of once, here, in a comment.
+  # Unused: preview.router is inprocess.
   wildcard_domain: ""
 
 llm:

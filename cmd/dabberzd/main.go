@@ -29,6 +29,7 @@ import (
 	"github.com/dabbers/devex/internal/preview"
 	"github.com/dabbers/devex/internal/proxy"
 	"github.com/dabbers/devex/internal/proxy/caddy"
+	"github.com/dabbers/devex/internal/proxy/hostmux"
 	"github.com/dabbers/devex/internal/scheduler"
 	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
@@ -146,7 +147,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	}
 	logger.Info("vm driver ready", "driver", driver.Name())
 
-	router := buildRouter(cfg)
+	router, hostRouter := buildRouter(cfg, logger)
 	allocator, err := preview.New(db, router, cfg.Preview)
 	if err != nil {
 		return nil, err
@@ -221,6 +222,18 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		return nil, err
 	}
 
+	// Previews and the control plane share one listener, so one hostname can
+	// be the panel and the rest previews. The mux routes published preview
+	// hostnames to their fork and hands everything else to the control plane,
+	// which is why the fallback can only be installed now: the handler it
+	// falls back to did not exist until this point.
+	handler := apiServer.Handler()
+	if hostRouter != nil {
+		hostRouter.SetFallback(handler)
+		handler = hostRouter
+		logger.Info("serving previews in-process", "domain", cfg.Preview.Domain)
+	}
+
 	wired = true
 	return &application{
 		cfg:    cfg,
@@ -229,7 +242,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		sched:  sched,
 		server: &http.Server{
 			Addr:        cfg.Server.Addr,
-			Handler:     apiServer.Handler(),
+			Handler:     handler,
 			ReadTimeout: cfg.Server.ReadTimeout,
 			// No write timeout: the activity stream is a long-lived response.
 			WriteTimeout: cfg.Server.WriteTimeout,
@@ -349,12 +362,19 @@ func buildDriver(cfg config.Config, dataDir string) (vm.Driver, error) {
 	}
 }
 
-// buildRouter selects how preview routes are published.
-func buildRouter(cfg config.Config) proxy.Router {
-	if cfg.Caddy.WildcardDomain == "" {
-		return proxy.Discard{}
+// buildRouter selects how preview routes are published, returning the router
+// and, when previews are served from this process, the handler that serves
+// them.
+func buildRouter(cfg config.Config, logger *slog.Logger) (proxy.Router, *hostmux.Mux) {
+	switch cfg.PreviewRouter() {
+	case preview.RouterCaddy:
+		return caddy.New(cfg.Caddy, nil), nil
+	case preview.RouterNone:
+		return proxy.Discard{}, nil
+	default:
+		mux := hostmux.New(logger)
+		return mux, mux
 	}
-	return caddy.New(cfg.Caddy, nil)
 }
 
 // nudgeFunc adapts a function to orchestrator.Notifier.

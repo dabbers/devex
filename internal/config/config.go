@@ -219,10 +219,32 @@ func (c *Config) Warnings() []string {
 	if c.Driver.Kind == "local" {
 		warnings = append(warnings, "using the local VM driver: agents run on the host with no isolation, which is for development only")
 	}
-	if c.Caddy.WildcardDomain == "" {
-		warnings = append(warnings, "no Caddy wildcard domain; preview routes will not be published to a proxy")
+	switch c.PreviewRouter() {
+	case preview.RouterNone:
+		warnings = append(warnings,
+			"preview.router is none; preview hostnames are allocated and shown but nothing serves them")
+	case preview.RouterInProcess:
+		warnings = append(warnings,
+			"serving previews in-process: correct behind a CDN that terminates TLS, but this machine "+
+				"answers preview hostnames over plain HTTP, so do not expose it directly")
 	}
 	return warnings
+}
+
+// PreviewRouter resolves which router will actually be used, applying the
+// inference that preview.Router leaves to the caller.
+//
+// Caddy is only chosen when it is configured, because configuring the
+// in-process router wrongly serves previews over plain HTTP while pointing at
+// an admin API that is not there fails on every allocation instead.
+func (c *Config) PreviewRouter() preview.Router {
+	if c.Preview.Router != preview.RouterAuto {
+		return c.Preview.Router
+	}
+	if c.Caddy.WildcardDomain != "" {
+		return preview.RouterCaddy
+	}
+	return preview.RouterInProcess
 }
 
 // ErrNoConfig reports a missing configuration file.

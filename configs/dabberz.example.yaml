@@ -64,18 +64,45 @@ scheduler:
   head_of_line_blocking: true
 
 preview:
-  # Every fork gets its own hostname under this domain. No deploys, no cache
-  # clears: the user and the verifier open the same in-flight preview.
-  domain: dab.im
+  # Every exposed service of every fork gets its own hostname under this
+  # domain. No deploys, no cache clears: the user and the verifier open the
+  # same in-flight preview.
+  #
+  # This is deliberately NOT the domain the control plane is on. The control
+  # plane has a shell behind it and must be locked down; previews must not be,
+  # because the verifier's browser would otherwise need a credential and
+  # because a preview you cannot send to someone is not serving its purpose.
+  # Separate hostname spaces are what let one be closed and the other open.
+  domain: ondabberz.link
   scheme: https
   port_start: 41000
   port_end: 42999
 
+  # Where allocated routes get published.
+  #
+  #   inprocess  dabberzd answers preview hostnames itself. Correct when a CDN
+  #              fronts the preview zone and terminates TLS, which is the
+  #              usual case: the origin then never needs a certificate at all.
+  #              It answers over plain HTTP, so it must not be exposed
+  #              directly to the internet.
+  #   caddy      configures an external Caddy over its admin API. Needed when
+  #              TLS has to terminate on this machine, because a wildcard
+  #              certificate can only be issued over DNS-01 and Caddy is what
+  #              does that. Fill in the caddy section below.
+  #   none       allocate and display hostnames but publish nowhere.
+  #
+  # Left empty this is inferred from whether caddy.wildcard_domain is set, and
+  # the choice is logged at startup.
+  router: inprocess
+
+# Only needed when preview.router is "caddy". Serving previews in-process
+# needs none of this.
 caddy:
   admin_endpoint: http://127.0.0.1:2019
   server_name: dabberz
   listen: [":443"]
-  wildcard_domain: dab.im
+  # Empty means no Caddy. Set this to the preview domain to use it.
+  wildcard_domain: ""
   acme_email: you@example.com
   # A wildcard certificate can only be issued over DNS-01, which is what lets a
   # new fork be reachable immediately instead of waiting on issuance.

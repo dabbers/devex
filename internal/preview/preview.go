@@ -35,10 +35,43 @@ const (
 // maxLabelLen is the DNS limit for a single hostname label.
 const maxLabelLen = 63
 
+// Router selects how allocated preview routes are published.
+type Router string
+
+const (
+	// RouterAuto picks inprocess unless a Caddy wildcard domain is configured.
+	RouterAuto Router = ""
+	// RouterInProcess serves previews from the control plane itself. Correct
+	// when something in front terminates TLS for the preview zone, which is
+	// the usual case behind a CDN.
+	RouterInProcess Router = "inprocess"
+	// RouterCaddy configures an external Caddy over its admin API. Needed when
+	// TLS must terminate at this machine, because a wildcard certificate can
+	// only be issued over DNS-01 and Caddy is what does that.
+	RouterCaddy Router = "caddy"
+	// RouterNone publishes nowhere. Routes are still allocated and recorded,
+	// so the UI can show what a fork would get.
+	RouterNone Router = "none"
+)
+
+// Valid reports whether the router is one dabberz understands.
+func (r Router) Valid() bool {
+	switch r {
+	case RouterAuto, RouterInProcess, RouterCaddy, RouterNone:
+		return true
+	}
+	return false
+}
+
 // Config configures preview allocation.
 type Config struct {
-	// Domain is the wildcard domain previews live under, such as "dab.im".
+	// Domain is the wildcard domain previews live under, such as
+	// "ondabberz.link".
 	Domain string `yaml:"domain" json:"domain"`
+	// Router selects where allocated routes are published. Left empty it is
+	// inferred, which is convenient but hides a decision with real
+	// consequences, so the inference is logged at startup.
+	Router Router `yaml:"router" json:"router"`
 	// Scheme is the URL scheme handed to users, "https" in any real deployment.
 	Scheme string `yaml:"scheme" json:"scheme"`
 	// PortStart and PortEnd bound the host ports allocated to forks.
@@ -67,6 +100,9 @@ func (c Config) Validate() error {
 	}
 	if c.PortStart <= 0 || c.PortEnd > 65535 || c.PortStart > c.PortEnd {
 		return fmt.Errorf("preview: port range %d-%d is invalid", c.PortStart, c.PortEnd)
+	}
+	if !c.Router.Valid() {
+		return fmt.Errorf("preview: router %q is not one of inprocess, caddy, none", c.Router)
 	}
 	return nil
 }
