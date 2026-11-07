@@ -243,3 +243,39 @@ already hides whether an instance is a microVM or a directory, and
 `vm.Interactive` is already an optional capability -- but it does mean resource
 accounting and reclamation cannot assume the machine is disposable, which the
 Firecracker path currently does.
+
+
+## The preview edge: what works and what is blocked
+
+The in-process router (`internal/proxy/hostmux`) is done and verified over
+real HTTP: two stand-in dev servers behind two preview hostnames on one
+listener, the public Host header preserved, the control-plane hostname still
+serving the panel, an unmatched preview hostname a dead end rather than the
+panel, and a stopped upstream returning an explanatory 502.
+
+What is not working is the public edge *on the Dokploy-hosted instance*.
+Dokploy stores a domain whose host is `*.ondabberz.link`, but the Traefik
+router it generates uses `Host()`, which matches exact names only, so every
+preview hostname falls through to Traefik's catch-all 404. Hand-editing the
+per-application dynamic configuration to use `HostRegexp` -- in both the
+Traefik v2 and v3 spellings -- changed nothing, while the panel's own router
+in the same file kept working, which suggests that file is not what routes
+these hostnames on this installation.
+
+This matters less than it appears: that container has no `/dev/kvm`, so it
+runs no fork VMs and has no previews to serve. The production shape -- dabberzd
+on a machine with KVM, holding its own listener on 443 or sitting behind Caddy
+-- has none of this problem.
+
+The path that fits Dokploy's model, when it is worth doing, is a
+`proxy.Router` that registers **one Dokploy domain per preview hostname**,
+each pointed at the dabberz container's own port. dabberzd then routes
+internally by Host exactly as it does now, so the adapter composes with
+hostmux instead of replacing it, and no wildcard is needed.
+
+That is blocked on authentication, not on plumbing. Dokploy attaches its
+basic-auth middleware per *application*, so every domain on the app inherits
+it -- and previews must not be authenticated. Replacing the proxy-level
+password with authentication inside dabberzd removes the middleware entirely
+and with it the conflict. So the order is: the `Authenticator` boundary first,
+then drop the proxy password, then the per-hostname Dokploy router.
