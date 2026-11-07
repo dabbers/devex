@@ -1224,16 +1224,20 @@ function renderSignIn(reason) {
   }));
   const host = el("div", { id: "sign-in", style: "margin-top:20px" });
   root.append(host);
-  if (window.Clerk) {
-    try {
-      window.Clerk.mountSignIn(host);
-      return;
-    } catch (err) {
-      host.append(empty("The sign-in form could not be shown: " + err.message));
-      return;
-    }
+  if (!window.Clerk) {
+    host.append(empty("The sign-in provider could not be loaded."));
+    return;
   }
-  host.append(empty("The sign-in provider could not be loaded."));
+  try {
+    // routing: "virtual" keeps the component's steps out of the URL.
+    // Its default is hash routing, and this application already owns the
+    // hash: a multi-step sign-in would push #/factor-one, our router would
+    // not recognise it, and the form would be replaced by "Not found"
+    // half way through signing in.
+    window.Clerk.mountSignIn(host, { routing: "virtual" });
+  } catch (err) {
+    host.append(empty("The sign-in form could not be shown: " + err.message));
+  }
 }
 
 // loadClerk pulls the provider's script from its own instance host rather than
@@ -1276,8 +1280,12 @@ async function start() {
       return;
     }
     if (!window.Clerk.user) {
+      // With virtual routing the provider never navigates, so nothing would
+      // otherwise tell us sign-in finished. Start again once a user exists.
+      window.Clerk.addListener(({ user }) => {
+        if (user) start();
+      });
       renderSignIn();
-      // Clerk reloads the page itself once sign-in completes.
       return;
     }
   }
