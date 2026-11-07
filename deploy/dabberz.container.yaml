@@ -88,6 +88,11 @@ llm:
 agent:
   binary: claude
   timeout: 45m
+  # Where the agent keeps its conversations inside the VM. Resuming reads them
+  # back from here, so it has to outlive a restart: on a rebuilt machine the
+  # default home directory is gone, and the only symptom is a resume quietly
+  # starting fresh -- which is what resuming exists to avoid.
+  session_dir: /workspace/.dabberz/agent
 
 verify:
   # Auto-provisioning under the local driver yields a workspace in this

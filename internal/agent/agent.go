@@ -25,6 +25,15 @@ const DefaultTimeout = 45 * time.Minute
 // injected into the fork VM alongside the repo's inherited secrets.
 const TokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
 
+// ConfigDirEnv points the agent at where it keeps its conversations.
+//
+// Resuming reads the conversation back from this directory, so it has to be
+// somewhere that survives. Left to its default it lands under the home
+// directory, which on a rebuilt machine is gone -- and a lost conversation is
+// only noticed as a resume that quietly falls back to starting fresh, which
+// is exactly the behaviour resuming was added to replace.
+const ConfigDirEnv = "CLAUDE_CONFIG_DIR"
+
 // escalationPattern is how an agent asks for the user without dabberz having
 // to infer intent from prose. The agent is told to emit this marker when it
 // hits something it must not decide alone.
@@ -44,6 +53,13 @@ type Config struct {
 	Timeout time.Duration `yaml:"timeout" json:"timeout"`
 	// ExtraArgs are appended to every invocation.
 	ExtraArgs []string `yaml:"extra_args" json:"extra_args"`
+	// SessionDir is where the agent keeps its conversations inside the VM. It
+	// must be on storage that outlives a restart, or resuming silently
+	// degrades to starting fresh every time.
+	//
+	// Empty leaves the agent's own default, which is correct only when the
+	// machine's home directory is itself persistent.
+	SessionDir string `yaml:"session_dir" json:"session_dir"`
 }
 
 func (c Config) withDefaults() Config {
@@ -80,6 +96,13 @@ type Request struct {
 	Env map[string]string
 	// Timeout overrides the configured timeout.
 	Timeout time.Duration
+	// Session carries the conversation across runs. When it names one, the
+	// agent resumes it instead of starting from an empty context and
+	// rebuilding its understanding from the prompt.
+	//
+	// It is mutated by Run: the conversation's identifier and what has been
+	// accounted for it both belong to the caller, who persists them.
+	Session *domain.AgentSession
 }
 
 // Result is the outcome of an agent run.
@@ -103,6 +126,10 @@ type Result struct {
 	// tripwires are therefore not counting this run. Callers surface that
 	// rather than letting a budget silently stop accruing.
 	UsageReported bool `json:"usage_reported"`
+	// Resumed reports whether this run continued an existing conversation.
+	Resumed bool `json:"resumed"`
+	// SessionID is the conversation the run belonged to.
+	SessionID string `json:"session_id,omitempty"`
 	// Raw is the agent's unparsed output, kept for the activity feed.
 	Raw string `json:"-"`
 }
@@ -155,25 +182,40 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	if r.cfg.OAuthToken != "" {
 		env[TokenEnv] = r.cfg.OAuthToken
 	}
+	if r.cfg.SessionDir != "" {
+		env[ConfigDirEnv] = r.cfg.SessionDir
+	}
+
+	resumeID := ""
+	if req.Session.Started() {
+		resumeID = req.Session.ID
+	}
 
 	started := time.Now()
-	exec, err := r.driver.Exec(ctx, req.InstanceID, vm.Command{
-		Argv: r.argv(),
-		Dir:  req.Dir,
-		Env:  env,
-		// The prompt goes over stdin rather than the command line: workstream
-		// descriptions and verification reports are long and contain
-		// characters no argv should have to carry.
-		Stdin:   []byte(req.Prompt),
-		Timeout: timeout,
-	})
+	exec, err := r.invoke(ctx, req, env, resumeID, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("agent: run in %s: %w", req.InstanceID, err)
+		return nil, err
+	}
+
+	// A conversation can be gone: the machine was rebuilt, or the session
+	// store was not persisted across a restart. Losing context is a setback;
+	// failing the fork for it is not warranted when starting fresh is exactly
+	// what would have happened before resuming existed.
+	resumed := resumeID != ""
+	if resumed && resumeFailed(exec) {
+		resumed = false
+		req.Session.ID = ""
+		req.Session.Accounted = domain.Usage{}
+		exec, err = r.invoke(ctx, req, env, "", timeout)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	result := &Result{
-		Raw:   exec.Stdout,
-		Usage: domain.Usage{Wall: time.Since(started)},
+		Raw:     exec.Stdout,
+		Usage:   domain.Usage{Wall: time.Since(started)},
+		Resumed: resumed,
 	}
 	if exec.TimedOut {
 		result.Failed = true
@@ -186,9 +228,23 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 		result.UsageReported = true
 		result.Output = parsed.Result
 		result.Failed = parsed.IsError
-		result.Usage.InputTokens = parsed.Usage.InputTokens + parsed.Usage.CacheCreationInputTokens + parsed.Usage.CacheReadInputTokens
-		result.Usage.OutputTokens = parsed.Usage.OutputTokens
-		result.Usage.CostUSD = parsed.TotalCostUSD
+		result.SessionID = parsed.SessionID
+
+		// What the agent reports is the conversation's total, not this run's,
+		// so the session turns it into the difference and remembers the new
+		// total. Adding the reported figure directly would count every
+		// earlier turn again on every resumed run.
+		reported := domain.Usage{
+			InputTokens:  parsed.Usage.InputTokens + parsed.Usage.CacheCreationInputTokens + parsed.Usage.CacheReadInputTokens,
+			OutputTokens: parsed.Usage.OutputTokens,
+			CostUSD:      parsed.TotalCostUSD,
+			Wall:         result.Usage.Wall,
+		}
+		if req.Session != nil {
+			result.Usage = req.Session.Turn(parsed.SessionID, reported)
+		} else {
+			result.Usage = reported
+		}
 	} else {
 		// No parseable result: fall back to the raw streams so the failure is
 		// still legible in the activity feed.
@@ -211,8 +267,31 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	return result, nil
 }
 
+// invoke runs the agent once, optionally resuming a conversation.
+func (r *Runner) invoke(ctx context.Context, req Request, env map[string]string, resumeID string, timeout time.Duration) (*vm.ExecResult, error) {
+	exec, err := r.driver.Exec(ctx, req.InstanceID, vm.Command{
+		Argv: r.argv(resumeID),
+		Dir:  req.Dir,
+		Env:  env,
+		// The prompt goes over stdin rather than the command line: workstream
+		// descriptions and verification reports are long and contain
+		// characters no argv should have to carry.
+		Stdin:   []byte(req.Prompt),
+		Timeout: timeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agent: run in %s: %w", req.InstanceID, err)
+	}
+	return exec, nil
+}
+
 // argv builds the Claude Code invocation.
-func (r *Runner) argv() []string {
+//
+// The conversation identifier is read back from the result rather than chosen
+// here. Choosing it would need the installed version to accept --session-id,
+// and reading it back works with any version that can resume at all: if none
+// comes back, each run simply starts fresh, which is what happened before.
+func (r *Runner) argv(resumeID string) []string {
 	argv := []string{
 		r.cfg.Binary,
 		// Print mode: run to completion non-interactively and emit a machine
@@ -220,10 +299,29 @@ func (r *Runner) argv() []string {
 		"-p",
 		"--output-format", "json",
 	}
+	if resumeID != "" {
+		// Continue the conversation instead of starting from an empty context
+		// and rebuilding understanding from the prompt every cycle.
+		argv = append(argv, "--resume", resumeID)
+	}
 	if r.cfg.MCPConfig != "" {
 		argv = append(argv, "--mcp-config", r.cfg.MCPConfig)
 	}
 	return append(argv, r.cfg.ExtraArgs...)
+}
+
+// resumeFailedPattern recognises a conversation the agent cannot find.
+var resumeFailedPattern = regexp.MustCompile(`(?i)(no (conversation|session) found|session .* not found|could not (find|resume) session|unknown session)`)
+
+// resumeFailed reports whether a run failed because the conversation is gone,
+// rather than because the work itself failed.
+func resumeFailed(exec *vm.ExecResult) bool {
+	if exec.OK() {
+		return false
+	}
+	// Only the streams, not the parsed result: a conversation that cannot be
+	// found produces no result object to parse.
+	return resumeFailedPattern.MatchString(exec.Stderr) || resumeFailedPattern.MatchString(exec.Stdout)
 }
 
 // parseResult extracts Claude Code's JSON result from its output, tolerating

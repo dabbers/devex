@@ -154,6 +154,11 @@ agent:
   # The dabberz MCP toolset: secrets, preview control, browser driving.
   mcp_config: /etc/dabberz/mcp.json
   timeout: 45m
+  # Where the agent keeps its conversations inside the VM. Resuming reads them
+  # back from here, so it has to outlive a restart: on a rebuilt machine the
+  # default home directory is gone, and the only symptom is a resume quietly
+  # starting fresh -- which is what resuming exists to avoid.
+  session_dir: /workspace/.dabberz/agent
 
 verify:
   # One shared UI VM serves every verifier: a single browser with N

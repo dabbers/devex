@@ -259,11 +259,18 @@ func (p *Pipeline) code(ctx context.Context, fork *domain.Fork, instanceID, prom
 		InstanceID: instanceID,
 		Prompt:     prompt,
 		Env:        env,
+		// The fork's conversation, so a fix round continues where the last
+		// one left off instead of re-reading the workstream from scratch.
+		// Run updates it, and the fork is persisted immediately below.
+		Session: &fork.AgentSession,
 	})
 	if err != nil {
 		return true, err
 	}
 
+	// res.Usage is this run's share, which the session worked out from the
+	// conversation's running total; adding the reported figure directly would
+	// count every earlier turn again on every resumed run.
 	fork.Usage.Add(res.Usage)
 	if err := p.store.UpdateFork(ctx, fork); err != nil {
 		return true, err
@@ -272,6 +279,7 @@ func (p *Pipeline) code(ctx context.Context, fork *domain.Fork, instanceID, prom
 		"cost_usd":       res.Usage.CostUSD,
 		"tokens":         res.Usage.InputTokens + res.Usage.OutputTokens,
 		"usage_reported": res.UsageReported,
+		"resumed":        res.Resumed,
 	})
 	if !res.UsageReported {
 		// Zero usage here means unaccounted, not free. Say so: the cost and

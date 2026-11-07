@@ -429,6 +429,10 @@ type Fork struct {
 	PreviewURL string `json:"preview_url,omitempty"`
 
 	Usage Usage `json:"usage"`
+	// AgentSession is the coding agent's conversation for this fork, so a fix
+	// round continues where the last one left off rather than re-reading the
+	// workstream from scratch.
+	AgentSession AgentSession `json:"agent_session"`
 
 	// Escalation is set when a tripwire fired or the agent needed the user.
 	Escalation *Escalation `json:"escalation,omitempty"`
@@ -441,6 +445,61 @@ type Fork struct {
 
 // Active reports whether the fork still occupies scheduler capacity.
 func (f *Fork) Active() bool { return f.State.Active() }
+
+// AgentSession is a conversation with the coding agent, carried across runs.
+//
+// It exists because resuming changes what the agent reports. A fresh run
+// reports what that run cost; a resumed run reports what the whole
+// conversation has cost so far. Adding the second figure to a running total
+// counts every earlier turn again, and since those totals drive the cost and
+// token tripwires, a fork would be stopped for spending it had not done.
+//
+// Accounted is therefore what has already been added to the budget, and a
+// run contributes the difference.
+type AgentSession struct {
+	// ID is the provider's conversation identifier, empty until the first run
+	// reports one. Without it each run starts from an empty context and
+	// rebuilds its understanding from the prompt.
+	ID string `json:"id,omitempty"`
+	// Accounted is the cumulative usage already added to the owner's budget.
+	Accounted Usage `json:"accounted"`
+}
+
+// Started reports whether there is a conversation to resume.
+func (s *AgentSession) Started() bool { return s != nil && s.ID != "" }
+
+// Turn converts a run's reported figures into what that run alone cost, and
+// records the new cumulative total.
+//
+// A changed identifier means a different conversation, so its figures are
+// that conversation's own and nothing has been accounted for it yet. Reported
+// figures lower than what is already accounted mean the same: the provider is
+// not continuing the conversation this session thought it was.
+func (s *AgentSession) Turn(sessionID string, reported Usage) Usage {
+	if sessionID != "" && sessionID != s.ID {
+		s.ID = sessionID
+		s.Accounted = Usage{}
+	}
+	if reported.CostUSD < s.Accounted.CostUSD ||
+		reported.InputTokens < s.Accounted.InputTokens ||
+		reported.OutputTokens < s.Accounted.OutputTokens {
+		s.Accounted = Usage{}
+	}
+
+	turn := Usage{
+		InputTokens:  reported.InputTokens - s.Accounted.InputTokens,
+		OutputTokens: reported.OutputTokens - s.Accounted.OutputTokens,
+		CostUSD:      reported.CostUSD - s.Accounted.CostUSD,
+		// Wall is measured per run, not reported, so it is already this
+		// run's and passes through.
+		Wall:   reported.Wall,
+		Cycles: reported.Cycles,
+	}
+	s.Accounted.InputTokens = reported.InputTokens
+	s.Accounted.OutputTokens = reported.OutputTokens
+	s.Accounted.CostUSD = reported.CostUSD
+	return turn
+}
 
 // Usage accumulates what a fork has spent, and is checked against the global
 // tripwire thresholds after every verify/fix cycle.

@@ -145,9 +145,22 @@ func (d *stubDriver) ran(match string) bool {
 	return false
 }
 
+// claudeJSON wraps a scripted reply in a print-mode result.
+//
+// A reply that is already a result object passes through untouched, so a test
+// can script the conversation identifiers and running totals a resumed run
+// actually reports.
+//
+// The envelope carries a session id because the real agent always does, and
+// without one no test exercised resuming at all.
 func claudeJSON(result string) string {
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(result), &probe); err == nil && probe["type"] == "result" {
+		return result
+	}
 	body, _ := json.Marshal(map[string]any{
 		"type": "result", "is_error": false, "result": result,
+		"session_id":     "sess_stub",
 		"total_cost_usd": 0.10,
 		"usage":          map[string]any{"input_tokens": 1000, "output_tokens": 200},
 	})
@@ -657,4 +670,96 @@ func TestRetryReusesTheWorkspaceMachine(t *testing.T) {
 	if again.Instance.ID != first {
 		t.Fatalf("a second machine was booted: %q then %q", first, again.Instance.ID)
 	}
+}
+
+// TestAFixRoundResumesTheConversation: without this, every fix round starts
+// from an empty context and rebuilds its understanding from the prompt, so the
+// agent can retry something it already tried and ruled out.
+func TestAFixRoundResumesTheConversation(t *testing.T) {
+	h := newHarness(t, harnessOpts{
+		verifyReplies: []string{
+			`{"passed":false,"summary":"the star widget does not render"}`,
+			`{"passed":true,"summary":"fixed"}`,
+		},
+		// Print-mode JSON, because a conversation identifier only exists in a
+		// parseable result. The last reply repeats and serves the merge
+		// review, whose verdict the reviewer reads out of the result field.
+		claudeReplies: []string{
+			claudeResultJSON("coding", 1000, 200, 1.00, "sess_fork"),
+			claudeResultJSON("fixed", 1800, 400, 2.50, "sess_fork"),
+			claudeResultJSON("VERDICT: APPROVED", 50, 10, 0.01, "sess_review"),
+		},
+	})
+	final := h.launch(t)
+	if final.State != domain.ForkMerged {
+		t.Fatalf("state = %q, reason %q", final.State, final.StateReason)
+	}
+
+	var claudeCalls []string
+	for _, cmd := range h.driver.commands {
+		if strings.HasPrefix(cmd, "claude") {
+			claudeCalls = append(claudeCalls, cmd)
+		}
+	}
+	if len(claudeCalls) < 2 {
+		t.Fatalf("expected a coding run and a fix run, got %d: %v", len(claudeCalls), claudeCalls)
+	}
+	if strings.Contains(claudeCalls[0], "--resume") {
+		t.Fatalf("the first run tried to resume: %s", claudeCalls[0])
+	}
+	if !strings.Contains(claudeCalls[1], "--resume") {
+		t.Fatalf("the fix round did not resume: %s", claudeCalls[1])
+	}
+	if final.AgentSession.ID == "" {
+		t.Fatal("the fork did not remember its conversation")
+	}
+}
+
+// TestAResumedForkIsNotChargedTwice guards the accounting against the
+// conversation's running total: the cost and token tripwires are driven by it,
+// so overcounting stops a fork for spending it never did.
+func TestAResumedForkIsNotChargedTwice(t *testing.T) {
+	h := newHarness(t, harnessOpts{
+		verifyReplies: []string{
+			`{"passed":false,"summary":"not yet"}`,
+			`{"passed":true,"summary":"fixed"}`,
+		},
+		// The agent reports the conversation's running total, so the second
+		// reply is the first plus that round's own spend. The third is the
+		// merge review, a separate conversation with its own small figures.
+		claudeReplies: []string{
+			claudeResultJSON("coding", 1000, 200, 1.00, "sess_fork"),
+			claudeResultJSON("fixed", 1800, 400, 2.50, "sess_fork"),
+			claudeResultJSON("VERDICT: APPROVED", 50, 10, 0.01, "sess_review"),
+		},
+	})
+	final := h.launch(t)
+
+	// The coding conversation cost 2.50 in total, not 1.00 + 2.50. The merge
+	// review is its own conversation and adds its own small amount.
+	if final.Usage.CostUSD > 2.60 {
+		t.Fatalf("fork was charged %v; the coding conversation only cost 2.50, so earlier turns were counted twice",
+			final.Usage.CostUSD)
+	}
+	if final.Usage.CostUSD < 2.50 {
+		t.Fatalf("fork was charged %v, less than the conversation actually cost", final.Usage.CostUSD)
+	}
+	if final.Usage.InputTokens > 1900 {
+		t.Fatalf("fork was charged %d input tokens, want about the conversation's 1800 plus the review",
+			final.Usage.InputTokens)
+	}
+}
+
+// claudeResultJSON builds a print-mode result reporting a conversation's
+// running totals.
+func claudeResultJSON(result string, in, out int64, cost float64, sessionID string) string {
+	body, _ := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": result, "session_id": sessionID, "total_cost_usd": cost, "num_turns": 2,
+		"usage": map[string]any{
+			"input_tokens": in, "output_tokens": out,
+			"cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+		},
+	})
+	return string(body)
 }

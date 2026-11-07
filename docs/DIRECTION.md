@@ -209,8 +209,15 @@ machinery underneath:
    audit trail. What is not done is the conversational part: a workspace has
    no agent session attached to it yet, so it is somewhere to work rather than
    somewhere to ask for work.
-3. Resumable streaming agent sessions, with the cost-accounting fix and
-   `~/.claude` persisted in the image.
+3. ~~Resumable agent sessions, with the cost-accounting fix and the session
+   store persisted.~~ **Done.** A fork carries a conversation across its runs,
+   so a fix round continues rather than re-reading the workstream; the session
+   turns the conversation's running total into that run's share, so resumed
+   runs are not charged for every earlier turn; a lost conversation falls back
+   to a fresh one instead of failing the fork; and `agent.session_dir` puts the
+   store on persistent storage. Streaming output is not done: runs are still
+   read as one result at the end, so the interface cannot show an agent
+   working, only that it worked.
 4. Conversational entry: a workspace conversation that drives the agent
    directly, with the plan-and-fork path reachable from it rather than being
    the only door.

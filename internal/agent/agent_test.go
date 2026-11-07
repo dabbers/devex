@@ -336,3 +336,202 @@ func TestBuildFixPromptCarriesTheReport(t *testing.T) {
 		t.Error("the prompt should tell the agent the report is evidence, not a spec")
 	}
 }
+
+// scriptedDriver returns a different result per call, so a resume followed by
+// a fallback can be exercised.
+type scriptedDriver struct {
+	results []*vm.ExecResult
+	calls   []vm.Command
+}
+
+func (d *scriptedDriver) Name() string                                  { return "scripted" }
+func (d *scriptedDriver) Capacity(context.Context) (vm.Capacity, error) { return vm.Capacity{}, nil }
+func (d *scriptedDriver) Create(context.Context, vm.Spec) (*vm.Instance, error) {
+	return nil, vm.ErrNotSupported
+}
+func (d *scriptedDriver) Get(context.Context, string) (*vm.Instance, error) {
+	return nil, vm.ErrNotFound
+}
+func (d *scriptedDriver) List(context.Context) ([]*vm.Instance, error) { return nil, nil }
+func (d *scriptedDriver) Destroy(context.Context, string) error        { return nil }
+
+func (d *scriptedDriver) Exec(_ context.Context, _ string, cmd vm.Command) (*vm.ExecResult, error) {
+	d.calls = append(d.calls, cmd)
+	if len(d.calls) > len(d.results) {
+		return d.results[len(d.results)-1], nil
+	}
+	return d.results[len(d.calls)-1], nil
+}
+
+func argvOf(cmd vm.Command) string { return strings.Join(cmd.Argv, " ") }
+
+func TestFirstRunStartsAConversationAndRemembersIt(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 1000, 200, 0.42)}}
+	r := New(driver, Config{})
+	session := &domain.AgentSession{}
+
+	res, err := r.Run(context.Background(), Request{
+		InstanceID: "vm_1", Prompt: "add ratings", Session: session,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(argvOf(driver.lastCmd), "--resume") {
+		t.Fatalf("the first run tried to resume: %s", argvOf(driver.lastCmd))
+	}
+	if res.Resumed {
+		t.Fatal("the first run reported itself resumed")
+	}
+	if session.ID != "s1" {
+		t.Fatalf("session id = %q, want the one the agent reported", session.ID)
+	}
+	if res.Usage.CostUSD != 0.42 {
+		t.Fatalf("cost = %v, want the reported 0.42", res.Usage.CostUSD)
+	}
+}
+
+// TestSecondRunResumesAndChargesOnlyTheDifference is the whole point: without
+// it a fix round re-reads the workstream from scratch, and the reported total
+// would be charged again in full.
+func TestSecondRunResumesAndChargesOnlyTheDifference(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("first", false, 1000, 200, 1.00)}}
+	r := New(driver, Config{})
+	session := &domain.AgentSession{}
+
+	if _, err := r.Run(context.Background(), Request{
+		InstanceID: "vm_1", Prompt: "add ratings", Session: session,
+	}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	// The conversation now totals $2.50 and 1800 input tokens.
+	driver.result = &vm.ExecResult{Stdout: claudeJSON("second", false, 1800, 400, 2.50)}
+	res, err := r.Run(context.Background(), Request{
+		InstanceID: "vm_1", Prompt: "fix the thing", Session: session,
+	})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if !strings.Contains(argvOf(driver.lastCmd), "--resume s1") {
+		t.Fatalf("the second run did not resume: %s", argvOf(driver.lastCmd))
+	}
+	if !res.Resumed {
+		t.Fatal("the second run did not report itself resumed")
+	}
+	if res.Usage.CostUSD != 1.50 {
+		t.Fatalf("charged %v for the second run, want the 1.50 difference", res.Usage.CostUSD)
+	}
+	if res.Usage.InputTokens != 800 || res.Usage.OutputTokens != 200 {
+		t.Fatalf("charged %d/%d tokens, want the 800/200 difference",
+			res.Usage.InputTokens, res.Usage.OutputTokens)
+	}
+}
+
+// TestALostConversationFallsBackToAFreshOne: a machine can be rebuilt, or the
+// session store not persisted across a restart. Losing context is a setback;
+// failing the fork for it is not warranted when starting fresh is exactly what
+// would have happened before resuming existed.
+func TestALostConversationFallsBackToAFreshOne(t *testing.T) {
+	driver := &scriptedDriver{results: []*vm.ExecResult{
+		{ExitCode: 1, Stderr: "Error: No conversation found with session ID: s1"},
+		{Stdout: claudeJSON("done from scratch", false, 900, 150, 0.30)},
+	}}
+	r := New(driver, Config{})
+	session := &domain.AgentSession{ID: "s1", Accounted: domain.Usage{CostUSD: 5, InputTokens: 4000}}
+
+	res, err := r.Run(context.Background(), Request{
+		InstanceID: "vm_1", Prompt: "fix the thing", Session: session,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(driver.calls) != 2 {
+		t.Fatalf("made %d calls, want a resume then a fresh run", len(driver.calls))
+	}
+	if !strings.Contains(argvOf(driver.calls[0]), "--resume s1") {
+		t.Fatalf("the first attempt did not resume: %s", argvOf(driver.calls[0]))
+	}
+	if strings.Contains(argvOf(driver.calls[1]), "--resume") {
+		t.Fatalf("the fallback still tried to resume: %s", argvOf(driver.calls[1]))
+	}
+	if res.Failed {
+		t.Fatal("a lost conversation failed the run instead of starting fresh")
+	}
+	if res.Resumed {
+		t.Fatal("the run reported itself resumed when it had started fresh")
+	}
+	// The stale accounting went with the conversation; charging the
+	// difference against it would have produced a negative turn.
+	if res.Usage.CostUSD != 0.30 {
+		t.Fatalf("charged %v, want the fresh conversation's 0.30", res.Usage.CostUSD)
+	}
+}
+
+// TestAFailedRunIsNotMistakenForALostConversation: the fallback must not
+// re-run work that genuinely failed, which would do it twice.
+func TestAFailedRunIsNotMistakenForALostConversation(t *testing.T) {
+	driver := &scriptedDriver{results: []*vm.ExecResult{
+		{ExitCode: 1, Stderr: "the build failed: undefined symbol"},
+	}}
+	r := New(driver, Config{})
+	session := &domain.AgentSession{ID: "s1"}
+
+	res, err := r.Run(context.Background(), Request{
+		InstanceID: "vm_1", Prompt: "fix the thing", Session: session,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(driver.calls) != 1 {
+		t.Fatalf("made %d calls; a genuine failure was retried", len(driver.calls))
+	}
+	if !res.Failed {
+		t.Fatal("a failing run was not reported as failed")
+	}
+}
+
+func TestRunWithoutASessionStillWorks(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 100, 20, 0.05)}}
+	r := New(driver, Config{})
+
+	// Callers that do not keep a conversation -- the merge reviewer, for one
+	// -- pass none, and must get the reported figures unchanged.
+	res, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "review"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Usage.CostUSD != 0.05 {
+		t.Fatalf("cost = %v, want the reported 0.05", res.Usage.CostUSD)
+	}
+}
+
+// TestSessionDirIsPassedToTheAgent: the conversation is read back from this
+// directory, so it has to be on storage that outlives a restart. Without it a
+// lost conversation shows up only as a resume quietly falling back to a fresh
+// start -- the behaviour resuming was added to replace.
+func TestSessionDirIsPassedToTheAgent(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.01)}}
+	r := New(driver, Config{SessionDir: "/workspace/.dabberz/agent"})
+
+	if _, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "go"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := driver.lastCmd.Env[ConfigDirEnv]; got != "/workspace/.dabberz/agent" {
+		t.Fatalf("%s = %q, want the configured directory", ConfigDirEnv, got)
+	}
+}
+
+func TestSessionDirIsOmittedWhenUnset(t *testing.T) {
+	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.01)}}
+	r := New(driver, Config{})
+
+	if _, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "go"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Leaving the agent's own default alone is correct when the machine's
+	// home directory is itself persistent.
+	if _, set := driver.lastCmd.Env[ConfigDirEnv]; set {
+		t.Fatalf("%s was set without being configured", ConfigDirEnv)
+	}
+}

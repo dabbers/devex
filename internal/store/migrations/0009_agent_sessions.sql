@@ -1,0 +1,13 @@
+-- The coding agent's conversation, carried across a fork's runs.
+--
+-- Every run used to start from an empty context and rebuild its understanding
+-- of the workstream from the prompt. Resuming keeps it, which is both cheaper
+-- and better: a fix round that remembers what it already tried does not try it
+-- again.
+--
+-- The accounted figures travel with the identifier because resuming changes
+-- what the agent reports. A fresh run reports what that run cost; a resumed
+-- run reports the conversation's total. Without somewhere to record what has
+-- already been added to the budget, every resumed run would count all the
+-- earlier turns again, and those totals drive the cost and token tripwires.
+ALTER TABLE forks ADD COLUMN agent_session_json TEXT;

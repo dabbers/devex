@@ -12,7 +12,7 @@ import (
 
 const forkColumns = `id, task_id, user_id, repo_id, project_id, name, description, branch,
 	state, state_reason, serialize_group, workspace_id, instance_id, preview_url,
-	usage_json, escalation_json, created_at, updated_at, started_at, ended_at`
+	usage_json, escalation_json, agent_session_json, created_at, updated_at, started_at, ended_at`
 
 // CreateFork inserts a fork in the queued state.
 func (s *Store) CreateFork(ctx context.Context, f *domain.Fork) error {
@@ -36,12 +36,16 @@ func (s *Store) CreateFork(ctx context.Context, f *domain.Fork) error {
 	if err != nil {
 		return err
 	}
+	session, err := marshalJSON(f.AgentSession)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO forks ("+forkColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO forks ("+forkColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		f.ID, f.TaskID, f.UserID, f.RepoID, f.ProjectID, f.Name, f.Description, f.Branch,
 		string(f.State), f.StateReason, f.SerializeGroup, nullableString(f.WorkspaceID),
 		f.InstanceID, f.PreviewURL,
-		usage, escalation, formatTime(f.CreatedAt), formatTime(f.UpdatedAt),
+		usage, escalation, session, formatTime(f.CreatedAt), formatTime(f.UpdatedAt),
 		nullTime(f.StartedAt), nullTime(f.EndedAt),
 	)
 	return wrapErr("create fork", err)
@@ -135,14 +139,19 @@ func (s *Store) UpdateFork(ctx context.Context, f *domain.Fork) error {
 	if err != nil {
 		return err
 	}
+	session, err := marshalJSON(f.AgentSession)
+	if err != nil {
+		return err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE forks SET name = ?, description = ?, branch = ?, state = ?, state_reason = ?,
 		        serialize_group = ?, workspace_id = ?, instance_id = ?, preview_url = ?,
-		        usage_json = ?, escalation_json = ?, updated_at = ?, started_at = ?, ended_at = ?
+		        usage_json = ?, escalation_json = ?, agent_session_json = ?,
+		        updated_at = ?, started_at = ?, ended_at = ?
 		 WHERE id = ?`,
 		f.Name, f.Description, f.Branch, string(f.State), f.StateReason, f.SerializeGroup,
 		nullableString(f.WorkspaceID), f.InstanceID, f.PreviewURL,
-		usage, escalation, formatTime(f.UpdatedAt),
+		usage, escalation, session, formatTime(f.UpdatedAt),
 		nullTime(f.StartedAt), nullTime(f.EndedAt), f.ID,
 	)
 	if err != nil {
@@ -259,12 +268,13 @@ func scanFork(row rowScanner) (*domain.Fork, error) {
 		workspaceID      sql.NullString
 		usage            sql.NullString
 		escalation       sql.NullString
+		agentSession     sql.NullString
 		created, updated string
 		started, ended   sql.NullString
 	)
 	if err := row.Scan(&f.ID, &f.TaskID, &f.UserID, &f.RepoID, &f.ProjectID, &f.Name,
 		&f.Description, &f.Branch, &state, &f.StateReason, &f.SerializeGroup,
-		&workspaceID, &f.InstanceID, &f.PreviewURL, &usage, &escalation,
+		&workspaceID, &f.InstanceID, &f.PreviewURL, &usage, &escalation, &agentSession,
 		&created, &updated, &started, &ended); err != nil {
 		return nil, wrapErr("get fork", err)
 	}
@@ -274,6 +284,9 @@ func scanFork(row rowScanner) (*domain.Fork, error) {
 		return nil, err
 	}
 	if err := unmarshalJSON(escalation, &f.Escalation); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(agentSession, &f.AgentSession); err != nil {
 		return nil, err
 	}
 	var err error
