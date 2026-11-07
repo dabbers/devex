@@ -279,3 +279,48 @@ it -- and previews must not be authenticated. Replacing the proxy-level
 password with authentication inside dabberzd removes the middleware entirely
 and with it the conflict. So the order is: the `Authenticator` boundary first,
 then drop the proxy password, then the per-hostname Dokploy router.
+
+
+## Authentication: done, and what it unblocks
+
+`internal/auth` is the boundary, with the provider behind an interface, and
+Clerk is the first implementation. The important properties:
+
+- Verification is in Go and frontend-agnostic, so the web application that
+  replaces this interface reuses it unchanged. The sign-in code in `app.js` is
+  the throwaway part and is deliberately minimal.
+- RS256 only, as an allowlist. The attack a denylist misses is re-signing a
+  token with HS256 using the RSA public key as the HMAC secret.
+- Cookies are the primary channel, not a fallback: a browser cannot set headers
+  on an EventSource or a WebSocket handshake, and the activity feed is
+  server-sent events while the shell is a WebSocket.
+- The middleware wraps the whole mux with a short list of exceptions, rather
+  than being opted into per route, because the route somebody adds next would
+  otherwise be open by default -- and one of these routes is a shell.
+- Users are keyed by the provider's subject, not by email. An existing
+  single-user installation is adopted on first sign-in rather than stranded.
+- `auth.kind` has no default: a deployment that forgot to configure it fails to
+  start instead of coming up open.
+
+Only the publishable key is needed to verify a token -- it encodes the instance
+host, which is where the issuer and signing keys come from. The secret key is
+used solely to resolve a new user's email for attribution.
+
+### What is still manual
+
+The deployed instance keeps its proxy password for now. The application
+enforces its own boundary, so the password is redundant in principle, but a
+complete sign-in has not been driven to the end: a user created through the
+provider's backend API has no second factor enrolled, so the flow stops there.
+Removing the one access path that is known to work, on the assumption that the
+other one completes, is not a trade worth making. Sign in once by hand, then
+the password comes off.
+
+That removal is also what unblocks the preview edge described above: the
+proxy attaches its password per application, so every hostname on it inherits
+one, and previews must not be authenticated. Once the application is the only
+thing authenticating, previews can be published alongside the panel on the same
+listener -- which the host mux already keeps separate.
+
+A development instance of an identity provider may also need this deployment's
+origin added to it before sign-in completes from that hostname.
