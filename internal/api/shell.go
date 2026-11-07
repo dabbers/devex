@@ -71,7 +71,7 @@ func (s *Server) shell(w http.ResponseWriter, r *http.Request) {
 
 	// Opening a shell on a machine an agent is working in is worth recording:
 	// from here a person can change anything the agent can.
-	s.audit(ctx, &domain.Event{
+	s.audit(ctx, s.userID(r), &domain.Event{
 		RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
 		Type:    domain.EventShellOpened,
 		Message: "opened a shell on " + fork.Name,

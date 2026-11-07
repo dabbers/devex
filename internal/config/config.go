@@ -32,6 +32,11 @@ const (
 	EnvMasterKey    = "DABBERZ_MASTER_KEY"
 	EnvOrchestrator = "DABBERZ_ORCHESTRATOR_API_KEY"
 	EnvClaudeToken  = "CLAUDE_CODE_OAUTH_TOKEN"
+	// Clerk's publishable key is not a credential -- it is sent to the browser
+	// -- but it is read from the environment alongside the secret so a
+	// deployment configures both in one place.
+	EnvClerkPublishable = "CLERK_PUBLISHABLE_KEY"
+	EnvClerkSecret      = "CLERK_SECRET_KEY"
 )
 
 // Config is the whole control-plane configuration.
@@ -43,6 +48,7 @@ type Config struct {
 	// MasterKey is the hex-encoded secrets key. Prefer the environment.
 	MasterKey string `yaml:"master_key"`
 
+	Auth      AuthConfig          `yaml:"auth"`
 	Server    ServerConfig        `yaml:"server"`
 	Driver    DriverConfig        `yaml:"driver"`
 	Scheduler SchedulerConfig     `yaml:"scheduler"`
@@ -162,7 +168,18 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv(EnvClaudeToken); v != "" {
 		c.Agent.OAuthToken = v
 	}
+	if v := os.Getenv(EnvClerkPublishable); v != "" {
+		c.Auth.Clerk.PublishableKey = v
+	}
+	if v := os.Getenv(EnvClerkSecret); v != "" {
+		c.Auth.Clerk.SecretKey = v
+	}
 }
+
+// Env reads a value from the process environment. It exists so configuration
+// assembly stays in this package rather than spreading os.Getenv through the
+// components.
+func (c *Config) Env(name string) string { return os.Getenv(name) }
 
 // Validate checks the configuration is usable before anything starts.
 func (c *Config) Validate() error {
@@ -192,6 +209,9 @@ func (c *Config) Validate() error {
 	if err := c.Preview.Validate(); err != nil {
 		problems = append(problems, err.Error())
 	}
+	if err := c.Auth.Validate(); err != nil {
+		problems = append(problems, err.Error())
+	}
 	if c.MasterKey == "" {
 		problems = append(problems, "a secrets master key is required; set "+EnvMasterKey+" (generate one with `dabberzctl keygen`)")
 	}
@@ -218,6 +238,12 @@ func (c *Config) Warnings() []string {
 	}
 	if c.Driver.Kind == "local" {
 		warnings = append(warnings, "using the local VM driver: agents run on the host with no isolation, which is for development only")
+	}
+	if c.Auth.Kind == AuthSingle {
+		warnings = append(warnings,
+			"auth.kind is single: every request is treated as "+c.Owner+" without being asked for anything, "+
+				"so whoever can reach this port has a shell, the secrets vault and the whole audit trail. "+
+				"Bind to loopback, or configure a provider")
 	}
 	switch c.PreviewRouter() {
 	case preview.RouterNone:

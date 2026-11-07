@@ -20,7 +20,14 @@ import (
 // User owns repos, tasks and forks. v1 runs single-user, but every entity is
 // scoped by user id from the start so multi-user support is additive.
 type User struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// ExternalID is the identity provider's subject claim: stable for the life
+	// of the account, which an email address is not. Empty when there is no
+	// provider, as in the single-user development path.
+	ExternalID string `json:"external_id,omitempty"`
+	// Email is for display and for attribution in the audit trail. It can be
+	// empty: not every provider puts one in a token, and an identity is still
+	// usable without it.
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 }

@@ -122,8 +122,17 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	// v1 is single-user, but everything is scoped by this id so that
 	// multi-user support is additive rather than a rewrite.
-	owner, err := db.EnsureUser(ctx, cfg.Owner)
+	authenticator, err := cfg.Authenticator()
 	if err != nil {
+		return nil, err
+	}
+	logger.Info("authentication ready", "provider", authenticator.Name())
+
+	// The owner row is created ahead of any request so a fresh installation
+	// has one, and so an existing single-user database is the row the first
+	// provider sign-in adopts rather than being left orphaned beside a new
+	// one. Users are otherwise created on first sign-in.
+	if _, err := db.EnsureUser(ctx, cfg.Owner); err != nil {
 		return nil, err
 	}
 
@@ -216,7 +225,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	apiServer, err := api.New(api.Deps{
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
-		UI: ui, Owner: owner, Logger: logger,
+		UI: ui, Authn: authenticator, Logger: logger,
 	})
 	if err != nil {
 		return nil, err

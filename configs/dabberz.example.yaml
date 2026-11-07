@@ -8,9 +8,38 @@
 #   DABBERZ_ORCHESTRATOR_API_KEY  the planning model's API key
 #   CLAUDE_CODE_OAUTH_TOKEN       the coding agent's token
 
-# The single v1 user. Everything is scoped to this id so multi-user support is
-# additive later rather than a rewrite.
+# The owner. With auth.kind "single" this is the one person every request is
+# attributed to; with a provider it is the account the first sign-in adopts, so
+# an installation that started single-user keeps its history.
 owner: you@example.com
+
+# How requests are identified.
+#
+# There is no default. A deployment that forgot to configure this fails to
+# start rather than coming up open, because this process hands out a shell on
+# its machine, a secrets vault and the whole audit trail.
+#
+#   clerk   verify session tokens from a Clerk instance. Only the publishable
+#           key is needed to verify: it encodes the instance host, which is
+#           where the issuer and signing keys are read from. The secret key is
+#           used solely to look up a new user's email address for attribution.
+#   single  treat every request as `owner` without asking for anything. For a
+#           daemon on a loopback address and nowhere else.
+auth:
+  kind: clerk
+  clerk:
+    # Replace with your instance's key. It is not a credential -- it is sent
+    # to the browser -- but CLERK_PUBLISHABLE_KEY overrides it, so one place
+    # can configure both keys.
+    publishable_key: pk_test_eW91ci1pbnN0YW5jZS5jbGVyay5hY2NvdW50cy5kZXYk
+    # Leave empty and set CLERK_SECRET_KEY. Verification does not need it; it
+    # is used only to look up a new user's email for attribution.
+    secret_key: ""
+    # Restricts which origins' tokens are accepted, which matters when one
+    # provider instance serves several applications. Only a token minted by a
+    # browser carries the claim this checks, so leave it empty if you also mint
+    # tokens through the provider's backend API.
+    authorized_parties: []
 
 # Database, VM workspaces and the per-repo memory store.
 data_dir: var

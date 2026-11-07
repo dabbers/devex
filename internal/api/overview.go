@@ -95,17 +95,17 @@ type ForkView struct {
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	repos, err := s.store.ListRepos(ctx, s.owner.ID)
+	repos, err := s.store.ListRepos(ctx, s.userID(r))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	tasks, err := s.store.ListTasks(ctx, store.TaskFilter{UserID: s.owner.ID})
+	tasks, err := s.store.ListTasks(ctx, store.TaskFilter{UserID: s.userID(r)})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	forks, err := s.store.ListForks(ctx, store.ForkFilter{UserID: s.owner.ID})
+	forks, err := s.store.ListForks(ctx, store.ForkFilter{UserID: s.userID(r)})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -330,7 +330,7 @@ func (s *Server) auditFeed(w http.ResponseWriter, r *http.Request) {
 func (s *Server) auditFilter(r *http.Request) (store.EventFilter, error) {
 	query := r.URL.Query()
 	filter := store.EventFilter{
-		UserID:    s.owner.ID,
+		UserID:    s.userID(r),
 		RepoID:    query.Get("repo"),
 		TaskID:    query.Get("task"),
 		ForkID:    query.Get("fork"),
@@ -392,7 +392,7 @@ func (s *Server) validateFork(w http.ResponseWriter, r *http.Request) {
 
 	// The request is the user's; the finding is the verifier's. Recording them
 	// separately is what makes the trail answer who asked and what was found.
-	s.audit(ctx, &domain.Event{
+	s.audit(ctx, s.userID(r), &domain.Event{
 		RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
 		Type:    domain.EventVerifyStarted,
 		Message: "validation requested by hand",

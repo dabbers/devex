@@ -21,7 +21,7 @@ func writeConfig(t *testing.T, body string) string {
 
 func TestLoadAppliesDefaultsForOmittedKeys(t *testing.T) {
 	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
-	path := writeConfig(t, "owner: me@example.com\npreview:\n  domain: dab.im\n")
+	path := writeConfig(t, "owner: me@example.com\nauth:\n  kind: single\npreview:\n  domain: dab.im\n")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -47,6 +47,8 @@ func TestLoadParsesDurationsAndNestedSections(t *testing.T) {
 	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
 	path := writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: single
 preview:
   domain: dab.im
   port_start: 50000
@@ -87,6 +89,8 @@ func TestNestedResourceKeysAreHonoured(t *testing.T) {
 	// the machine having more capacity than it was given.
 	cfg, err := Load(writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: single
 preview:
   domain: dab.im
 driver:
@@ -122,6 +126,8 @@ func TestFirecrackerResourceKeysAreHonoured(t *testing.T) {
 	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
 	cfg, err := Load(writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: single
 preview:
   domain: dab.im
 driver:
@@ -148,6 +154,8 @@ driver:
 func TestEnvironmentOverridesTheFileForCredentials(t *testing.T) {
 	path := writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: single
 master_key: aaaa
 preview:
   domain: dab.im
@@ -177,7 +185,7 @@ agent:
 
 func TestValidateRejectsAnUnusableConfiguration(t *testing.T) {
 	tests := map[string]string{
-		"no master key":  "owner: me@example.com\npreview:\n  domain: dab.im\n",
+		"no master key":  "owner: me@example.com\nauth:\n  kind: single\npreview:\n  domain: dab.im\n",
 		"no owner":       "owner: \"\"\npreview:\n  domain: dab.im\n",
 		"no domain":      "owner: me@example.com\npreview:\n  domain: \"\"\n",
 		"unknown driver": "owner: me@example.com\npreview:\n  domain: dab.im\ndriver:\n  kind: podman\n",
@@ -196,7 +204,7 @@ func TestValidateRejectsAnUnusableConfiguration(t *testing.T) {
 
 func TestMissingMasterKeyExplainsHowToFixIt(t *testing.T) {
 	t.Setenv(EnvMasterKey, "")
-	_, err := Load(writeConfig(t, "owner: me@example.com\npreview:\n  domain: dab.im\n"))
+	_, err := Load(writeConfig(t, "owner: me@example.com\nauth:\n  kind: single\npreview:\n  domain: dab.im\n"))
 	if err == nil {
 		t.Fatal("expected a missing master key to fail")
 	}
@@ -211,6 +219,8 @@ func TestFirecrackerDriverIsValidated(t *testing.T) {
 	// and should say so at startup rather than at the first fork.
 	_, err := Load(writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: single
 preview:
   domain: dab.im
 driver:
@@ -239,7 +249,7 @@ func TestWarningsNameEveryLimitingGap(t *testing.T) {
 	t.Setenv(EnvOrchestrator, "")
 	t.Setenv(EnvClaudeToken, "")
 
-	cfg, err := Load(writeConfig(t, "owner: me@example.com\npreview:\n  domain: dab.im\n"))
+	cfg, err := Load(writeConfig(t, "owner: me@example.com\nauth:\n  kind: single\npreview:\n  domain: dab.im\n"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -263,6 +273,8 @@ func TestDisablingUIVMProvisioningIsWarnedAbout(t *testing.T) {
 	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
 	cfg, err := Load(writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: single
 preview:
   domain: dab.im
 verify:
@@ -285,8 +297,14 @@ func TestAFullyConfiguredDeploymentWarnsAboutNothing(t *testing.T) {
 	t.Setenv(EnvOrchestrator, "key")
 	t.Setenv(EnvClaudeToken, "token")
 
+	// A complete deployment identifies its requests, so this uses a provider.
+	// auth.kind single is expected to warn and is covered separately.
 	cfg, err := Load(writeConfig(t, `
 owner: me@example.com
+auth:
+  kind: clerk
+  clerk:
+    publishable_key: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
 preview:
   domain: dab.im
 caddy:
@@ -321,5 +339,50 @@ func TestExampleConfigIsValid(t *testing.T) {
 	}
 	if cfg.Merge.SkipQualityGate {
 		t.Fatal("the example should not ship with the quality gate disabled")
+	}
+}
+
+func TestSingleUserAuthWarnsThatItAuthenticatesNothing(t *testing.T) {
+	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
+	cfg, err := Load(writeConfig(t, "owner: me@example.com\nauth:\n  kind: single\npreview:\n  domain: dab.im\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	warnings := strings.Join(cfg.Warnings(), "\n")
+	// Running open has to be loud. It is a legitimate development setting and
+	// a serious mistake in a deployment, and the configuration alone cannot
+	// tell which this is.
+	if !strings.Contains(warnings, "auth.kind is single") {
+		t.Fatalf("running without authentication did not warn:\n%s", warnings)
+	}
+}
+
+func TestAuthKindIsRequired(t *testing.T) {
+	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
+	// Failing closed: a deployment that forgot to configure authentication
+	// must not come up serving unidentified requests.
+	_, err := Load(writeConfig(t, "owner: me@example.com\npreview:\n  domain: dab.im\n"))
+	if err == nil {
+		t.Fatal("a configuration with no auth.kind loaded")
+	}
+	if !strings.Contains(err.Error(), "auth.kind is required") {
+		t.Fatalf("error %q does not name the missing setting", err)
+	}
+}
+
+func TestClerkRequiresAUsablePublishableKey(t *testing.T) {
+	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
+	for name, key := range map[string]string{
+		"missing":    "",
+		"wrong form": "sk_test_secret-key-in-the-wrong-field",
+		"not base64": "pk_test_!!!!",
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := "owner: me@example.com\nauth:\n  kind: clerk\n  clerk:\n    publishable_key: \"" +
+				key + "\"\npreview:\n  domain: dab.im\n"
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Fatalf("publishable key %q was accepted", key)
+			}
+		})
 	}
 }

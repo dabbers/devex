@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/orchestrator"
@@ -41,7 +42,7 @@ type Server struct {
 	verifier  *verify.Verifier
 	driver    vm.Driver
 	ui        http.Handler
-	owner     *domain.User
+	authn     auth.Authenticator
 	logger    *slog.Logger
 	streamGap time.Duration
 }
@@ -61,15 +62,23 @@ type Deps struct {
 	// UI serves the control-plane web interface. It is optional so the API can
 	// run headless.
 	UI http.Handler
-	// Owner is the single v1 user every request is scoped to.
-	Owner  *domain.User
+	// Authn identifies the person behind each request. It is required: without
+	// it every request would be anonymous, and this process hands out a shell.
+	// internal/auth.Single is the explicit way to run without a provider.
+	Authn  auth.Authenticator
 	Logger *slog.Logger
 }
 
 // New returns an API server.
 func New(deps Deps) (*Server, error) {
-	if deps.Store == nil || deps.Orch == nil || deps.Owner == nil {
-		return nil, errors.New("api: store, orchestrator and owner are required")
+	if deps.Store == nil || deps.Orch == nil {
+		return nil, errors.New("api: store and orchestrator are required")
+	}
+	// Refused rather than defaulted to something permissive. An API server
+	// that silently serves unidentified requests is the failure this package
+	// exists to prevent.
+	if deps.Authn == nil {
+		return nil, errors.New("api: an authenticator is required; use auth.Single to run without a provider")
 	}
 	logger := deps.Logger
 	if logger == nil {
@@ -79,7 +88,7 @@ func New(deps Deps) (*Server, error) {
 		store: deps.Store, orch: deps.Orch, sched: deps.Sched,
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
-		owner: deps.Owner, logger: logger,
+		authn: deps.Authn, logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -91,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.health)
+	// Read before anyone is signed in, by definition.
+	mux.HandleFunc("GET /v1/auth/config", s.authConfig)
+	mux.HandleFunc("GET /v1/auth/whoami", s.whoami)
 	mux.HandleFunc("GET /v1/capacity", s.capacity)
 	// The two surfaces the UI opens on: what is in flight everywhere, and the
 	// unified audit trail behind it.
@@ -135,7 +147,10 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("GET /", s.ui)
 	}
 
-	return logRequests(s.logger, mux)
+	// Authentication wraps everything, with a short list of deliberate
+	// exceptions inside. Opting routes in one at a time would leave the next
+	// route somebody adds open by default.
+	return logRequests(s.logger, s.requireUser(mux))
 }
 
 // audit records a user action. Actions taken through the control plane are
@@ -143,8 +158,8 @@ func (s *Server) Handler() http.Handler {
 // A failure to record is logged rather than failing the request: losing an
 // audit entry is bad, but refusing the action the user already took is worse
 // and would leave the system and its trail disagreeing.
-func (s *Server) audit(ctx context.Context, e *domain.Event) {
-	e.UserID = s.owner.ID
+func (s *Server) audit(ctx context.Context, userID string, e *domain.Event) {
+	e.UserID = userID
 	e.Actor = domain.ActorUser
 	if err := s.store.AppendEvent(ctx, e); err != nil {
 		s.logger.Error("could not record an audit entry", "type", e.Type, "error", err)
@@ -195,14 +210,14 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repo := &domain.Repo{
-		UserID: s.owner.ID, Name: req.Name,
+		UserID: s.userID(r), Name: req.Name,
 		RemoteURL: req.RemoteURL, DefaultBranch: req.DefaultBranch,
 	}
 	if err := s.store.CreateRepo(r.Context(), repo); err != nil {
 		writeError(w, err)
 		return
 	}
-	s.audit(r.Context(), &domain.Event{
+	s.audit(r.Context(), s.userID(r), &domain.Event{
 		RepoID: repo.ID, Type: domain.EventRepoCreated,
 		Message: "repo added: " + repo.Name,
 		Data:    map[string]any{"remote_url": repo.RemoteURL, "default_branch": repo.DefaultBranch},
@@ -211,7 +226,7 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
-	repos, err := s.store.ListRepos(r.Context(), s.owner.ID)
+	repos, err := s.store.ListRepos(r.Context(), s.userID(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -308,7 +323,7 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	// The name is recorded, never the value: this trail is stored in the clear
 	// and is meant to be read.
-	s.audit(r.Context(), &domain.Event{
+	s.audit(r.Context(), s.userID(r), &domain.Event{
 		RepoID: repoID, Type: domain.EventSecretSet,
 		Message: "secret set: " + name,
 		Data:    map[string]any{"name": name},
@@ -326,7 +341,7 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	s.audit(r.Context(), &domain.Event{
+	s.audit(r.Context(), s.userID(r), &domain.Event{
 		RepoID: repoID, Type: domain.EventSecretDeleted,
 		Message: "secret deleted: " + name,
 		Data:    map[string]any{"name": name},
@@ -390,7 +405,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task, err := s.orch.CreateTask(r.Context(), orchestrator.CreateTaskRequest{
-		UserID: s.owner.ID, RepoID: req.RepoID, Title: req.Title, Request: req.Request,
+		UserID: s.userID(r), RepoID: req.RepoID, Title: req.Title, Request: req.Request,
 		MergeTarget: req.MergeTarget, MergeTiming: req.MergeTiming,
 		IntegrationBranch: req.IntegrationBranch,
 	})
@@ -409,7 +424,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.store.ListTasks(r.Context(), store.TaskFilter{
-		UserID: s.owner.ID,
+		UserID: s.userID(r),
 		RepoID: r.URL.Query().Get("repo"),
 		Limit:  intParam(r, "limit", 50),
 	})

@@ -10,22 +10,53 @@
 // innerHTML; `el` builds nodes and sets text, so a name containing markup is
 // displayed rather than executed.
 
+// session holds whatever the sign-in flow produced. The server reads the
+// provider's cookie, which is what protects the event stream and the shell
+// (neither an EventSource nor a WebSocket handshake can carry a header). The
+// bearer token is belt and braces for ordinary fetches.
+const session = {
+  async token() {
+    try {
+      return (await window.Clerk?.session?.getToken()) || null;
+    } catch {
+      return null;
+    }
+  },
+};
+
+async function authHeaders(extra) {
+  const headers = { ...(extra || {}) };
+  const token = await session.token();
+  if (token) headers.authorization = "Bearer " + token;
+  return headers;
+}
+
 const api = {
   async get(path) {
-    const res = await fetch(path, { headers: { accept: "application/json" } });
+    const res = await fetch(path, { headers: await authHeaders({ accept: "application/json" }) });
+    if (res.status === 401) return signInRequired();
     if (!res.ok) throw new Error(await describe(res));
     return res.json();
   },
   async send(method, path, body) {
     const res = await fetch(path, {
       method,
-      headers: body ? { "content-type": "application/json" } : {},
+      headers: await authHeaders(body ? { "content-type": "application/json" } : {}),
       body: body ? JSON.stringify(body) : undefined,
     });
+    if (res.status === 401) return signInRequired();
     if (!res.ok) throw new Error(await describe(res));
     return res.status === 204 ? null : res.json();
   },
 };
+
+// signInRequired stops whatever was in flight and shows the sign-in screen.
+// Throwing rather than returning keeps a caller from rendering a page out of
+// an empty response.
+function signInRequired() {
+  renderSignIn("Your session has ended.");
+  throw new Error("not signed in");
+}
 
 async function describe(res) {
   try {
@@ -164,15 +195,30 @@ const live = {
   cursor: 0,
   listeners: new Set(),
   retry: 1000,
+  stopped: false,
 
   start() {
+    this.stopped = false;
     this.connect();
     document.addEventListener("visibilitychange", () => {
+      if (this.stopped) return;
       if (!document.hidden && (!this.source || this.source.readyState === 2)) this.connect();
     });
   },
 
+  // stop ends the stream and keeps it ended. Without this the reconnect loop
+  // keeps retrying behind the sign-in screen, where every attempt is refused,
+  // producing a stream of rejected requests nobody can act on.
+  stop() {
+    this.stopped = true;
+    if (this.source) {
+      this.source.close();
+      this.source = null;
+    }
+  },
+
   connect() {
+    if (this.stopped) return;
     if (this.source) this.source.close();
     setConnection("connecting");
 
@@ -189,6 +235,7 @@ const live = {
     source.onerror = () => {
       setConnection("down");
       source.close();
+      if (this.stopped) return;
       setTimeout(() => this.connect(), this.retry);
       this.retry = Math.min(this.retry * 2, 15000);
     };
@@ -204,7 +251,10 @@ function setConnection(state) {
   const node = document.getElementById("conn");
   node.className = `conn ${state === "live" ? "live" : state === "down" ? "down" : ""}`.trim();
   document.getElementById("conn-label").textContent =
-    state === "live" ? "live" : state === "down" ? "reconnecting" : "connecting";
+    state === "live" ? "live"
+      : state === "down" ? "reconnecting"
+      : state === "signed-out" ? "signed out"
+      : "connecting";
 }
 
 // ---------------------------------------------------------------- status bar
@@ -1159,7 +1209,83 @@ function truncate(text, limit) {
 
 window.addEventListener("hashchange", route);
 
-live.start();
-refreshStatus();
-setInterval(refreshStatus, 5000);
-route();
+// Sign-in screen. Deliberately plain: this is the one part of the interface
+// expected to be replaced wholesale by a real web application, so it gets no
+// more than it needs.
+function renderSignIn(reason) {
+  live.stop();
+  // Otherwise the header reads "connecting" behind the sign-in form, which is
+  // not true and suggests the control plane is unreachable.
+  setConnection("signed-out");
+  const root = view();
+  clear(root);
+  root.append(pageHead("Sign in", {
+    lede: reason || "This control plane runs agents, holds repository secrets and offers a shell on its machine. It needs to know who you are.",
+  }));
+  const host = el("div", { id: "sign-in", style: "margin-top:20px" });
+  root.append(host);
+  if (window.Clerk) {
+    try {
+      window.Clerk.mountSignIn(host);
+      return;
+    } catch (err) {
+      host.append(empty("The sign-in form could not be shown: " + err.message));
+      return;
+    }
+  }
+  host.append(empty("The sign-in provider could not be loaded."));
+}
+
+// loadClerk pulls the provider's script from its own instance host rather than
+// a third-party CDN: that host is already the issuer whose signing keys the
+// server trusts, so it adds no new party to the system.
+function loadClerk(config) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `https://${config.frontend_api}/npm/@clerk/clerk-js@5.38.0/dist/clerk.browser.js`;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.dataset.clerkPublishableKey = config.publishable_key;
+    script.addEventListener("load", resolve);
+    script.addEventListener("error", () => reject(new Error("could not load the sign-in provider")));
+    document.head.append(script);
+  });
+}
+
+async function start() {
+  let config;
+  try {
+    config = await (await fetch("/v1/auth/config", { headers: { accept: "application/json" } })).json();
+  } catch {
+    // Without knowing how to sign in there is nothing useful to show, and
+    // starting the pollers would produce a wall of failures.
+    const root = view();
+    clear(root);
+    root.append(empty("The control plane is not reachable."));
+    return;
+  }
+
+  if (config.sign_in_required) {
+    try {
+      await loadClerk(config);
+      await window.Clerk.load({ publishableKey: config.publishable_key });
+    } catch (err) {
+      const root = view();
+      clear(root);
+      root.append(pageHead("Sign in unavailable", { lede: err.message }));
+      return;
+    }
+    if (!window.Clerk.user) {
+      renderSignIn();
+      // Clerk reloads the page itself once sign-in completes.
+      return;
+    }
+  }
+
+  live.start();
+  refreshStatus();
+  setInterval(refreshStatus, 5000);
+  route();
+}
+
+start();

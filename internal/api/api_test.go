@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/memory"
@@ -51,9 +52,12 @@ type fixture struct {
 	vault       *secrets.Vault
 	memory      *memory.Store
 	server      *httptest.Server
-	owner       *domain.User
-	repo        *domain.Repo
-	ctx         context.Context
+	// api is the server behind the test HTTP server, so a test can change the
+	// authenticator and exercise the boundary directly.
+	api   *Server
+	owner *domain.User
+	repo  *domain.Repo
+	ctx   context.Context
 }
 
 func planJSON(questions []map[string]any, workstreams []map[string]any) llm.Response {
@@ -123,7 +127,7 @@ func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *f
 
 	srv, err := New(Deps{
 		Store: st, Orch: orch, Vault: vault, Memory: mem, UI: ui,
-		Verifier: verifier, Owner: owner, Logger: quiet,
+		Verifier: verifier, Authn: testAuthn(owner), Logger: quiet,
 	})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
@@ -134,7 +138,7 @@ func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *f
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 
-	return &fixture{store: st, orch: orch, model: model, vault: vault, memory: mem, server: httpSrv, owner: owner, repo: repo, ctx: ctx}
+	return &fixture{store: st, orch: orch, model: model, vault: vault, memory: mem, server: httpSrv, api: srv, owner: owner, repo: repo, ctx: ctx}
 }
 
 // call issues a request and decodes the JSON response.
@@ -630,12 +634,13 @@ func newFixtureWithShell(t *testing.T) *fixture {
 	srv, err := New(Deps{
 		Store: f.store, Orch: f.orch, Vault: f.vault, Memory: f.memory,
 		UI: ui, Verifier: verifier, Driver: driver,
-		Owner: f.owner, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Authn: testAuthn(f.owner), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
 	f.server.Close()
+	f.api = srv
 	f.server = httptest.NewServer(srv.Handler())
 	t.Cleanup(f.server.Close)
 	return f
@@ -672,3 +677,9 @@ func (f *fixture) forkWithMachine(t *testing.T) *domain.Fork {
 
 // newBufReader wraps a connection for http.ReadResponse.
 func newBufReader(conn net.Conn) *bufio.Reader { return bufio.NewReader(conn) }
+
+// testAuthn identifies every request as the fixture's user, which is what the
+// handler tests are about; the boundary itself is tested in authn_test.go.
+func testAuthn(u *domain.User) auth.Authenticator {
+	return auth.Single{Subject: "test:" + u.Email, Email: u.Email}
+}

@@ -14,6 +14,19 @@
 
 owner: dabitp@gmail.com
 
+# Reached over the internet, so requests are identified here rather than by
+# whatever happens to sit in front. A proxy password protects only the path
+# that goes through the proxy: a request arriving at the origin with the right
+# Host header bypasses it entirely.
+auth:
+  kind: clerk
+  clerk:
+    # Both come from the environment: CLERK_PUBLISHABLE_KEY and
+    # CLERK_SECRET_KEY override whatever is written here, and the daemon
+    # refuses to start without a usable publishable key.
+    publishable_key: ""
+    secret_key: ""
+
 # Mounted volume. Without a mount a redeploy silently starts from an empty
 # database, which looks like data loss and is worse than a failure.
 data_dir: /var/lib/dabberz
