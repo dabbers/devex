@@ -528,7 +528,10 @@ func (s *Server) getFork(w http.ResponseWriter, r *http.Request) {
 	// with a web app and an API has two addresses worth opening, and the UI
 	// cannot show what the API expects if it only knows about one.
 	if s.preview != nil {
-		routes, err := s.store.ListForkPreviewRoutes(r.Context(), fork.ID)
+		// A fork's routes belong to its workspace: the machine and the
+		// services on it are the workspace's, and a route points at one of
+		// those services.
+		routes, err := s.store.ListPreviewRoutesFor(r.Context(), fork.WorkspaceID)
 		if err != nil {
 			writeError(w, err)
 			return

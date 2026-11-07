@@ -417,9 +417,15 @@ type Fork struct {
 	// admits at most one fork per group per task at a time.
 	SerializeGroup string `json:"serialize_group,omitempty"`
 
-	// InstanceID is the VM backing this fork. VMs are never reclaimed
+	// WorkspaceID is the environment this fork runs in: its machine, its
+	// services and its preview hostnames. Created by the plan, marked
+	// ephemeral, and reused on a retry so a fork that already has a machine
+	// does not get a second one that nothing would reclaim.
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	// InstanceID mirrors the workspace's machine. VMs are never reclaimed
 	// automatically, so this stays populated after a merge or abandonment.
 	InstanceID string `json:"instance_id,omitempty"`
+	// PreviewURL mirrors the workspace's front door.
 	PreviewURL string `json:"preview_url,omitempty"`
 
 	Usage Usage `json:"usage"`

@@ -22,6 +22,7 @@ import (
 	"github.com/dabbers/devex/internal/tripwire"
 	"github.com/dabbers/devex/internal/verify"
 	"github.com/dabbers/devex/internal/vm"
+	"github.com/dabbers/devex/internal/workspace"
 )
 
 // stubDriver models a VM host whose commands are answered from a script.
@@ -38,12 +39,18 @@ type stubDriver struct {
 	gitResults    map[string]*vm.ExecResult
 	commands      []string
 	capacity      vm.Capacity
+	// created remembers what Create returned, so Get behaves like a real
+	// driver. A stub whose Get always fails hides the reuse path entirely:
+	// every start would look like a fresh boot and a test could not tell the
+	// difference between reusing a machine and stranding one.
+	created map[string]*vm.Instance
 }
 
 func newStubDriver() *stubDriver {
 	return &stubDriver{
 		capacity:   vm.Capacity{Total: vm.Resources{VCPUs: 64, MemoryMiB: 65536, DiskGiB: 1000}},
 		gitResults: map[string]*vm.ExecResult{},
+		created:    map[string]*vm.Instance{},
 	}
 }
 
@@ -59,19 +66,35 @@ func (d *stubDriver) Create(_ context.Context, spec vm.Spec) (*vm.Instance, erro
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.instances++
-	return &vm.Instance{
+	instance := &vm.Instance{
 		ID:      "vm_" + spec.Name,
 		ForkID:  spec.ForkID,
 		Name:    spec.Name,
 		State:   vm.StateRunning,
 		Spec:    spec,
 		Address: "172.30.0.2",
-	}, nil
+	}
+	d.created[instance.ID] = instance
+	return instance, nil
 }
 
-func (d *stubDriver) Get(context.Context, string) (*vm.Instance, error) { return nil, vm.ErrNotFound }
-func (d *stubDriver) List(context.Context) ([]*vm.Instance, error)      { return nil, nil }
-func (d *stubDriver) Destroy(context.Context, string) error             { return nil }
+func (d *stubDriver) Get(_ context.Context, instanceID string) (*vm.Instance, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if instance, ok := d.created[instanceID]; ok {
+		return instance, nil
+	}
+	return nil, vm.ErrNotFound
+}
+
+func (d *stubDriver) List(context.Context) ([]*vm.Instance, error) { return nil, nil }
+
+func (d *stubDriver) Destroy(_ context.Context, instanceID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.created, instanceID)
+	return nil
+}
 
 func (d *stubDriver) Exec(_ context.Context, _ string, cmd vm.Command) (*vm.ExecResult, error) {
 	d.mu.Lock()
@@ -136,10 +159,13 @@ type harness struct {
 	driver *stubDriver
 	orch   *orchestrator.Orchestrator
 	pipe   *Pipeline
-	repo   *domain.Repo
-	task   *domain.Task
-	fork   *domain.Fork
-	ctx    context.Context
+	// workspaces is the shared provisioner, exposed so a test can start a
+	// workspace the way a person would rather than only through a fork.
+	workspaces *workspace.Manager
+	repo       *domain.Repo
+	task       *domain.Task
+	fork       *domain.Fork
+	ctx        context.Context
 }
 
 type harnessOpts struct {
@@ -249,15 +275,23 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		t.Fatalf("preview.New: %v", err)
 	}
 
+	workspaces, err := workspace.New(workspace.Deps{
+		Store: st, Driver: driver, Preview: alloc, Vault: vault,
+	}, workspace.Options{Logger: quiet})
+	if err != nil {
+		t.Fatalf("workspace.New: %v", err)
+	}
+
 	pipe, err := New(Deps{
 		Store: st, Driver: driver, Agent: runner, Verifier: verifier,
-		Reviewer: reviewer, Preview: alloc, Vault: vault, Orch: orch,
+		Reviewer: reviewer, Preview: alloc, Orch: orch,
+		Workspaces: workspaces,
 	}, Options{Logger: quiet})
 	if err != nil {
 		t.Fatalf("pipeline.New: %v", err)
 	}
 
-	return &harness{store: st, driver: driver, orch: orch, pipe: pipe, repo: repo, task: task, fork: fork, ctx: ctx}
+	return &harness{store: st, driver: driver, orch: orch, pipe: pipe, workspaces: workspaces, repo: repo, task: task, fork: fork, ctx: ctx}
 }
 
 func (h *harness) launch(t *testing.T) *domain.Fork {
@@ -523,5 +557,104 @@ func TestFailedAgentRunMarksTheForkFailed(t *testing.T) {
 func TestNewValidatesDependencies(t *testing.T) {
 	if _, err := New(Deps{}, Options{}); err == nil {
 		t.Error("a pipeline without its core dependencies should be rejected")
+	}
+}
+
+// TestForkRunsInAWorkspace is the point of the change: a fork no longer owns a
+// machine directly, it owns a workspace that does, and that workspace is the
+// same kind of thing somebody opens by hand.
+func TestForkRunsInAWorkspace(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.launch(t)
+
+	fork, err := h.store.GetFork(h.ctx, h.fork.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	if fork.WorkspaceID == "" {
+		t.Fatal("the fork ran without a workspace")
+	}
+
+	ws, err := h.store.GetWorkspace(h.ctx, fork.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	if ws.State != domain.WorkspaceRunning {
+		t.Fatalf("workspace is %s, want running", ws.State)
+	}
+	if ws.InstanceID == "" || ws.InstanceID != fork.InstanceID {
+		t.Fatalf("the fork and its workspace disagree about the machine: %q vs %q",
+			fork.InstanceID, ws.InstanceID)
+	}
+	if ws.Branch != fork.Branch {
+		t.Fatalf("workspace branch %q does not match the fork's %q", ws.Branch, fork.Branch)
+	}
+	// Scratch space a plan made, not somewhere a person works, so it stays out
+	// of the default listing.
+	if !ws.Ephemeral {
+		t.Fatal("a plan-created workspace should be marked ephemeral")
+	}
+	listed, err := h.store.ListWorkspaces(h.ctx, store.WorkspaceFilter{UserID: fork.UserID})
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("a fork's scratch workspace appeared in the default listing: %+v", listed)
+	}
+}
+
+// TestPreviewRoutesBelongToTheWorkspace: the machine and the services on it
+// are the workspace's, so the routes pointing at them are too.
+func TestPreviewRoutesBelongToTheWorkspace(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.launch(t)
+
+	fork, err := h.store.GetFork(h.ctx, h.fork.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	routes, err := h.store.ListPreviewRoutesFor(h.ctx, fork.WorkspaceID)
+	if err != nil {
+		t.Fatalf("ListPreviewRoutesFor: %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("the workspace published no preview routes")
+	}
+	for _, route := range routes {
+		if route.WorkspaceID != fork.WorkspaceID {
+			t.Fatalf("route %s belongs to %q, want the workspace %q",
+				route.Hostname, route.WorkspaceID, fork.WorkspaceID)
+		}
+	}
+	if fork.PreviewURL == "" {
+		t.Fatal("the fork did not inherit its workspace's front door")
+	}
+}
+
+// TestRetryReusesTheWorkspaceMachine: nothing is reclaimed automatically, so a
+// second machine for a fork that already has one is not a wasted moment but a
+// stranded one.
+func TestRetryReusesTheWorkspaceMachine(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.launch(t)
+
+	fork, err := h.store.GetFork(h.ctx, h.fork.ID)
+	if err != nil {
+		t.Fatalf("GetFork: %v", err)
+	}
+	first := fork.InstanceID
+	ws, err := h.store.GetWorkspace(h.ctx, fork.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+
+	// Starting an already-running workspace describes it rather than booting
+	// anything.
+	again, err := h.workspaces.Start(h.ctx, ws)
+	if err != nil {
+		t.Fatalf("Start (already running): %v", err)
+	}
+	if again.Instance.ID != first {
+		t.Fatalf("a second machine was booted: %q then %q", first, again.Instance.ID)
 	}
 }

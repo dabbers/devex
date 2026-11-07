@@ -21,10 +21,10 @@ import (
 	"github.com/dabbers/devex/internal/merge"
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/preview"
-	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
 	"github.com/dabbers/devex/internal/verify"
 	"github.com/dabbers/devex/internal/vm"
+	"github.com/dabbers/devex/internal/workspace"
 )
 
 // Options configures the pipeline.
@@ -56,15 +56,15 @@ func (o Options) withDefaults() Options {
 
 // Pipeline runs forks end to end.
 type Pipeline struct {
-	store    *store.Store
-	driver   vm.Driver
-	agent    *agent.Runner
-	verifier *verify.Verifier
-	reviewer *merge.Reviewer
-	preview  *preview.Allocator
-	vault    *secrets.Vault
-	orch     *orchestrator.Orchestrator
-	opts     Options
+	store      *store.Store
+	driver     vm.Driver
+	agent      *agent.Runner
+	verifier   *verify.Verifier
+	reviewer   *merge.Reviewer
+	preview    *preview.Allocator
+	workspaces *workspace.Manager
+	orch       *orchestrator.Orchestrator
+	opts       Options
 }
 
 // Deps are the collaborators a pipeline needs.
@@ -75,8 +75,10 @@ type Deps struct {
 	Verifier *verify.Verifier
 	Reviewer *merge.Reviewer
 	Preview  *preview.Allocator
-	Vault    *secrets.Vault
 	Orch     *orchestrator.Orchestrator
+	// Workspaces brings a fork's environment up. Required: it is the only
+	// path from a repo on a branch to a running machine with previews.
+	Workspaces *workspace.Manager
 }
 
 // New returns a pipeline.
@@ -92,10 +94,14 @@ func New(deps Deps, opts Options) (*Pipeline, error) {
 	if deps.Verifier == nil {
 		return nil, errors.New("pipeline: a verifier is required; nothing merges unverified")
 	}
+	if deps.Workspaces == nil {
+		return nil, errors.New("pipeline: a workspace manager is required")
+	}
 	return &Pipeline{
 		store: deps.Store, driver: deps.Driver, agent: deps.Agent,
 		verifier: deps.Verifier, reviewer: deps.Reviewer, preview: deps.Preview,
-		vault: deps.Vault, orch: deps.Orch, opts: opts.withDefaults(),
+		orch: deps.Orch, workspaces: deps.Workspaces,
+		opts: opts.withDefaults(),
 	}, nil
 }
 
@@ -124,24 +130,12 @@ func (p *Pipeline) run(ctx context.Context, fork *domain.Fork) error {
 	if err != nil {
 		return err
 	}
-	// Dependency order, so nothing is started before what it reads. A web app
-	// brought up before its database produces a broken preview for reasons
-	// that have nothing to do with the change being made, and the agent then
-	// spends a cycle chasing it.
-	services, err := p.store.ListServices(ctx, fork.ProjectID)
-	if err != nil {
-		return err
-	}
 
-	env, err := p.environment(ctx, fork.RepoID)
+	started, err := p.provision(ctx, fork, repo)
 	if err != nil {
 		return err
 	}
-
-	instance, previews, err := p.provision(ctx, fork, repo, project, services, env)
-	if err != nil {
-		return err
-	}
+	instance, services, previews, env := started.Instance, started.Services, started.Previews, started.Env
 
 	// First coding pass.
 	if err := p.transition(ctx, fork, domain.ForkCoding, "coding agent started"); err != nil {
@@ -174,85 +168,87 @@ func (p *Pipeline) run(ctx context.Context, fork *domain.Fork) error {
 	}
 }
 
-// provision boots the fork's VM and publishes a preview hostname for every
-// exposed service.
-func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domain.Repo, project *domain.Project, services []*domain.Service, env map[string]string) (*vm.Instance, agent.Previews, error) {
-	instance, err := p.driver.Create(ctx, vm.Spec{
-		ForkID:    fork.ID,
-		Name:      fork.Name,
-		Resources: p.opts.ForkResources,
-		Image:     p.opts.Image,
-		Env:       env,
-		Labels: map[string]string{
-			"dabberz.fork": fork.ID,
-			"dabberz.task": fork.TaskID,
-			"dabberz.repo": repo.Name,
-		},
-	})
+// provision gives the fork a workspace and brings it up.
+//
+// The machine, the services and the preview hostnames are the workspace
+// manager's job, not the pipeline's: a workspace somebody opened by hand needs
+// exactly the same thing, and written twice the two would drift. What stays
+// here is the part that is specific to a fork -- that its workspace is scratch
+// space on a scratch branch, and that every step of it is recorded against the
+// fork for the audit trail.
+func (p *Pipeline) provision(ctx context.Context, fork *domain.Fork, repo *domain.Repo) (*workspace.Started, error) {
+	ws, err := p.workspaceFor(ctx, fork, repo)
 	if err != nil {
-		return nil, agent.Previews{}, fmt.Errorf("pipeline: provision VM for %s: %w", fork.ID, err)
+		return nil, err
 	}
 
-	fork.InstanceID = instance.ID
-	if err := p.store.UpdateFork(ctx, fork); err != nil {
-		return nil, agent.Previews{}, err
+	started, err := p.workspaces.Start(ctx, ws)
+	if err != nil {
+		return nil, err
 	}
+
+	fork.InstanceID = started.Instance.ID
+	fork.PreviewURL = started.Previews.Primary
+	if err := p.store.UpdateFork(ctx, fork); err != nil {
+		return nil, err
+	}
+
 	// Record which credentials the fork was handed. Names only: the audit
 	// trail is stored in the clear, and "which secrets did this agent get" is
 	// the question worth answering anyway.
 	p.event(ctx, fork, domain.EventVMProvisioned, "VM provisioned", map[string]any{
-		"instance":         instance.ID,
-		"address":          instance.Address,
-		"secrets_injected": sortedKeys(env),
+		"instance":         started.Instance.ID,
+		"address":          started.Instance.Address,
+		"workspace":        ws.ID,
+		"secrets_injected": sortedKeys(started.Env),
 		"resources":        p.opts.ForkResources.String(),
 		"image":            p.opts.Image,
 	})
 
-	previews := agent.Previews{URLs: map[string]string{}}
-	if p.preview != nil {
-		routes, primaryURL, err := p.preview.AllocateAll(ctx, fork, project, services, instance.Address)
-		if err != nil {
-			return nil, agent.Previews{}, err
-		}
-		if err := p.preview.Publish(ctx); err != nil {
-			return nil, agent.Previews{}, err
-		}
-		published := make(map[string]any, len(routes))
-		for _, service := range services {
-			route, ok := routes[service.ID]
-			if !ok {
-				continue
-			}
-			url := p.preview.URL(route)
-			previews.URLs[service.Name] = url
-			published[service.Name] = url
-		}
-		previews.Primary = primaryURL
-
-		// The fork's single PreviewURL is the front door, which is what a
-		// person clicks and what the verifier drives. The rest are reachable
-		// and recorded, but one of them has to be the default.
-		fork.PreviewURL = primaryURL
-		if err := p.store.UpdateFork(ctx, fork); err != nil {
-			return nil, agent.Previews{}, err
-		}
-
-		switch {
-		case primaryURL != "":
-			p.event(ctx, fork, domain.EventPreviewReady, "preview available at "+primaryURL,
-				map[string]any{"url": primaryURL, "services": published})
-		case len(published) > 0:
-			// Exposed services but no web front door: an API-only project.
-			// Saying so is better than reporting a preview nobody can open.
-			p.event(ctx, fork, domain.EventPreviewReady,
-				fmt.Sprintf("%d service(s) reachable; this project has no web front door", len(published)),
-				map[string]any{"services": published})
-		default:
-			p.event(ctx, fork, domain.EventPreviewReady,
-				"no service in this project is exposed, so there is nothing to preview", nil)
-		}
+	published := make(map[string]any, len(started.Previews.URLs))
+	for name, url := range started.Previews.URLs {
+		published[name] = url
 	}
-	return instance, previews, nil
+	switch {
+	case started.Previews.Primary != "":
+		p.event(ctx, fork, domain.EventPreviewReady, "preview available at "+started.Previews.Primary,
+			map[string]any{"url": started.Previews.Primary, "services": published})
+	case len(published) > 0:
+		// Exposed services but no web front door: an API-only project. Saying
+		// so is better than reporting a preview nobody can open.
+		p.event(ctx, fork, domain.EventPreviewReady,
+			fmt.Sprintf("%d service(s) reachable; this project has no web front door", len(published)),
+			map[string]any{"services": published})
+	default:
+		p.event(ctx, fork, domain.EventPreviewReady,
+			"no service in this project is exposed, so there is nothing to preview", nil)
+	}
+	return started, nil
+}
+
+// workspaceFor returns the fork's workspace, creating it on first run.
+//
+// It is marked ephemeral: it is scratch space a plan made to run one
+// workstream, and a person's list of places to work should not fill up with
+// those. Reusing it on a retry is what stops a second machine being booted for
+// a fork that already has one, which nothing would reclaim.
+func (p *Pipeline) workspaceFor(ctx context.Context, fork *domain.Fork, repo *domain.Repo) (*domain.Workspace, error) {
+	if fork.WorkspaceID != "" {
+		return p.store.GetWorkspace(ctx, fork.WorkspaceID)
+	}
+	ws := &domain.Workspace{
+		UserID: fork.UserID, RepoID: fork.RepoID, ProjectID: fork.ProjectID,
+		Name: fork.Name, Branch: fork.Branch, Ephemeral: true,
+	}
+	if err := p.store.CreateWorkspace(ctx, ws); err != nil {
+		return nil, err
+	}
+	fork.WorkspaceID = ws.ID
+	if err := p.store.UpdateFork(ctx, fork); err != nil {
+		return nil, err
+	}
+	_ = repo
+	return ws, nil
 }
 
 // code runs the coding agent once and routes the outcome. It reports whether
@@ -455,19 +451,6 @@ func (p *Pipeline) reworkAfterReview(ctx context.Context, fork *domain.Fork, ins
 	}
 	_, err = p.code(ctx, fork, instanceID, agent.BuildFixPrompt(fork, feedback, fork.Usage.Cycles), env)
 	return err
-}
-
-// environment assembles the variables a fork's VM receives: the repo's secrets,
-// inherited wholesale, since the repo is the root of the hierarchy.
-func (p *Pipeline) environment(ctx context.Context, repoID string) (map[string]string, error) {
-	if p.vault == nil {
-		return map[string]string{}, nil
-	}
-	env, err := p.vault.Environment(ctx, repoID)
-	if err != nil {
-		return nil, fmt.Errorf("pipeline: resolve secrets for repo %s: %w", repoID, err)
-	}
-	return env, nil
 }
 
 // transition moves the fork and records it.

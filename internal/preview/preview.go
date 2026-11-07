@@ -107,6 +107,13 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// Target is what a preview route belongs to: a workspace, by id and by the
+// name its hostnames are built from.
+type Target struct {
+	ID   string
+	Name string
+}
+
 // Allocator assigns preview hostnames and ports and publishes them to the
 // reverse proxy.
 type Allocator struct {
@@ -134,19 +141,22 @@ func New(st *store.Store, router proxy.Router, cfg Config) (*Allocator, error) {
 // An unexposed service is refused rather than quietly skipped. A caller asking
 // for a public hostname for a worker or a database has misunderstood something,
 // and a silent no-op would hide that.
-func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *domain.Project, service *domain.Service, upstreamHost string) (*store.PreviewRoute, error) {
+func (a *Allocator) Allocate(ctx context.Context, target Target, project *domain.Project, service *domain.Service, upstreamHost string) (*store.PreviewRoute, error) {
+	if target.ID == "" {
+		return nil, fmt.Errorf("preview: a route needs a workspace to belong to")
+	}
 	if upstreamHost == "" {
-		return nil, fmt.Errorf("preview: fork %s has no upstream address yet", fork.ID)
+		return nil, fmt.Errorf("preview: workspace %s has no upstream address yet", target.ID)
 	}
 	if service == nil {
-		return nil, fmt.Errorf("preview: fork %s needs a service to allocate a route for", fork.ID)
+		return nil, fmt.Errorf("preview: workspace %s needs a service to allocate a route for", target.ID)
 	}
 	if !service.Exposed {
-		return nil, fmt.Errorf("preview: service %q of fork %s is not exposed, so it gets no public hostname",
-			service.Name, fork.ID)
+		return nil, fmt.Errorf("preview: service %q of workspace %s is not exposed, so it gets no public hostname",
+			service.Name, target.ID)
 	}
 
-	if existing, err := a.store.GetPreviewRoute(ctx, fork.ID, service.ID); err == nil {
+	if existing, err := a.store.GetPreviewRoute(ctx, target.ID, service.ID); err == nil {
 		existing.UpstreamHost = upstreamHost
 		if err := a.store.PutPreviewRoute(ctx, existing); err != nil {
 			return nil, err
@@ -156,7 +166,7 @@ func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *do
 		return nil, err
 	}
 
-	hostname, err := a.hostname(ctx, fork, project, service)
+	hostname, err := a.hostname(ctx, target, project, service)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +176,7 @@ func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *do
 	}
 
 	route := &store.PreviewRoute{
-		ForkID:       fork.ID,
+		WorkspaceID:  target.ID,
 		ServiceID:    service.ID,
 		Hostname:     hostname,
 		UpstreamHost: upstreamHost,
@@ -184,14 +194,14 @@ func (a *Allocator) Allocate(ctx context.Context, fork *domain.Fork, project *do
 // Services with no public hostname -- workers, datastores -- are skipped
 // without comment: they are expected in any real project, and a fork whose
 // project is backend-only legitimately has no front door at all.
-func (a *Allocator) AllocateAll(ctx context.Context, fork *domain.Fork, project *domain.Project, services []*domain.Service, upstreamHost string) (map[string]*store.PreviewRoute, string, error) {
+func (a *Allocator) AllocateAll(ctx context.Context, target Target, project *domain.Project, services []*domain.Service, upstreamHost string) (map[string]*store.PreviewRoute, string, error) {
 	routes := make(map[string]*store.PreviewRoute, len(services))
 	primaryURL := ""
 	for _, service := range services {
 		if !service.Exposed {
 			continue
 		}
-		route, err := a.Allocate(ctx, fork, project, service, upstreamHost)
+		route, err := a.Allocate(ctx, target, project, service, upstreamHost)
 		if err != nil {
 			return nil, "", err
 		}
@@ -233,8 +243,8 @@ func (a *Allocator) Publish(ctx context.Context) error {
 
 // Withdraw removes a fork's route and republishes. Preview URLs outlive merges
 // and abandonment by design, so this only runs on explicit manual cleanup.
-func (a *Allocator) Withdraw(ctx context.Context, forkID string) error {
-	if err := a.store.DeletePreviewRoutes(ctx, forkID); err != nil {
+func (a *Allocator) Withdraw(ctx context.Context, workspaceID string) error {
+	if err := a.store.DeletePreviewRoutes(ctx, workspaceID); err != nil {
 		return err
 	}
 	return a.Publish(ctx)
@@ -246,18 +256,18 @@ func (a *Allocator) Withdraw(ctx context.Context, forkID string) error {
 // another: service, project, fork. Everything lives in a single DNS label so
 // one wildcard certificate covers every preview and a new fork is reachable
 // the moment it starts, without waiting on issuance.
-func (a *Allocator) hostname(ctx context.Context, fork *domain.Fork, project *domain.Project, service *domain.Service) (string, error) {
+func (a *Allocator) hostname(ctx context.Context, target Target, project *domain.Project, service *domain.Service) (string, error) {
 	projectLabel := "app"
 	if project != nil {
 		projectLabel = firstNonEmpty(Slug(project.Name), Slug(project.Path), "app")
 	}
-	forkLabel := firstNonEmpty(Slug(fork.Name), "fork")
+	targetLabel := firstNonEmpty(Slug(target.Name), "workspace")
 	serviceLabel := firstNonEmpty(Slug(service.Name), "svc")
 
-	base := truncateLabel(serviceLabel + "-" + projectLabel + "-" + forkLabel)
+	base := truncateLabel(serviceLabel + "-" + projectLabel + "-" + targetLabel)
 	candidate := base + "." + a.cfg.Domain
 
-	taken, err := a.takenHostnames(ctx, fork.ID, service.ID)
+	taken, err := a.takenHostnames(ctx, target.ID, service.ID)
 	if err != nil {
 		return "", err
 	}
@@ -265,27 +275,27 @@ func (a *Allocator) hostname(ctx context.Context, fork *domain.Fork, project *do
 		return candidate, nil
 	}
 
-	// Two workstreams can legitimately carry the same name in different tasks,
-	// so fall back to the fork id, which is unique by construction.
-	suffix := "-" + shortID(fork.ID)
+	// Two workspaces can legitimately carry the same name, so fall back to the
+	// identifier, which is unique by construction.
+	suffix := "-" + shortID(target.ID)
 	candidate = truncateLabel(base, len(suffix)) + suffix + "." + a.cfg.Domain
 	if taken[candidate] {
-		return "", fmt.Errorf("preview: could not find a free hostname for service %q of fork %s",
-			service.Name, fork.ID)
+		return "", fmt.Errorf("preview: could not find a free hostname for service %q of workspace %s",
+			service.Name, target.ID)
 	}
 	return candidate, nil
 }
 
 // takenHostnames returns the hostnames already claimed by anything other than
-// this one service of this one fork.
-func (a *Allocator) takenHostnames(ctx context.Context, exceptForkID, exceptServiceID string) (map[string]bool, error) {
+// this one service of this one workspace.
+func (a *Allocator) takenHostnames(ctx context.Context, exceptWorkspaceID, exceptServiceID string) (map[string]bool, error) {
 	routes, err := a.store.ListPreviewRoutes(ctx)
 	if err != nil {
 		return nil, err
 	}
 	taken := make(map[string]bool, len(routes))
 	for _, r := range routes {
-		if r.ForkID == exceptForkID && r.ServiceID == exceptServiceID {
+		if r.WorkspaceID == exceptWorkspaceID && r.ServiceID == exceptServiceID {
 			continue
 		}
 		taken[r.Hostname] = true

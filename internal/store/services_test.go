@@ -162,7 +162,7 @@ func TestReplaceServicesIsAtomicAndKeepsIdentities(t *testing.T) {
 		t.Fatalf("CreateFork: %v", err)
 	}
 	if err := s.PutPreviewRoute(ctx, &PreviewRoute{
-		ForkID: fork.ID, ServiceID: webID,
+		WorkspaceID: fork.ID, ServiceID: webID,
 		Hostname: "web-web-f.dab.im", UpstreamHost: "10.0.0.2", UpstreamPort: 41000,
 	}); err != nil {
 		t.Fatalf("PutPreviewRoute: %v", err)
@@ -245,7 +245,7 @@ func TestDeletingAServiceWithdrawsItsPreviewRoutes(t *testing.T) {
 		t.Fatalf("CreateFork: %v", err)
 	}
 	if err := s.PutPreviewRoute(ctx, &PreviewRoute{
-		ForkID: fork.ID, ServiceID: sv.ID,
+		WorkspaceID: fork.ID, ServiceID: sv.ID,
 		Hostname: "web-web-f.dab.im", UpstreamHost: "10.0.0.2", UpstreamPort: 41000,
 	}); err != nil {
 		t.Fatalf("PutPreviewRoute: %v", err)
@@ -286,7 +286,7 @@ func TestForkRoutesAreListedPerService(t *testing.T) {
 
 	for i, sv := range []*domain.Service{web, api} {
 		if err := s.PutPreviewRoute(ctx, &PreviewRoute{
-			ForkID: fork.ID, ServiceID: sv.ID,
+			WorkspaceID: fork.ID, ServiceID: sv.ID,
 			Hostname:     fmt.Sprintf("%s-web-f.dab.im", sv.Name),
 			UpstreamHost: "10.0.0.2", UpstreamPort: 41000 + i,
 		}); err != nil {
@@ -294,9 +294,9 @@ func TestForkRoutesAreListedPerService(t *testing.T) {
 		}
 	}
 
-	routes, err := s.ListForkPreviewRoutes(ctx, fork.ID)
+	routes, err := s.ListPreviewRoutesFor(ctx, fork.ID)
 	if err != nil {
-		t.Fatalf("ListForkPreviewRoutes: %v", err)
+		t.Fatalf("ListPreviewRoutesFor: %v", err)
 	}
 	// One fork, two addresses. This is the whole point of the service model:
 	// the old schema keyed routes by fork alone and could hold only one.
@@ -420,21 +420,24 @@ func TestBackfillMigratesLegacyPreviewColumns(t *testing.T) {
 			len(libServices), libServices)
 	}
 
-	// The existing route kept its hostname and port, and now belongs to the
-	// service rather than to the fork as a whole.
-	routes, err := s.ListForkPreviewRoutes(ctx, "fork_1")
+	// 0004 re-keyed the route to the backfilled service; 0007 then dropped
+	// every route, because routes belong to a workspace and a fork from before
+	// that change is not connected to one. There is nothing truthful to
+	// re-key them to, and a published route nothing can explain is worse than
+	// no route -- the allocator issues a fresh one when the workspace starts.
+	routes, err := s.ListPreviewRoutesFor(ctx, "fork_1")
 	if err != nil {
-		t.Fatalf("ListForkPreviewRoutes: %v", err)
+		t.Fatalf("ListPreviewRoutesFor: %v", err)
 	}
-	if len(routes) != 1 {
-		t.Fatalf("got %d routes, want the one carried over: %+v", len(routes), routes)
+	if len(routes) != 0 {
+		t.Fatalf("routes survived the move to workspace keying: %+v", routes)
 	}
-	if routes[0].Hostname != "preview-web-ratings.dab.im" || routes[0].UpstreamPort != 41000 {
-		t.Fatalf("the bookmarked preview URL moved: %+v", routes[0])
+	var surviving int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM preview_routes").Scan(&surviving); err != nil {
+		t.Fatalf("count preview routes: %v", err)
 	}
-	if routes[0].ServiceID != sv.ID {
-		t.Fatalf("route was re-keyed to %q, want the backfilled service %q",
-			routes[0].ServiceID, sv.ID)
+	if surviving != 0 {
+		t.Fatalf("%d preview routes survived, want none", surviving)
 	}
 
 	// The legacy columns are gone, so there is no second source of truth for

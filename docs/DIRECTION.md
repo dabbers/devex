@@ -199,8 +199,14 @@ machinery underneath:
    lists every service and switches the preview between them. Per-service log
    streams and active health checking are not done: a service records a health
    path but nothing polls it yet.
-2. `Workspace` entity: long-lived, owns a VM and a service set, with `Fork`
-   re-expressed on top of it.
+2. ~~`Workspace` entity: long-lived, owns a VM and a service set, with `Fork`
+   re-expressed on top of it.~~ **Done.** `domain.Workspace` with its own
+   start/stop state machine, `internal/workspace` as the single path from "a
+   repo on a branch" to "a machine with services running and previews
+   answering", and a fork that now owns a workspace rather than a machine.
+   Preview routes are keyed by workspace. What is not done is the interface:
+   there is no way yet to open a workspace by hand, so the only thing creating
+   them is the planner.
 3. Resumable streaming agent sessions, with the cost-accounting fix and
    `~/.claude` persisted in the image.
 4. Conversational entry: a workspace conversation that drives the agent

@@ -121,7 +121,7 @@ func TestAllocateBuildsAPerServicePerForkHostname(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "Photo Upload")
 
-	route, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
+	route, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
@@ -140,13 +140,13 @@ func TestAllocateIsIdempotentSoBookmarkedURLsSurvive(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "ratings")
 
-	first, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
+	first, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
 	// A fork's VM can come back on a different address, but its public URL
 	// must not move: the user may have it open.
-	second, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.99")
+	second, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, "172.30.0.99")
 	if err != nil {
 		t.Fatalf("Allocate (repeat): %v", err)
 	}
@@ -167,7 +167,7 @@ func TestAllocateGivesEveryForkADistinctHostnameAndPort(t *testing.T) {
 		// Same name every time: distinct workstreams in different tasks can
 		// legitimately collide on a label.
 		fork := f.fork(t, "ratings")
-		route, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
+		route, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, "172.30.0.2")
 		if err != nil {
 			t.Fatalf("Allocate: %v", err)
 		}
@@ -185,7 +185,7 @@ func TestAllocateGivesEveryForkADistinctHostnameAndPort(t *testing.T) {
 func TestAllocateRequiresAnUpstreamAddress(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "ratings")
-	if _, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, ""); err == nil {
+	if _, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, ""); err == nil {
 		t.Fatal("expected allocation to fail before the VM has an address")
 	}
 }
@@ -194,10 +194,10 @@ func TestAllocateReportsPortExhaustion(t *testing.T) {
 	// A range with exactly one port.
 	f := newFixture(t, Config{Domain: "dab.im", PortStart: 41000, PortEnd: 41000})
 
-	if _, err := f.alloc.Allocate(f.ctx, f.fork(t, "first"), f.project, f.service, "172.30.0.2"); err != nil {
+	if _, err := f.alloc.Allocate(f.ctx, target(f.fork(t, "first")), f.project, f.service, "172.30.0.2"); err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	_, err := f.alloc.Allocate(f.ctx, f.fork(t, "second"), f.project, f.service, "172.30.0.6")
+	_, err := f.alloc.Allocate(f.ctx, target(f.fork(t, "second")), f.project, f.service, "172.30.0.6")
 	if err == nil {
 		t.Fatal("expected port exhaustion to be reported")
 	}
@@ -211,7 +211,7 @@ func TestAllocateReportsPortExhaustion(t *testing.T) {
 func TestPublishSendsEveryRecordedRoute(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	for _, name := range []string{"ratings", "photos"} {
-		if _, err := f.alloc.Allocate(f.ctx, f.fork(t, name), f.project, f.service, "172.30.0.2"); err != nil {
+		if _, err := f.alloc.Allocate(f.ctx, target(f.fork(t, name)), f.project, f.service, "172.30.0.2"); err != nil {
 			t.Fatalf("Allocate(%s): %v", name, err)
 		}
 	}
@@ -243,7 +243,7 @@ func TestWithdrawRemovesARouteAndRepublishes(t *testing.T) {
 	keep := f.fork(t, "ratings")
 	drop := f.fork(t, "photos")
 	for _, fork := range []*domain.Fork{keep, drop} {
-		if _, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2"); err != nil {
+		if _, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, "172.30.0.2"); err != nil {
 			t.Fatalf("Allocate: %v", err)
 		}
 	}
@@ -298,7 +298,7 @@ func TestHostnameLabelStaysWithinTheDNSLimit(t *testing.T) {
 	long := strings.Repeat("extremely-long-workstream-name-", 6)
 	fork := f.fork(t, long)
 
-	route, err := f.alloc.Allocate(f.ctx, fork, f.project, f.service, "172.30.0.2")
+	route, err := f.alloc.Allocate(f.ctx, target(fork), f.project, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestHostnameLabelStaysWithinTheDNSLimit(t *testing.T) {
 func TestHostnameFallsBackWhenTheProjectIsUnknown(t *testing.T) {
 	f := newFixture(t, Config{Domain: "dab.im"})
 	fork := f.fork(t, "ratings")
-	route, err := f.alloc.Allocate(f.ctx, fork, nil, f.service, "172.30.0.2")
+	route, err := f.alloc.Allocate(f.ctx, target(fork), nil, f.service, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestAllocateAllGivesEveryExposedServiceItsOwnHostname(t *testing.T) {
 	services := f.multiService(t)
 	fork := f.fork(t, "ratings")
 
-	routes, primaryURL, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.2")
+	routes, primaryURL, err := f.alloc.AllocateAll(f.ctx, target(fork), f.project, services, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("AllocateAll: %v", err)
 	}
@@ -391,13 +391,13 @@ func TestAllocateAllIsIdempotentPerService(t *testing.T) {
 	services := f.multiService(t)
 	fork := f.fork(t, "ratings")
 
-	first, _, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.2")
+	first, _, err := f.alloc.AllocateAll(f.ctx, target(fork), f.project, services, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("AllocateAll: %v", err)
 	}
 	// A restart re-provisions the VM at a new address. Hostnames and ports
 	// must not move: the URLs may be bookmarked.
-	second, _, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.99")
+	second, _, err := f.alloc.AllocateAll(f.ctx, target(fork), f.project, services, "172.30.0.99")
 	if err != nil {
 		t.Fatalf("AllocateAll (again): %v", err)
 	}
@@ -430,7 +430,7 @@ func TestAllocateRefusesAServiceThatIsNotExposed(t *testing.T) {
 
 	// Asking for a public hostname for a worker is a misunderstanding, and a
 	// silent no-op would hide it.
-	_, err := f.alloc.Allocate(f.ctx, fork, f.project, worker, "172.30.0.2")
+	_, err := f.alloc.Allocate(f.ctx, target(fork), f.project, worker, "172.30.0.2")
 	if err == nil {
 		t.Fatal("a worker was given a public hostname")
 	}
@@ -449,7 +449,7 @@ func TestAllocateAllReportsNoFrontDoorForABackendOnlyProject(t *testing.T) {
 		t.Fatalf("CreateService: %v", err)
 	}
 
-	routes, primaryURL, err := f.alloc.AllocateAll(f.ctx, fork, f.project, []*domain.Service{api}, "172.30.0.2")
+	routes, primaryURL, err := f.alloc.AllocateAll(f.ctx, target(fork), f.project, []*domain.Service{api}, "172.30.0.2")
 	if err != nil {
 		t.Fatalf("AllocateAll: %v", err)
 	}
@@ -467,17 +467,23 @@ func TestWithdrawRemovesEveryServiceRouteForAFork(t *testing.T) {
 	services := f.multiService(t)
 	fork := f.fork(t, "ratings")
 
-	if _, _, err := f.alloc.AllocateAll(f.ctx, fork, f.project, services, "172.30.0.2"); err != nil {
+	if _, _, err := f.alloc.AllocateAll(f.ctx, target(fork), f.project, services, "172.30.0.2"); err != nil {
 		t.Fatalf("AllocateAll: %v", err)
 	}
 	if err := f.alloc.Withdraw(f.ctx, fork.ID); err != nil {
 		t.Fatalf("Withdraw: %v", err)
 	}
-	remaining, err := f.store.ListForkPreviewRoutes(f.ctx, fork.ID)
+	remaining, err := f.store.ListPreviewRoutesFor(f.ctx, fork.ID)
 	if err != nil {
-		t.Fatalf("ListForkPreviewRoutes: %v", err)
+		t.Fatalf("ListPreviewRoutesFor: %v", err)
 	}
 	if len(remaining) != 0 {
 		t.Fatalf("%d routes survived withdrawal: %+v", len(remaining), remaining)
 	}
+}
+
+// target adapts a fork to the allocator's Target. Routes belong to a
+// workspace; in these tests the fork's own id stands in for one.
+func target(f *domain.Fork) Target {
+	return Target{ID: f.ID, Name: f.Name}
 }

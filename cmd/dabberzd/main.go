@@ -38,6 +38,7 @@ import (
 	"github.com/dabbers/devex/internal/vm/firecracker"
 	"github.com/dabbers/devex/internal/vm/local"
 	"github.com/dabbers/devex/internal/web"
+	"github.com/dabbers/devex/internal/workspace"
 )
 
 // version is set at build time.
@@ -188,12 +189,28 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		return nil, err
 	}
 
+	// One path from "a repo on a branch" to "a machine with services running
+	// and previews answering", shared by forks and by workspaces opened by
+	// hand. Written twice the two would drift, and the half that gets less use
+	// would be the half that breaks.
+	workspaces, err := workspace.New(workspace.Deps{
+		Store: db, Driver: driver, Preview: allocator, Vault: vault,
+	}, workspace.Options{
+		Resources: cfg.Driver.ForkResources,
+		Image:     cfg.Driver.Image,
+		Logger:    logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	var launcher scheduler.Launcher
 	if verifier != nil {
 		pipe, err := pipeline.New(pipeline.Deps{
 			Store: db, Driver: driver, Agent: agentRunner, Verifier: verifier,
 			Reviewer: merge.New(driver, agentRunner, cfg.Merge),
-			Preview:  allocator, Vault: vault, Orch: orch,
+			Preview:  allocator, Orch: orch,
+			Workspaces: workspaces,
 		}, pipeline.Options{
 			ForkResources: cfg.Driver.ForkResources,
 			Image:         cfg.Driver.Image,

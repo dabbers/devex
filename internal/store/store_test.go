@@ -451,7 +451,7 @@ func TestPreviewRoutesUpsertAndReportUsedPorts(t *testing.T) {
 
 	sv := seedService(t, s, ctx, p.ID)
 	route := &PreviewRoute{
-		ForkID: fork.ID, ServiceID: sv.ID,
+		WorkspaceID: fork.ID, ServiceID: sv.ID,
 		Hostname: "web-web-ratings.dab.im", UpstreamHost: "10.0.0.5", UpstreamPort: 41000,
 	}
 	if err := s.PutPreviewRoute(ctx, route); err != nil {
