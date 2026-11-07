@@ -265,7 +265,10 @@ async function refreshStatus() {
     const strip = document.getElementById("status-strip");
     clear(strip);
 
-    const machines = capacity.active_forks || 0;
+    // Forks and workspaces both hold machines, and to the host they are the
+    // same machine. Counting only forks reported none running while a
+    // workspace was plainly running on one.
+    const machines = capacity.machines ?? (capacity.active_forks || 0);
     strip.append(el("span", {},
       machines ? el("b", { text: count(machines) }) : "no",
       machines ? ` ${machines === 1 ? "machine" : "machines"} running` : " machines running"));
@@ -706,7 +709,10 @@ async function renderFork(forkID) {
 
   if (data.services && data.services.length) root.append(servicesSection(data.services, data.previews));
 
-  root.append(workspacePanel(fork, data.previews || []));
+  root.append(workspacePanel({
+    instance_id: fork.instance_id,
+    shellPath: `/v1/forks/${fork.id}/shell`,
+  }, data.previews || []));
 
   root.append(section("Transcript", await feed(`/v1/audit?fork=${forkID}&limit=100`)));
 
@@ -794,13 +800,205 @@ function servicesSection(services, previews) {
   return section("Services", el("div", { class: "services" }, ...rows));
 }
 
+
+// --- Workspaces -----------------------------------------------------------
+//
+// A workspace is somewhere you work: a branch, a machine, the services on it
+// and a preview. Unlike a sub-task it has no notion of finishing, so the
+// controls are start and stop rather than approve and merge.
+
+const WORKSPACE_LABELS = {
+  stopped: "Stopped",
+  starting: "Starting",
+  running: "Running",
+  stopping: "Stopping",
+  failed: "Failed to start",
+  archived: "Archived",
+};
+
+function workspaceState(state) {
+  return WORKSPACE_LABELS[state] || state;
+}
+
+async function renderWorkspaces() {
+  const [data, repoData] = await Promise.all([
+    api.get("/v1/workspaces"),
+    api.get("/v1/repos"),
+  ]);
+  const workspaces = data.workspaces || [];
+  const repos = repoData.repos || [];
+
+  const root = view();
+  clear(root);
+  root.append(pageHead("Your workspaces", {
+    lede: "A branch, a machine and a live preview you can keep open while you change things.",
+    row: repos.length ? [newWorkspaceButton(repos)] : [],
+  }));
+
+  if (!repos.length) {
+    root.append(empty("Add a repository first; a workspace runs one of its projects."));
+    return;
+  }
+  if (!workspaces.length) {
+    root.append(empty("No workspaces yet. Open one to start working on a branch."));
+    return;
+  }
+
+  const list = el("div", { class: "services" });
+  for (const ws of workspaces) {
+    list.append(el("div", { class: "service-row" },
+      el("div", {},
+        el("a", { class: "service-name", href: `#/workspace/${ws.id}`, text: ws.name })),
+      el("div", { class: "muted", text: `${workspaceState(ws.state)} · ${ws.branch}` }),
+      null,
+      el("div", {},
+        ws.preview_url
+          ? el("a", {
+              class: "mono", href: ws.preview_url, target: "_blank", rel: "noopener noreferrer",
+              text: ws.preview_url.replace(/^https?:\/\//, ""),
+            })
+          : el("span", { class: "muted", text: ws.state === "running" ? "no front door" : "not running" }))));
+  }
+  root.append(section("Workspaces", list));
+}
+
+// newWorkspaceButton opens the smallest form that can create one.
+function newWorkspaceButton(repos) {
+  const button = el("button", { class: "btn", text: "New workspace" });
+  button.addEventListener("click", () => {
+    const root = view();
+    clear(root);
+    root.append(pageHead("New workspace", {
+      crumbs: [{ label: "Workspaces", href: "#/workspaces" }, { label: "New" }],
+      lede: "It starts stopped unless you ask for it to come up now.",
+    }));
+
+    const repoSelect = el("select", { class: "input" });
+    for (const repo of repos) {
+      repoSelect.append(el("option", { value: repo.id, text: repo.name }));
+    }
+    const name = el("input", { class: "input", placeholder: "what you are working on" });
+    const branch = el("input", { class: "input", placeholder: "branch (blank: the repo default)" });
+    const startNow = el("input", { type: "checkbox" });
+    const problem = el("p", { class: "muted" });
+
+    const submit = el("button", { class: "btn", text: "Create" });
+    submit.addEventListener("click", async () => {
+      submit.disabled = true;
+      clear(problem);
+      try {
+        const created = await api.send("POST", "/v1/workspaces", {
+          repo_id: repoSelect.value,
+          name: name.value,
+          branch: branch.value,
+          start: startNow.checked,
+        });
+        location.hash = `#/workspace/${created.workspace.id}`;
+      } catch (err) {
+        problem.textContent = err.message;
+        submit.disabled = false;
+      }
+    });
+
+    root.append(section("Details",
+      el("dl", { class: "kv" },
+        el("dt", { text: "Repository" }), el("dd", {}, repoSelect),
+        el("dt", { text: "Name" }), el("dd", {}, name),
+        el("dt", { text: "Branch" }), el("dd", {}, branch),
+        el("dt", { text: "Start now" }), el("dd", {}, startNow)),
+      el("div", { class: "row-actions" }, submit,
+        el("a", { class: "btn btn-secondary", href: "#/workspaces", text: "Cancel" })),
+      problem));
+  });
+  return button;
+}
+
+async function renderWorkspace(workspaceID) {
+  const data = await api.get(`/v1/workspaces/${workspaceID}`);
+  const ws = data.workspace;
+  const previews = data.previews || [];
+
+  const root = view();
+  clear(root);
+  root.append(pageHead(ws.name, {
+    crumbs: [{ label: "Workspaces", href: "#/workspaces" }, { label: "Workspace" }],
+    lede: ws.state_reason || workspaceState(ws.state),
+    aside: tag(ws.state),
+    row: workspaceControls(ws),
+  }));
+
+  root.append(section("Environment",
+    el("dl", { class: "kv" },
+      el("dt", { text: "Status" }), el("dd", {}, workspaceState(ws.state)),
+      el("dt", { text: "Branch" }), el("dd", { class: "mono", text: ws.branch }),
+      el("dt", { text: "Machine" }),
+      el("dd", { class: "mono", text: ws.instance_id || "none yet" }),
+      el("dt", { text: "Last used" }),
+      el("dd", { text: ws.last_used_at ? relativeTime(ws.last_used_at) : "never" }))));
+
+  if (data.services && data.services.length) {
+    root.append(servicesSection(data.services, previews));
+  }
+
+  // The same workspace panel sub-tasks use: the machine and its previews are
+  // the same kind of thing either way.
+  root.append(workspacePanel({
+    instance_id: ws.instance_id,
+    shellPath: `/v1/workspaces/${ws.id}/shell`,
+  }, previews));
+
+  root.append(section("Activity", await feed(`/v1/audit?workspace=${ws.id}&limit=100`)));
+
+  // Follow it live: starting takes minutes, and a page that does not move
+  // looks like one that is broken.
+  return live.subscribe((event) => {
+    if (event.workspace_id === ws.id) route();
+  });
+}
+
+// workspaceControls are the lifecycle buttons for the current state.
+function workspaceControls(ws) {
+  const act = async (verb) => {
+    try {
+      await api.send("POST", `/v1/workspaces/${ws.id}/${verb}`, {});
+      route();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const controls = [];
+  if (ws.state === "stopped" || ws.state === "failed") {
+    controls.push(el("button", { class: "btn", text: "Start", onclick: () => act("start") }));
+  }
+  if (ws.state === "running" || ws.state === "starting") {
+    controls.push(el("button", { class: "btn btn-secondary", text: "Stop", onclick: () => act("stop") }));
+  }
+  if (ws.state === "stopped" || ws.state === "failed") {
+    controls.push(el("button", {
+      class: "btn btn-secondary", text: "Archive",
+      onclick: () => {
+        // Terminal, so it is worth one question.
+        if (confirm(`Archive ${ws.name}? You cannot start it again.`)) act("archive");
+      },
+    }));
+  }
+  if (ws.preview_url) {
+    controls.push(el("a", {
+      class: "btn btn-secondary", href: ws.preview_url,
+      target: "_blank", rel: "noopener noreferrer", text: "Open ↗",
+    }));
+  }
+  return controls;
+}
+
 // workspacePanel is the sub-task's workspace: the live previews it produces and
 // a shell on the machine producing it.
 //
 // A project runs a set of services, so there may be several addresses worth
 // looking at. The pane shows one at a time with a switcher, because an iframe
 // per service would load every dev server at once.
-function workspacePanel(fork, previews) {
+function workspacePanel(owner, previews) {
   const body = el("div", {});
   const tabs = el("div", { class: "tabs-inline", role: "tablist" });
   let shell = null;
@@ -857,11 +1055,11 @@ function workspacePanel(fork, previews) {
   const panes = {
     preview: previewPane,
     shell: () => {
-      if (!fork.instance_id) return empty("No machine yet, so there is nothing to attach to.");
+      if (!owner.instance_id) return empty("No machine yet, so there is nothing to attach to.");
       const host = el("div", { class: "shell" });
       // Mount after the element is in the document: the terminal measures
       // itself, and measuring a detached node gives a useless size.
-      queueMicrotask(() => { shell = openShell(fork, host); });
+      queueMicrotask(() => { shell = openShell(owner, host); });
       return el("div", {},
         el("p", { class: "muted", style: "margin-bottom:10px" },
           "The same machine the agents are on. Anything you change here, they see."),
@@ -898,7 +1096,7 @@ function workspacePanel(fork, previews) {
 }
 
 // openShell attaches a terminal to the sub-task's machine over a websocket.
-function openShell(fork, host) {
+function openShell(target, host) {
   const term = new window.Terminal({
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     fontSize: 13,
@@ -911,8 +1109,10 @@ function openShell(fork, host) {
   fit.fit();
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
+  // The path is given rather than derived: a sub-task's machine and a
+  // workspace's are the same terminal on different owners.
   const socket = new WebSocket(
-    `${scheme}://${location.host}/v1/forks/${fork.id}/shell?cols=${term.cols}&rows=${term.rows}`);
+    `${scheme}://${location.host}${target.shellPath}?cols=${term.cols}&rows=${term.rows}`);
   socket.binaryType = "arraybuffer";
 
   const send = (message) => {
@@ -1136,6 +1336,8 @@ let disposeView = null;
 
 const ROUTES = [
   [/^#\/$/, () => renderRepos(), "repos"],
+  [/^#\/workspaces$/, () => renderWorkspaces(), "workspaces"],
+  [/^#\/workspace\/([\w-]+)$/, (m) => renderWorkspace(m[1]), "workspaces"],
   [/^#\/activity$/, (_, params) => renderActivity(params), "activity"],
   [/^#\/new$/, (_, params) => renderNew(params), "repos"],
   [/^#\/repo\/([\w-]+)$/, (m) => renderRepo(m[1]), "repos"],

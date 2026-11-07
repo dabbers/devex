@@ -29,22 +29,24 @@ import (
 	"github.com/dabbers/devex/internal/store"
 	"github.com/dabbers/devex/internal/verify"
 	"github.com/dabbers/devex/internal/vm"
+	"github.com/dabbers/devex/internal/workspace"
 )
 
 // Server serves the control-plane HTTP API.
 type Server struct {
-	store     *store.Store
-	orch      *orchestrator.Orchestrator
-	sched     *scheduler.Scheduler
-	preview   *preview.Allocator
-	vault     *secrets.Vault
-	memory    *memory.Store
-	verifier  *verify.Verifier
-	driver    vm.Driver
-	ui        http.Handler
-	authn     auth.Authenticator
-	logger    *slog.Logger
-	streamGap time.Duration
+	store      *store.Store
+	orch       *orchestrator.Orchestrator
+	sched      *scheduler.Scheduler
+	preview    *preview.Allocator
+	vault      *secrets.Vault
+	memory     *memory.Store
+	verifier   *verify.Verifier
+	driver     vm.Driver
+	ui         http.Handler
+	authn      auth.Authenticator
+	workspaces *workspace.Manager
+	logger     *slog.Logger
+	streamGap  time.Duration
 }
 
 // Deps are the collaborators the API exposes.
@@ -62,6 +64,10 @@ type Deps struct {
 	// UI serves the control-plane web interface. It is optional so the API can
 	// run headless.
 	UI http.Handler
+	// Workspaces starts and stops environments. Optional: without it the
+	// control plane still lists workspaces and shows what they were, it just
+	// cannot bring one up.
+	Workspaces *workspace.Manager
 	// Authn identifies the person behind each request. It is required: without
 	// it every request would be anonymous, and this process hands out a shell.
 	// internal/auth.Single is the explicit way to run without a provider.
@@ -88,7 +94,7 @@ func New(deps Deps) (*Server, error) {
 		store: deps.Store, orch: deps.Orch, sched: deps.Sched,
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
-		authn: deps.Authn, logger: logger,
+		authn: deps.Authn, workspaces: deps.Workspaces, logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -132,6 +138,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/tasks/{task}/cancel", s.cancelTask)
 	mux.HandleFunc("GET /v1/tasks/{task}/forks", s.listForks)
 
+	mux.HandleFunc("GET /v1/workspaces", s.listWorkspaces)
+	mux.HandleFunc("POST /v1/workspaces", s.createWorkspace)
+	mux.HandleFunc("GET /v1/workspaces/{workspace}", s.getWorkspace)
+	mux.HandleFunc("POST /v1/workspaces/{workspace}/start", s.startWorkspace)
+	mux.HandleFunc("POST /v1/workspaces/{workspace}/stop", s.stopWorkspace)
+	mux.HandleFunc("POST /v1/workspaces/{workspace}/archive", s.archiveWorkspace)
+	mux.HandleFunc("GET /v1/workspaces/{workspace}/shell", s.workspaceShell)
+
 	mux.HandleFunc("GET /v1/forks/{fork}", s.getFork)
 	mux.HandleFunc("POST /v1/forks/{fork}/resolve", s.resolveEscalation)
 	mux.HandleFunc("POST /v1/forks/{fork}/validate", s.validateFork)
@@ -166,6 +180,19 @@ func (s *Server) audit(ctx context.Context, userID string, e *domain.Event) {
 	}
 }
 
+// auditAs records an action attributed to something other than the user.
+//
+// Starting a workspace is begun by a person and finished by the daemon,
+// minutes later and on another goroutine. Attributing the finish to the user
+// would say they did something at a moment they were not there.
+func (s *Server) auditAs(ctx context.Context, userID string, actor domain.Actor, e *domain.Event) {
+	e.UserID = userID
+	e.Actor = actor
+	if err := s.store.AppendEvent(ctx, e); err != nil {
+		s.logger.Error("could not record an audit entry", "type", e.Type, "error", err)
+	}
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -185,6 +212,11 @@ func (s *Server) capacity(w http.ResponseWriter, r *http.Request) {
 		response["machine"] = snapshot.Capacity
 		response["queued_forks"] = len(snapshot.Queued)
 		response["active_forks"] = len(snapshot.Active)
+		response["active_workspaces"] = len(snapshot.ActiveWorkspaces)
+		// What the host is actually running. A fork's machine and a
+		// workspace's are the same machine to the host, so the interface
+		// needs one number for both.
+		response["machines"] = snapshot.Machines()
 	}
 	if s.verifier != nil {
 		response["verification"] = s.verifier.Stats()

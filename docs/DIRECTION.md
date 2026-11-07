@@ -204,9 +204,11 @@ machinery underneath:
    start/stop state machine, `internal/workspace` as the single path from "a
    repo on a branch" to "a machine with services running and previews
    answering", and a fork that now owns a workspace rather than a machine.
-   Preview routes are keyed by workspace. What is not done is the interface:
-   there is no way yet to open a workspace by hand, so the only thing creating
-   them is the planner.
+   Preview routes are keyed by workspace, and a workspace can be opened,
+   started, stopped and archived by hand, with its own shell, previews and
+   audit trail. What is not done is the conversational part: a workspace has
+   no agent session attached to it yet, so it is somewhere to work rather than
+   somewhere to ask for work.
 3. Resumable streaming agent sessions, with the cost-accounting fix and
    `~/.claude` persisted in the image.
 4. Conversational entry: a workspace conversation that drives the agent

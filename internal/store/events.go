@@ -11,9 +11,9 @@ import (
 )
 
 // eventColumns omits seq, which the database assigns.
-const eventInsertColumns = "id, user_id, repo_id, task_id, fork_id, actor, type, message, data_json, created_at"
+const eventInsertColumns = "id, user_id, repo_id, task_id, fork_id, workspace_id, actor, type, message, data_json, created_at"
 
-const eventSelectColumns = "seq, id, user_id, repo_id, task_id, fork_id, actor, type, message, data_json, created_at"
+const eventSelectColumns = "seq, id, user_id, repo_id, task_id, fork_id, workspace_id, actor, type, message, data_json, created_at"
 
 // AppendEvent records an event on the activity feed. Events are append-only:
 // there is no update or delete path.
@@ -29,8 +29,9 @@ func (s *Store) AppendEvent(ctx context.Context, e *domain.Event) error {
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
-		"INSERT INTO events ("+eventInsertColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO events ("+eventInsertColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		e.ID, e.UserID, nullString(e.RepoID), nullString(e.TaskID), nullString(e.ForkID),
+		nullString(e.WorkspaceID),
 		string(e.Actor), string(e.Type), e.Message, data, formatTime(e.CreatedAt),
 	)
 	if err != nil {
@@ -56,6 +57,8 @@ type EventFilter struct {
 	RepoID string
 	TaskID string
 	ForkID string
+	// WorkspaceID narrows the feed to one environment.
+	WorkspaceID string
 	// Actor narrows to one actor, which is how the unattended half of the
 	// trail is separated from what the user did.
 	Actor domain.Actor
@@ -96,6 +99,10 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]*domain.Event,
 	if f.ForkID != "" {
 		where = append(where, "fork_id = ?")
 		args = append(args, f.ForkID)
+	}
+	if f.WorkspaceID != "" {
+		where = append(where, "workspace_id = ?")
+		args = append(args, f.WorkspaceID)
 	}
 	if f.Actor != "" {
 		where = append(where, "actor = ?")
@@ -149,14 +156,14 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]*domain.Event,
 
 func scanEvent(row rowScanner) (*domain.Event, error) {
 	var (
-		e                      domain.Event
-		repoID, taskID, forkID sql.NullString
-		actor                  string
-		eventType              string
-		data                   sql.NullString
-		created                string
+		e                                   domain.Event
+		repoID, taskID, forkID, workspaceID sql.NullString
+		actor                               string
+		eventType                           string
+		data                                sql.NullString
+		created                             string
 	)
-	if err := row.Scan(&e.Seq, &e.ID, &e.UserID, &repoID, &taskID, &forkID,
+	if err := row.Scan(&e.Seq, &e.ID, &e.UserID, &repoID, &taskID, &forkID, &workspaceID,
 		&actor, &eventType, &e.Message, &data, &created); err != nil {
 		return nil, wrapErr("get event", err)
 	}
@@ -164,6 +171,7 @@ func scanEvent(row rowScanner) (*domain.Event, error) {
 	e.Actor = domain.Actor(actor)
 	e.TaskID = taskID.String
 	e.ForkID = forkID.String
+	e.WorkspaceID = workspaceID.String
 	e.Type = domain.EventType(eventType)
 	if err := unmarshalJSON(data, &e.Data); err != nil {
 		return nil, err

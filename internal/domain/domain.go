@@ -541,7 +541,15 @@ const (
 	EventAgentMessage    EventType = "agent.message"
 	EventPreviewReady    EventType = "preview.ready"
 	EventVMProvisioned   EventType = "vm.provisioned"
-	EventError           EventType = "error"
+
+	// Workspace lifecycle. A workspace is somewhere a person works, so who
+	// started and stopped one, and when, is part of the trail.
+	EventWorkspaceCreated     EventType = "workspace.created"
+	EventWorkspaceStarted     EventType = "workspace.started"
+	EventWorkspaceStopped     EventType = "workspace.stopped"
+	EventWorkspaceArchived    EventType = "workspace.archived"
+	EventWorkspaceStateChange EventType = "workspace.state_changed"
+	EventError                EventType = "error"
 
 	// User-initiated actions. These exist so the audit trail answers what a
 	// person did, not only what the system did on its own.
@@ -574,6 +582,10 @@ type Event struct {
 	RepoID string `json:"repo_id,omitempty"`
 	TaskID string `json:"task_id,omitempty"`
 	ForkID string `json:"fork_id,omitempty"`
+	// WorkspaceID scopes the event to one environment. A workspace is not a
+	// task or a fork -- it outlives both, and one opened by hand belongs to no
+	// fork -- so it needs its own scope for the trail to be filterable.
+	WorkspaceID string `json:"workspace_id,omitempty"`
 	// Actor is who performed the action.
 	Actor Actor     `json:"actor,omitempty"`
 	Type  EventType `json:"type"`

@@ -330,14 +330,17 @@ func (s *Server) auditFeed(w http.ResponseWriter, r *http.Request) {
 func (s *Server) auditFilter(r *http.Request) (store.EventFilter, error) {
 	query := r.URL.Query()
 	filter := store.EventFilter{
-		UserID:    s.userID(r),
-		RepoID:    query.Get("repo"),
-		TaskID:    query.Get("task"),
-		ForkID:    query.Get("fork"),
-		Actor:     domain.Actor(query.Get("actor")),
-		AfterSeq:  int64(intParam(r, "after", 0)),
-		BeforeSeq: int64(intParam(r, "before", 0)),
-		Limit:     intParam(r, "limit", 200),
+		UserID: s.userID(r),
+		RepoID: query.Get("repo"),
+		TaskID: query.Get("task"),
+		ForkID: query.Get("fork"),
+		// A workspace outlives any task and one opened by hand belongs to no
+		// fork, so "what happened in here" needs its own filter.
+		WorkspaceID: query.Get("workspace"),
+		Actor:       domain.Actor(query.Get("actor")),
+		AfterSeq:    int64(intParam(r, "after", 0)),
+		BeforeSeq:   int64(intParam(r, "before", 0)),
+		Limit:       intParam(r, "limit", 200),
 	}
 	if filter.Limit > 1000 {
 		filter.Limit = 1000

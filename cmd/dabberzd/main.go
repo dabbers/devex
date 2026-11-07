@@ -242,7 +242,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	apiServer, err := api.New(api.Deps{
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
-		UI: ui, Authn: authenticator, Logger: logger,
+		UI: ui, Authn: authenticator, Workspaces: workspaces, Logger: logger,
 	})
 	if err != nil {
 		return nil, err

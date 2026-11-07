@@ -25,19 +25,62 @@ type shellMessage struct {
 }
 
 // shell attaches a browser terminal to a sub-task's machine.
-//
-// This is the workspace shell the requirements call for: the same machine the
-// agents are working on, so an operator can see what a stuck agent sees.
 func (s *Server) shell(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	fork, err := s.store.GetFork(ctx, r.PathValue("fork"))
+	fork, err := s.store.GetFork(r.Context(), r.PathValue("fork"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if fork.InstanceID == "" {
-		writeStatus(w, http.StatusConflict, "this sub-task has no machine yet")
+	s.attachShell(w, r, shellTarget{
+		InstanceID: fork.InstanceID,
+		Name:       fork.Name,
+		Missing:    "this sub-task has no machine yet",
+		Event: &domain.Event{
+			RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
+			WorkspaceID: fork.WorkspaceID,
+		},
+	})
+}
+
+// workspaceShell attaches a browser terminal to a workspace's machine.
+func (s *Server) workspaceShell(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceForUser(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.attachShell(w, r, shellTarget{
+		InstanceID: ws.InstanceID,
+		Name:       ws.Name,
+		Missing:    "this workspace is not running",
+		Event: &domain.Event{
+			RepoID: ws.RepoID, WorkspaceID: ws.ID,
+		},
+	})
+}
+
+// shellTarget is the machine a terminal is being attached to.
+type shellTarget struct {
+	InstanceID string
+	Name       string
+	// Missing is what to say when there is no machine, which differs by what
+	// the caller asked for: a sub-task has not provisioned one yet, a
+	// workspace is simply not running.
+	Missing string
+	// Event is the audit entry's scope; its type and message are filled in.
+	Event *domain.Event
+}
+
+// attachShell is the terminal itself, shared by both callers.
+//
+// A shell on a fork's machine and a shell on a workspace's machine are the
+// same thing attached to different owners, and the part worth not writing
+// twice is below: the upgrade ordering, the output pump and the teardown.
+func (s *Server) attachShell(w http.ResponseWriter, r *http.Request, target shellTarget) {
+	ctx := r.Context()
+
+	if target.InstanceID == "" {
+		writeStatus(w, http.StatusConflict, target.Missing)
 		return
 	}
 
@@ -58,7 +101,7 @@ func (s *Server) shell(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	session, err := interactive.OpenSession(ctx, fork.InstanceID, vm.SessionSpec{
+	session, err := interactive.OpenSession(ctx, target.InstanceID, vm.SessionSpec{
 		Cols: uint16(intParam(r, "cols", 80)),
 		Rows: uint16(intParam(r, "rows", 24)),
 	})
@@ -71,12 +114,11 @@ func (s *Server) shell(w http.ResponseWriter, r *http.Request) {
 
 	// Opening a shell on a machine an agent is working in is worth recording:
 	// from here a person can change anything the agent can.
-	s.audit(ctx, s.userID(r), &domain.Event{
-		RepoID: fork.RepoID, TaskID: fork.TaskID, ForkID: fork.ID,
-		Type:    domain.EventShellOpened,
-		Message: "opened a shell on " + fork.Name,
-		Data:    map[string]any{"instance": fork.InstanceID},
-	})
+	event := target.Event
+	event.Type = domain.EventShellOpened
+	event.Message = "opened a shell on " + target.Name
+	event.Data = map[string]any{"instance": target.InstanceID}
+	s.audit(ctx, s.userID(r), event)
 
 	// Pump output until the session ends, then drop the socket so the reader
 	// below stops waiting on a terminal nobody is writing to.

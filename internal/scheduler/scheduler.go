@@ -306,7 +306,15 @@ type Snapshot struct {
 	Capacity vm.Capacity    `json:"capacity"`
 	Queued   []*domain.Fork `json:"queued"`
 	Active   []*domain.Fork `json:"active"`
+	// Workspaces holding a machine. They are counted separately from forks
+	// because they are not scheduled: a person starts one directly. Leaving
+	// them out made the interface report no machines running while a
+	// workspace was plainly running on one.
+	ActiveWorkspaces []*domain.Workspace `json:"active_workspaces"`
 }
+
+// Machines reports how many machines are held, by forks and workspaces alike.
+func (s Snapshot) Machines() int { return len(s.Active) + len(s.ActiveWorkspaces) }
 
 // Snapshot reports the current queue and capacity.
 func (s *Scheduler) Snapshot(ctx context.Context) (Snapshot, error) {
@@ -322,5 +330,19 @@ func (s *Scheduler) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("scheduler: list active forks: %w", err)
 	}
-	return Snapshot{Capacity: capacity, Queued: queued, Active: active}, nil
+	// Every workspace holding a machine, including the ephemeral ones a plan
+	// made, because this is about what the host is running and not about what
+	// is worth listing to a person.
+	workspaces, err := s.store.ListWorkspaces(ctx, store.WorkspaceFilter{
+		States: []domain.WorkspaceState{
+			domain.WorkspaceStarting, domain.WorkspaceRunning, domain.WorkspaceStopping,
+		},
+		IncludeEphemeral: true,
+	})
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("scheduler: list active workspaces: %w", err)
+	}
+	return Snapshot{
+		Capacity: capacity, Queued: queued, Active: active, ActiveWorkspaces: workspaces,
+	}, nil
 }
