@@ -509,3 +509,68 @@ details.data pre {
     grid-template-areas: "name" "detail" "url" "command";
   }
 }
+
+/* The workspace conversation. A reading column, not a messaging app: the
+   turns are long and the agent's are longer. */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: var(--space-2);
+}
+
+.chat-turn {
+  border-bottom: 1px solid var(--color-divider);
+  padding-bottom: var(--space-3);
+}
+
+.chat-turn:last-child {
+  border-bottom: none;
+}
+
+.chat-who {
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+}
+
+/* Agent output is pre-wrapped: it carries code, paths and indentation that
+   collapse into nonsense when reflowed as prose. */
+.chat-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.chat-agent .chat-body {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.chat-compose {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.chat-input {
+  flex: 1;
+  resize: vertical;
+  font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .chat-compose {
+    flex-direction: column;
+  }
+  .chat-input {
+    width: 100%;
+  }
+}

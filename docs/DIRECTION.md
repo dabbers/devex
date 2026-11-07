@@ -218,9 +218,19 @@ machinery underneath:
    store on persistent storage. Streaming output is not done: runs are still
    read as one result at the end, so the interface cannot show an agent
    working, only that it worked.
-4. Conversational entry: a workspace conversation that drives the agent
-   directly, with the plan-and-fork path reachable from it rather than being
-   the only door.
+4. ~~Conversational entry: a workspace conversation that drives the agent
+   directly.~~ **Done.** A workspace carries its own conversation and a
+   message log; a message runs the agent on that workspace's machine against
+   the preview already open, and the reply lands in the log. The agent is told
+   it is working with someone present rather than running an unattended
+   workstream, so it does the thing and stops. One turn at a time per
+   workspace, claimed in the same transaction that records the message, and
+   turns orphaned by a restart are failed at startup rather than leaving a
+   workspace busy forever.
+
+   The plan-and-fork path is still a separate door rather than something
+   reachable from a conversation, and the agent's output still arrives as one
+   block at the end.
 5. Mobile layout for the four surfaces that make sense on a phone.
 
 

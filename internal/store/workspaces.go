@@ -11,7 +11,8 @@ import (
 )
 
 const workspaceColumns = "id, user_id, repo_id, project_id, name, branch, state, state_reason, " +
-	"instance_id, preview_url, ephemeral, created_at, updated_at, started_at, stopped_at, last_used_at"
+	"instance_id, preview_url, ephemeral, agent_session_json, " +
+	"created_at, updated_at, started_at, stopped_at, last_used_at"
 
 // CreateWorkspace inserts a workspace, defaulting it to stopped: nothing is
 // running until something starts it, and recording it as running before the
@@ -32,10 +33,14 @@ func (s *Store) CreateWorkspace(ctx context.Context, w *domain.Workspace) error 
 	}
 	w.UpdatedAt = now
 
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO workspaces ("+workspaceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	session, err := marshalJSON(w.AgentSession)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		"INSERT INTO workspaces ("+workspaceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		w.ID, w.UserID, w.RepoID, w.ProjectID, w.Name, w.Branch, string(w.State), w.StateReason,
-		w.InstanceID, w.PreviewURL, boolToInt(w.Ephemeral),
+		w.InstanceID, w.PreviewURL, boolToInt(w.Ephemeral), session,
 		formatTime(w.CreatedAt), formatTime(w.UpdatedAt),
 		nullTime(w.StartedAt), nullTime(w.StoppedAt), nullTime(w.LastUsedAt),
 	)
@@ -115,13 +120,17 @@ func (s *Store) UpdateWorkspace(ctx context.Context, w *domain.Workspace) error 
 		return fmt.Errorf("store: %q is not a workspace state", w.State)
 	}
 	w.UpdatedAt = time.Now().UTC()
+	session, err := marshalJSON(w.AgentSession)
+	if err != nil {
+		return err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE workspaces SET name = ?, branch = ?, state = ?, state_reason = ?,
-		        instance_id = ?, preview_url = ?, ephemeral = ?, updated_at = ?,
-		        started_at = ?, stopped_at = ?, last_used_at = ?
+		        instance_id = ?, preview_url = ?, ephemeral = ?, agent_session_json = ?,
+		        updated_at = ?, started_at = ?, stopped_at = ?, last_used_at = ?
 		 WHERE id = ?`,
 		w.Name, w.Branch, string(w.State), w.StateReason, w.InstanceID, w.PreviewURL,
-		boolToInt(w.Ephemeral), formatTime(w.UpdatedAt),
+		boolToInt(w.Ephemeral), session, formatTime(w.UpdatedAt),
 		nullTime(w.StartedAt), nullTime(w.StoppedAt), nullTime(w.LastUsedAt), w.ID,
 	)
 	if err != nil {
@@ -189,16 +198,20 @@ func scanWorkspace(row rowScanner) (*domain.Workspace, error) {
 		w                            domain.Workspace
 		state                        string
 		ephemeral                    int
+		agentSession                 sql.NullString
 		created, updated             string
 		started, stopped, lastUsedAt sql.NullString
 	)
 	if err := row.Scan(&w.ID, &w.UserID, &w.RepoID, &w.ProjectID, &w.Name, &w.Branch,
-		&state, &w.StateReason, &w.InstanceID, &w.PreviewURL, &ephemeral,
+		&state, &w.StateReason, &w.InstanceID, &w.PreviewURL, &ephemeral, &agentSession,
 		&created, &updated, &started, &stopped, &lastUsedAt); err != nil {
 		return nil, wrapErr("get workspace", err)
 	}
 	w.State = domain.WorkspaceState(state)
 	w.Ephemeral = ephemeral != 0
+	if err := unmarshalJSON(agentSession, &w.AgentSession); err != nil {
+		return nil, err
+	}
 
 	var err error
 	if w.CreatedAt, err = parseTime(created); err != nil {

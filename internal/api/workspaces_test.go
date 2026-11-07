@@ -227,3 +227,125 @@ func TestRepoWithNoProjectsCannotHaveAWorkspace(t *testing.T) {
 		t.Fatalf("refusal %v does not say what to do about it", body)
 	}
 }
+
+// runningWorkspace creates a workspace and puts it in the state a
+// conversation needs: a machine, running.
+func runningWorkspace(t *testing.T, f *fixture) *domain.Workspace {
+	t.Helper()
+	var created struct {
+		Workspace domain.Workspace `json:"workspace"`
+	}
+	if status := f.call(t, "POST", "/v1/workspaces", map[string]any{
+		"repo_id": f.repo.ID, "name": "cart",
+	}, &created); status != http.StatusCreated {
+		t.Fatalf("create: %d", status)
+	}
+	ws, err := f.store.GetWorkspace(f.ctx, created.Workspace.ID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	if _, err := f.store.TransitionWorkspace(f.ctx, ws.ID,
+		domain.WorkspaceStopped, domain.WorkspaceStarting, ""); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	running, err := f.store.TransitionWorkspace(f.ctx, ws.ID,
+		domain.WorkspaceStarting, domain.WorkspaceRunning, "")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	running.InstanceID = "vm_stub"
+	if err := f.store.UpdateWorkspace(f.ctx, running); err != nil {
+		t.Fatalf("UpdateWorkspace: %v", err)
+	}
+	return running
+}
+
+// TestAStoppedWorkspaceRefusesAMessage: the agent works on the machine, and
+// starting one here would hide a minutes-long boot behind what looks like
+// sending a message.
+func TestAStoppedWorkspaceRefusesAMessage(t *testing.T) {
+	f := newFixture(t)
+	withProject(t, f)
+	var created struct {
+		Workspace domain.Workspace `json:"workspace"`
+	}
+	if status := f.call(t, "POST", "/v1/workspaces", map[string]any{
+		"repo_id": f.repo.ID, "name": "cart",
+	}, &created); status != http.StatusCreated {
+		t.Fatalf("create: %d", status)
+	}
+
+	var body map[string]any
+	status := f.call(t, "POST", "/v1/workspaces/"+created.Workspace.ID+"/messages",
+		map[string]any{"content": "tighten the spacing"}, &body)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", status)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "start this workspace") {
+		t.Fatalf("refusal %v does not say what to do", body)
+	}
+}
+
+func TestAnEmptyMessageIsRefused(t *testing.T) {
+	f := newFixture(t)
+	withProject(t, f)
+	ws := runningWorkspace(t, f)
+
+	if status := f.call(t, "POST", "/v1/workspaces/"+ws.ID+"/messages",
+		map[string]any{"content": "   "}, nil); status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", status)
+	}
+}
+
+func TestSendingAMessageRecordsBothSidesAndReturnsAccepted(t *testing.T) {
+	f := newFixture(t)
+	withProject(t, f)
+	ws := runningWorkspace(t, f)
+
+	var sent struct {
+		Message domain.Message `json:"message"`
+		Reply   domain.Message `json:"reply"`
+	}
+	// Accepted, not OK: the agent takes minutes and the reply arrives on the
+	// event stream rather than on this request.
+	status := f.call(t, "POST", "/v1/workspaces/"+ws.ID+"/messages",
+		map[string]any{"content": "tighten the spacing"}, &sent)
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", status)
+	}
+	if sent.Message.Role != domain.MessageFromUser {
+		t.Fatalf("the prompt is %q, want a user message", sent.Message.Role)
+	}
+	if sent.Reply.State != domain.MessageRunning {
+		t.Fatalf("the reply is %q, want running", sent.Reply.State)
+	}
+
+	var listed struct {
+		Messages []domain.Message `json:"messages"`
+	}
+	if status := f.call(t, "GET", "/v1/workspaces/"+ws.ID+"/messages", nil, &listed); status != http.StatusOK {
+		t.Fatalf("list: %d", status)
+	}
+	if len(listed.Messages) < 2 {
+		t.Fatalf("got %d messages, want the prompt and the reply", len(listed.Messages))
+	}
+	if listed.Messages[0].Role != domain.MessageFromUser {
+		t.Fatalf("a reply sorted before its prompt: %+v", listed.Messages)
+	}
+}
+
+func TestAnotherUsersConversationIsNotReachable(t *testing.T) {
+	f := newFixture(t)
+	withProject(t, f)
+	ws := runningWorkspace(t, f)
+
+	f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+	for _, call := range []struct{ method, path string }{
+		{"GET", "/v1/workspaces/" + ws.ID + "/messages"},
+		{"POST", "/v1/workspaces/" + ws.ID + "/messages"},
+	} {
+		if status := f.call(t, call.method, call.path, map[string]any{"content": "hi"}, nil); status != http.StatusNotFound {
+			t.Fatalf("%s %s returned %d, want 404", call.method, call.path, status)
+		}
+	}
+}

@@ -943,16 +943,23 @@ async function renderWorkspace(workspaceID) {
   // The same workspace panel sub-tasks use: the machine and its previews are
   // the same kind of thing either way.
   root.append(workspacePanel({
+    id: ws.id,
     instance_id: ws.instance_id,
     shellPath: `/v1/workspaces/${ws.id}/shell`,
+    // Only a workspace holds a conversation: a sub-task is driven by its
+    // plan, not by somebody typing at it.
+    conversation: true,
+    running: ws.state === "running",
   }, previews));
 
   root.append(section("Activity", await feed(`/v1/audit?workspace=${ws.id}&limit=100`)));
 
-  // Follow it live: starting takes minutes, and a page that does not move
-  // looks like one that is broken.
+  // Follow its lifecycle live: starting takes minutes, and a page that does
+  // not move looks like one that is broken. Only lifecycle events, though --
+  // rebuilding the view on every agent message would throw away whatever is
+  // half-typed in the chat, which keeps itself current on its own.
   return live.subscribe((event) => {
-    if (event.workspace_id === ws.id) route();
+    if (event.workspace_id === ws.id && String(event.type).startsWith("workspace.")) route();
   });
 }
 
@@ -992,6 +999,110 @@ function workspaceControls(ws) {
   return controls;
 }
 
+
+// chatPane is the conversation with the agent about this workspace.
+//
+// Deliberately plain. The agent takes minutes, so the pane is mostly about
+// making waiting legible: the turn in flight is shown as running, and the
+// event stream is what moves it on rather than a poll.
+function chatPane(owner) {
+  const host = el("div", { class: "chat" });
+  const log = el("div", { class: "chat-log" });
+  const input = el("textarea", {
+    class: "input chat-input", rows: "3",
+    placeholder: owner.running
+      ? "Ask for a change, or a question about the code"
+      : "Start the workspace before asking the agent for anything",
+  });
+  const send = el("button", { class: "btn", text: "Send" });
+  const problem = el("p", { class: "muted" });
+  input.disabled = !owner.running;
+  send.disabled = !owner.running;
+
+  let busy = false;
+
+  const draw = (messages) => {
+    clear(log);
+    if (!messages.length) {
+      log.append(empty("Nothing asked yet. Describe a change and the agent will make it on this machine."));
+      return;
+    }
+    busy = false;
+    for (const m of messages) {
+      if (m.state === "running") busy = true;
+      const who = m.role === "user" ? "You" : "Agent";
+      const entry = el("div", { class: `chat-turn chat-${m.role}` },
+        el("div", { class: "chat-who" },
+          el("span", { text: who }),
+          el("span", { class: "muted", text: ` · ${relativeTime(m.created_at)}` }),
+          m.usage && m.usage.cost_usd
+            ? el("span", { class: "muted", text: ` · ${money(m.usage.cost_usd)}` })
+            : null));
+      if (m.state === "running") {
+        entry.append(el("p", { class: "muted", text: "Working…" }));
+      } else {
+        // Never innerHTML: the agent's output is untrusted and lands as text.
+        entry.append(el("p", { class: "chat-body", text: m.content || "(nothing said)" }));
+      }
+      if (m.state === "failed" && m.state_reason) {
+        entry.append(el("p", { class: "muted", text: m.state_reason }));
+      }
+      log.append(entry);
+    }
+    log.scrollTop = log.scrollHeight;
+    // input.value is untouched throughout: only the log is redrawn, so a
+    // half-written message survives the agent answering the previous one.
+    // A run in flight owns the machine, so a second request would be two
+    // agents changing the same files.
+    input.disabled = !owner.running || busy;
+    send.disabled = !owner.running || busy;
+  };
+
+  const refresh = async () => {
+    try {
+      draw((await api.get(`/v1/workspaces/${owner.id}/messages`)).messages || []);
+    } catch (err) {
+      problem.textContent = err.message;
+    }
+  };
+
+  const submit = async () => {
+    const content = input.value.trim();
+    if (!content) return;
+    send.disabled = true;
+    clear(problem);
+    try {
+      await api.send("POST", `/v1/workspaces/${owner.id}/messages`, { content });
+      input.value = "";
+      await refresh();
+    } catch (err) {
+      problem.textContent = err.message;
+      send.disabled = false;
+    }
+  };
+
+  // Refresh in place when the agent says something, rather than letting the
+  // whole view rebuild: a redraw while somebody is typing throws their draft
+  // away, and the agent can take minutes to answer.
+  const unsubscribe = live.subscribe((event) => {
+    if (event.workspace_id === owner.id) refresh();
+  });
+  host.dispose = unsubscribe;
+
+  send.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    // Enter sends, shift+enter is a newline: this is a chat, not an editor.
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+    }
+  });
+
+  host.append(log, el("div", { class: "chat-compose" }, input, send), problem);
+  refresh();
+  return host;
+}
+
 // workspacePanel is the sub-task's workspace: the live previews it produces and
 // a shell on the machine producing it.
 //
@@ -1002,6 +1113,7 @@ function workspacePanel(owner, previews) {
   const body = el("div", {});
   const tabs = el("div", { class: "tabs-inline", role: "tablist" });
   let shell = null;
+  let chat = null;
 
   // Front door first: it is what the validation agent drives.
   const reachable = previews.slice().sort((a, b) => (b.primary === true) - (a.primary === true));
@@ -1053,6 +1165,7 @@ function workspacePanel(owner, previews) {
   };
 
   const panes = {
+    chat: () => chatPane(owner),
     preview: previewPane,
     shell: () => {
       if (!owner.instance_id) return empty("No machine yet, so there is nothing to attach to.");
@@ -1067,7 +1180,7 @@ function workspacePanel(owner, previews) {
     },
   };
 
-  let active = "preview";
+  let active = owner.conversation ? "chat" : "preview";
   const content = el("div", {});
 
   const show = (name, force) => {
@@ -1076,14 +1189,22 @@ function workspacePanel(owner, previews) {
     // Leaving the shell tab closes the session rather than leaving a terminal
     // running on the machine behind a tab nobody is looking at.
     if (name !== "shell" && shell) { shell.close(); shell = null; }
+    // The chat's event subscription goes with it, or every tab switch would
+    // leave another one refreshing a log nobody can see.
+    if (name !== "chat" && chat) { chat(); chat = null; }
     clear(content);
-    content.append(panes[name]());
+    const pane = panes[name]();
+    if (name === "chat" && pane.dispose) chat = pane.dispose;
+    content.append(pane);
     for (const button of tabs.children) {
       button.setAttribute("aria-selected", String(button.dataset.pane === name));
     }
   };
 
-  for (const [name, label] of [["preview", "Preview"], ["shell", "Shell"]]) {
+  const tabNames = owner.conversation
+    ? [["chat", "Chat"], ["preview", "Preview"], ["shell", "Shell"]]
+    : [["preview", "Preview"], ["shell", "Shell"]];
+  for (const [name, label] of tabNames) {
     const button = el("button", { role: "tab", "aria-selected": String(name === active), text: label });
     button.dataset.pane = name;
     button.addEventListener("click", () => show(name));
@@ -1091,7 +1212,7 @@ function workspacePanel(owner, previews) {
   }
 
   body.append(tabs, content);
-  show("preview");
+  show(active);
   return section("Workspace", body);
 }
 

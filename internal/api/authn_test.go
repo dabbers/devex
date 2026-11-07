@@ -63,6 +63,8 @@ func TestEveryDataRouteRequiresAUser(t *testing.T) {
 		{"POST", "/v1/workspaces/ws_1/stop"},
 		{"POST", "/v1/workspaces/ws_1/archive"},
 		{"GET", "/v1/workspaces/ws_1/shell"},
+		{"GET", "/v1/workspaces/ws_1/messages"},
+		{"POST", "/v1/workspaces/ws_1/messages"},
 		{"GET", "/v1/forks/fork_1"},
 		{"POST", "/v1/forks/fork_1/resolve"},
 		{"POST", "/v1/forks/fork_1/validate"},

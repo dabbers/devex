@@ -271,6 +271,9 @@ type Workspace struct {
 	// Ephemeral marks a workspace created to serve one fork, so cleanup can
 	// tell "the environment I work in" apart from "scratch space a plan made".
 	Ephemeral bool `json:"ephemeral"`
+	// AgentSession is the workspace's own conversation, so each message
+	// continues the last rather than starting from an empty context.
+	AgentSession AgentSession `json:"agent_session"`
 
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
@@ -281,6 +284,57 @@ type Workspace struct {
 
 // Active reports whether the workspace is holding machine capacity.
 func (w *Workspace) Active() bool { return w.State.Occupies() }
+
+// MessageRole says who said something.
+type MessageRole string
+
+const (
+	// MessageFromUser is what the person asked for.
+	MessageFromUser MessageRole = "user"
+	// MessageFromAgent is the agent's reply, and also how the system reports
+	// that a run failed: a third role would be one more thing every reader
+	// has to understand, and the state already says what happened.
+	MessageFromAgent MessageRole = "agent"
+)
+
+// Valid reports whether the role is one dabberz understands.
+func (r MessageRole) Valid() bool {
+	return r == MessageFromUser || r == MessageFromAgent
+}
+
+// MessageState is how far a message has got.
+type MessageState string
+
+const (
+	// MessageRunning means the agent is working on it. A user's own message
+	// is never in this state: it is complete the moment it is said.
+	MessageRunning MessageState = "running"
+	// MessageDone means it finished.
+	MessageDone MessageState = "done"
+	// MessageFailed means the run did not complete, and StateReason says why.
+	MessageFailed MessageState = "failed"
+)
+
+// Valid reports whether the state is one dabberz understands.
+func (s MessageState) Valid() bool {
+	return s == MessageRunning || s == MessageDone || s == MessageFailed
+}
+
+// Message is one turn of a workspace's conversation.
+type Message struct {
+	ID          string       `json:"id"`
+	WorkspaceID string       `json:"workspace_id"`
+	UserID      string       `json:"user_id"`
+	Role        MessageRole  `json:"role"`
+	Content     string       `json:"content"`
+	State       MessageState `json:"state"`
+	StateReason string       `json:"state_reason,omitempty"`
+	// Usage is what this turn cost, already reduced to the turn's own share
+	// of the conversation.
+	Usage     Usage     `json:"usage"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
 // MergeTarget selects where a finished fork lands. It is a per-task user
 // preference and is never assumed.

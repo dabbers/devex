@@ -113,3 +113,98 @@ type Previews struct {
 	// URLs maps service name to public URL, for every exposed service.
 	URLs map[string]string
 }
+
+// BuildConversationPrompt is one turn of a workspace conversation.
+//
+// It differs from a fork's prompt in what it assumes. A fork is told it owns
+// an isolated workstream, must not coordinate with siblings, and will be
+// verified automatically when it finishes. None of that is true here: the
+// person is present, watching the same preview, and will say what they think
+// next. So the agent is asked to do the thing and stop, rather than to drive
+// itself to a conclusion.
+func BuildConversationPrompt(ws *domain.Workspace, repo *domain.Repo, project *domain.Project, services []*domain.Service, previews Previews, request string, history []*domain.Message) string {
+	var b strings.Builder
+
+	b.WriteString("You are working with someone on their code, in their development environment.\n\n")
+	fmt.Fprintf(&b, "Repository: %s\n", repo.Name)
+	if project != nil {
+		fmt.Fprintf(&b, "Project: %s (path %q)\n", project.Name, project.Path)
+	}
+	fmt.Fprintf(&b, "Branch: %s\n", ws.Branch)
+	if previews.Primary != "" {
+		fmt.Fprintf(&b, "Live preview: %s\n", previews.Primary)
+	}
+
+	if len(services) > 0 {
+		b.WriteString("\nThis project runs these services:\n")
+		for _, sv := range services {
+			fmt.Fprintf(&b, "- %s (%s)", sv.Name, sv.Kind)
+			if sv.Port > 0 {
+				fmt.Fprintf(&b, " on port %d", sv.Port)
+			}
+			if url := previews.URLs[sv.Name]; url != "" {
+				fmt.Fprintf(&b, ", reachable at %s", url)
+			} else {
+				b.WriteString(", internal only")
+			}
+			b.WriteString("\n")
+			if sv.Command != "" {
+				fmt.Fprintf(&b, "    start with: %s\n", sv.Command)
+			}
+		}
+	}
+
+	// Earlier turns are included even though the conversation is resumed,
+	// because resuming can fall back to a fresh conversation when the store
+	// did not survive. Without this the agent would then answer the latest
+	// message with no idea what was already asked.
+	if recent := recentTurns(history, 10); len(recent) > 0 {
+		b.WriteString("\nEarlier in this conversation:\n")
+		for _, m := range recent {
+			who := "They said"
+			if m.Role == domain.MessageFromAgent {
+				who = "You said"
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", who, firstLine(m.Content, 200))
+		}
+	}
+
+	b.WriteString("\nWhat they are asking for now:\n")
+	b.WriteString(request)
+	b.WriteString("\n")
+
+	b.WriteString("\nHow this works:\n")
+	b.WriteString("- This is their machine and their branch. Changes you make are live on the preview above; there is no deploy step.\n")
+	b.WriteString("- Commit as you go.\n")
+	b.WriteString("- Do what was asked and stop. They are watching the preview and will tell you what they think, so do not keep going into work they did not ask for.\n")
+	b.WriteString("- If a service needs restarting for your change to show, restart it.\n")
+	b.WriteString("- If the request is ambiguous enough that guessing could waste their time, ask instead of guessing.\n")
+
+	b.WriteString("\n" + escalationInstructions)
+	return b.String()
+}
+
+// recentTurns returns the last n completed turns, oldest first, skipping the
+// one still running -- which is the turn being written now.
+func recentTurns(history []*domain.Message, n int) []*domain.Message {
+	var done []*domain.Message
+	for _, m := range history {
+		if m.State == domain.MessageRunning || strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		done = append(done, m)
+	}
+	if len(done) > n {
+		done = done[len(done)-n:]
+	}
+	return done
+}
+
+// firstLine reduces a message to one line for the summary above.
+func firstLine(text string, limit int) string {
+	clean := strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
+	if len(clean) <= limit {
+		return clean
+	}
+	return clean[:limit] + "…"
+}

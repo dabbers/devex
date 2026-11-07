@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/memory"
@@ -45,6 +46,7 @@ type Server struct {
 	ui         http.Handler
 	authn      auth.Authenticator
 	workspaces *workspace.Manager
+	agent      *agent.Runner
 	logger     *slog.Logger
 	streamGap  time.Duration
 }
@@ -68,6 +70,10 @@ type Deps struct {
 	// control plane still lists workspaces and shows what they were, it just
 	// cannot bring one up.
 	Workspaces *workspace.Manager
+	// Agent runs the coding agent for a workspace conversation. Optional:
+	// without it a workspace is somewhere to work but not somewhere to ask
+	// for work.
+	Agent *agent.Runner
 	// Authn identifies the person behind each request. It is required: without
 	// it every request would be anonymous, and this process hands out a shell.
 	// internal/auth.Single is the explicit way to run without a provider.
@@ -94,7 +100,8 @@ func New(deps Deps) (*Server, error) {
 		store: deps.Store, orch: deps.Orch, sched: deps.Sched,
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
-		authn: deps.Authn, workspaces: deps.Workspaces, logger: logger,
+		authn: deps.Authn, workspaces: deps.Workspaces, agent: deps.Agent,
+		logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -145,6 +152,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/workspaces/{workspace}/stop", s.stopWorkspace)
 	mux.HandleFunc("POST /v1/workspaces/{workspace}/archive", s.archiveWorkspace)
 	mux.HandleFunc("GET /v1/workspaces/{workspace}/shell", s.workspaceShell)
+	mux.HandleFunc("GET /v1/workspaces/{workspace}/messages", s.listMessages)
+	mux.HandleFunc("POST /v1/workspaces/{workspace}/messages", s.sendMessage)
 
 	mux.HandleFunc("GET /v1/forks/{fork}", s.getFork)
 	mux.HandleFunc("POST /v1/forks/{fork}/resolve", s.resolveEscalation)

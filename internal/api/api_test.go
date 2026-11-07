@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/llm"
@@ -127,7 +129,12 @@ func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *f
 
 	srv, err := New(Deps{
 		Store: st, Orch: orch, Vault: vault, Memory: mem, UI: ui,
-		Verifier: verifier, Authn: testAuthn(owner), Logger: quiet,
+		Verifier: verifier, Authn: testAuthn(owner),
+		// A runner over a driver that cannot exec: these tests are about the
+		// conversation's bookkeeping, and a turn that cannot run still has to
+		// close its row rather than leaving the workspace busy forever.
+		Agent:  agent.New(unreachableDriver{}, agent.Config{}),
+		Logger: quiet,
 	})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
@@ -682,4 +689,23 @@ func newBufReader(conn net.Conn) *bufio.Reader { return bufio.NewReader(conn) }
 // handler tests are about; the boundary itself is tested in authn_test.go.
 func testAuthn(u *domain.User) auth.Authenticator {
 	return auth.Single{Subject: "test:" + u.Email, Email: u.Email}
+}
+
+// unreachableDriver stands in for a machine that cannot be reached.
+type unreachableDriver struct{}
+
+func (unreachableDriver) Name() string { return "unreachable" }
+func (unreachableDriver) Capacity(context.Context) (vm.Capacity, error) {
+	return vm.Capacity{}, nil
+}
+func (unreachableDriver) Create(context.Context, vm.Spec) (*vm.Instance, error) {
+	return nil, vm.ErrNotSupported
+}
+func (unreachableDriver) Get(context.Context, string) (*vm.Instance, error) {
+	return nil, vm.ErrNotFound
+}
+func (unreachableDriver) List(context.Context) ([]*vm.Instance, error) { return nil, nil }
+func (unreachableDriver) Destroy(context.Context, string) error        { return nil }
+func (unreachableDriver) Exec(context.Context, string, vm.Command) (*vm.ExecResult, error) {
+	return nil, errors.New("no machine here")
 }

@@ -30,6 +30,7 @@ const (
 	Profile   = "prof"
 	Question  = "qst"
 	Workspace = "ws"
+	Message   = "msg"
 )
 
 // encoding is Crockford-style base32 in lowercase without padding, chosen so

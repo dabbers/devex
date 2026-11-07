@@ -123,6 +123,17 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	// v1 is single-user, but everything is scoped by this id so that
 	// multi-user support is additive rather than a rewrite.
+	// An agent run lives in a goroutine, so a restart ends it without ending
+	// the row it was writing. Left running, a workspace shows an agent working
+	// forever and refuses every later message, with nothing to point at.
+	if abandoned, err := db.AbandonRunningMessages(ctx,
+		"the control plane restarted while this was running"); err != nil {
+		return nil, err
+	} else if abandoned > 0 {
+		logger.Warn("abandoned agent turns left running by a previous run",
+			"count", abandoned)
+	}
+
 	authenticator, err := cfg.Authenticator()
 	if err != nil {
 		return nil, err
@@ -242,7 +253,8 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	apiServer, err := api.New(api.Deps{
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
-		UI: ui, Authn: authenticator, Workspaces: workspaces, Logger: logger,
+		UI: ui, Authn: authenticator, Workspaces: workspaces,
+		Agent: agentRunner, Logger: logger,
 	})
 	if err != nil {
 		return nil, err
