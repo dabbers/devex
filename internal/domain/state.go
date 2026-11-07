@@ -226,3 +226,77 @@ func TransitionFork(f *Fork, next ForkState) error {
 	f.State = next
 	return nil
 }
+
+// WorkspaceState is where a long-lived development environment sits.
+type WorkspaceState string
+
+// Workspace states.
+//
+// A workspace is not a job: it has no notion of finishing. It is a machine you
+// come back to, so its lifecycle is start and stop rather than queued through
+// to merged. That is the whole difference between it and a fork, and the
+// reason the two have separate state machines rather than one with unreachable
+// states in it.
+const (
+	// WorkspaceStopped means nothing is running. The record, the branch and
+	// the machine's disk survive; this is the resting state, not an error.
+	WorkspaceStopped WorkspaceState = "stopped"
+	// WorkspaceStarting means the machine is booting and the services are
+	// coming up in dependency order.
+	WorkspaceStarting WorkspaceState = "starting"
+	// WorkspaceRunning means the services are up and the previews answer.
+	WorkspaceRunning WorkspaceState = "running"
+	// WorkspaceStopping means the services are being shut down.
+	WorkspaceStopping WorkspaceState = "stopping"
+	// WorkspaceFailed means starting did not work. It is deliberately not
+	// terminal: the usual cause is a service command that needs fixing, and
+	// the point of a workspace is that you fix it and start it again.
+	WorkspaceFailed WorkspaceState = "failed"
+	// WorkspaceArchived means the user is done with it. Terminal, and the only
+	// state in which the machine may be reclaimed.
+	WorkspaceArchived WorkspaceState = "archived"
+)
+
+// workspaceTransitions is the complete set of legal workspace state changes.
+var workspaceTransitions = map[WorkspaceState][]WorkspaceState{
+	WorkspaceStopped:  {WorkspaceStarting, WorkspaceArchived},
+	WorkspaceStarting: {WorkspaceRunning, WorkspaceFailed, WorkspaceStopping},
+	WorkspaceRunning:  {WorkspaceStopping, WorkspaceFailed},
+	WorkspaceStopping: {WorkspaceStopped, WorkspaceFailed},
+	// Failed goes back to starting directly: the fix is usually a service
+	// command, and requiring a trip through stopped first would be ceremony.
+	WorkspaceFailed:   {WorkspaceStarting, WorkspaceStopped, WorkspaceArchived},
+	WorkspaceArchived: nil,
+}
+
+// Terminal reports whether the workspace has reached a state it cannot leave.
+func (s WorkspaceState) Terminal() bool { return len(workspaceTransitions[s]) == 0 }
+
+// Valid reports whether s is a recognised workspace state.
+func (s WorkspaceState) Valid() bool {
+	_, ok := workspaceTransitions[s]
+	return ok
+}
+
+// CanTransition reports whether s may move directly to next.
+func (s WorkspaceState) CanTransition(next WorkspaceState) bool {
+	for _, allowed := range workspaceTransitions[s] {
+		if allowed == next {
+			return true
+		}
+	}
+	return false
+}
+
+// Occupies reports whether the workspace is holding machine capacity, which is
+// what the scheduler counts against the host's totals.
+func (s WorkspaceState) Occupies() bool {
+	switch s {
+	case WorkspaceStarting, WorkspaceRunning, WorkspaceStopping:
+		return true
+	}
+	return false
+}
+
+// String implements fmt.Stringer.
+func (s WorkspaceState) String() string { return string(s) }

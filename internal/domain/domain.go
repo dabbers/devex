@@ -236,6 +236,52 @@ func StartOrder(services []*Service) ([]*Service, error) {
 	return ordered, nil
 }
 
+// Workspace is a development environment that outlives any one request: a
+// repo on a branch, a machine, the services running on it, and the preview
+// hostnames those answer on.
+//
+// It is the thing a person comes back to. A Fork is a workspace created by a
+// plan, on a scratch branch, with a lifecycle that ends at the merge gate; a
+// workspace proper has no end, only a start and a stop. Expressing both on one
+// record is what keeps provisioning, service startup and preview allocation
+// from being written twice and drifting apart.
+type Workspace struct {
+	ID        string `json:"id"`
+	UserID    string `json:"user_id"`
+	RepoID    string `json:"repo_id"`
+	ProjectID string `json:"project_id"`
+
+	// Name is what the user calls it, and what its preview hostnames are
+	// built from.
+	Name string `json:"name"`
+	// Branch is the git branch checked out on the machine. A workspace keeps
+	// its branch across stops, which is most of what makes it a place rather
+	// than a job.
+	Branch string `json:"branch"`
+
+	State       WorkspaceState `json:"state"`
+	StateReason string         `json:"state_reason,omitempty"`
+
+	// InstanceID is the machine backing it. It survives a stop, because the
+	// disk is the work: losing it would make every restart a fresh clone.
+	InstanceID string `json:"instance_id,omitempty"`
+	// PreviewURL is the front door, mirroring the primary service's route.
+	PreviewURL string `json:"preview_url,omitempty"`
+
+	// Ephemeral marks a workspace created to serve one fork, so cleanup can
+	// tell "the environment I work in" apart from "scratch space a plan made".
+	Ephemeral bool `json:"ephemeral"`
+
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	StoppedAt  *time.Time `json:"stopped_at,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+// Active reports whether the workspace is holding machine capacity.
+func (w *Workspace) Active() bool { return w.State.Occupies() }
+
 // MergeTarget selects where a finished fork lands. It is a per-task user
 // preference and is never assumed.
 type MergeTarget string
