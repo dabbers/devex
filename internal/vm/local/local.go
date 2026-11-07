@@ -223,6 +223,19 @@ func (d *Driver) Destroy(_ context.Context, instanceID string) error {
 // Exec implements vm.Driver by running the command on the host, rooted in the
 // instance's workspace.
 func (d *Driver) Exec(ctx context.Context, instanceID string, cmd vm.Command) (*vm.ExecResult, error) {
+	return d.run(ctx, instanceID, cmd, nil)
+}
+
+// ExecStream implements vm.Streaming, delivering standard output a line at a
+// time while the command is still running.
+func (d *Driver) ExecStream(ctx context.Context, instanceID string, cmd vm.Command, onLine func([]byte)) (*vm.ExecResult, error) {
+	return d.run(ctx, instanceID, cmd, onLine)
+}
+
+// run is the single implementation behind both. onLine is optional; with it
+// nil this behaves exactly as Exec always did, so there is no second code path
+// to keep in step.
+func (d *Driver) run(ctx context.Context, instanceID string, cmd vm.Command, onLine func([]byte)) (*vm.ExecResult, error) {
 	if len(cmd.Argv) == 0 {
 		return nil, errors.New("local: exec requires a command")
 	}
@@ -259,11 +272,17 @@ func (d *Driver) Exec(ctx context.Context, instanceID string, cmd vm.Command) (*
 	}
 
 	var stdout, stderr bytes.Buffer
-	proc.Stdout = &stdout
+	// Standard output is still captured in full: a streaming caller wants the
+	// lines as they arrive AND the complete output at the end, and keeping
+	// both means a streaming run is not a different kind of result.
+	tee := &lineTee{sink: &stdout, onLine: onLine}
+	proc.Stdout = tee
 	proc.Stderr = &stderr
 
 	started := time.Now()
 	err := proc.Run()
+	// Output that never ended in a newline is still a line.
+	tee.flush()
 	result := &vm.ExecResult{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
@@ -332,3 +351,45 @@ func maps(in map[string]string) map[string]string {
 
 // Driver satisfies the vm.Driver contract.
 var _ vm.Driver = (*Driver)(nil)
+
+// lineTee captures everything written to it and, when a callback is set, hands
+// over each complete line as it arrives.
+type lineTee struct {
+	sink    *bytes.Buffer
+	onLine  func([]byte)
+	partial []byte
+}
+
+func (w *lineTee) Write(p []byte) (int, error) {
+	w.sink.Write(p) //nolint:errcheck // bytes.Buffer never fails
+	if w.onLine == nil {
+		return len(p), nil
+	}
+	w.partial = append(w.partial, p...)
+	for {
+		end := bytes.IndexByte(w.partial, '\n')
+		if end < 0 {
+			break
+		}
+		w.emit(w.partial[:end])
+		w.partial = w.partial[end+1:]
+	}
+	return len(p), nil
+}
+
+// flush delivers a trailing line that never ended in a newline.
+func (w *lineTee) flush() {
+	if w.onLine == nil || len(w.partial) == 0 {
+		return
+	}
+	w.emit(w.partial)
+	w.partial = nil
+}
+
+// emit hands over a copy. The caller may keep the line, and the backing array
+// is about to be resliced out from under it.
+func (w *lineTee) emit(line []byte) {
+	w.onLine(append([]byte(nil), line...))
+}
+
+var _ vm.Streaming = (*Driver)(nil)

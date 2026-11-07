@@ -574,3 +574,10 @@ details.data pre {
     width: 100%;
   }
 }
+
+/* A turn still being written. Marked rather than animated: the text itself
+   moving is the signal, and a spinner beside moving text is noise. */
+.chat-writing {
+  font-style: italic;
+  margin-top: var(--space-1);
+}

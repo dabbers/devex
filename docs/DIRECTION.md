@@ -228,10 +228,23 @@ machinery underneath:
    turns orphaned by a restart are failed at startup rather than leaving a
    workspace busy forever.
 
-   The plan-and-fork path is still a separate door rather than something
-   reachable from a conversation, and the agent's output still arrives as one
-   block at the end.
+   The agent's answer now arrives as it is written: `vm.Streaming` is an
+   optional driver capability, and a run asks for it only when the driver has
+   it and something is watching. The plan-and-fork path is still a separate
+   door rather than something reachable from a conversation.
 5. Mobile layout for the four surfaces that make sense on a phone.
+
+## What has not been run against a real agent
+
+Everything above was driven with a stand-in binary on `PATH` that echoes the
+request, reports whether it resumed, and in streaming mode writes its answer a
+fragment at a time. That exercises the plumbing -- argv, parsing, resuming,
+accounting, throttled writes, the interface -- and proves none of the
+behaviour of the real agent on a real repository.
+
+The gap closes when a workspace runs on a machine with KVM. Until then, treat
+every claim here as "the control plane does this correctly", not "the agent
+does good work".
 
 
 ## Later: the preview zone, and a Mac as a build runner

@@ -236,6 +236,24 @@ type Interactive interface {
 	OpenSession(ctx context.Context, instanceID string, spec SessionSpec) (Session, error)
 }
 
+// Streaming is the optional capability of running a command and reading its
+// output while it is still running.
+//
+// Exec answers only once the command has exited, which is correct for a build
+// or a git invocation and wrong for an agent that works for minutes: there is
+// nowhere for its output to go until it finishes, so an interface can show
+// that it worked but never that it is working.
+//
+// The contract is deliberately Exec's plus a callback rather than a reader:
+// the caller still gets the exit status, the timeout handling and the captured
+// streams it already relies on, and a driver that cannot stream is simply not
+// asserted to this interface. onLine is called from the goroutine reading the
+// command, in order, once per line of standard output, and must not block for
+// long -- a slow consumer stalls the command's output.
+type Streaming interface {
+	ExecStream(ctx context.Context, instanceID string, cmd Command, onLine func(line []byte)) (*ExecResult, error)
+}
+
 // Driver creates and supervises instances on one machine.
 //
 // Implementations must be safe for concurrent use: the orchestrator drives

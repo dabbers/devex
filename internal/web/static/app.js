@@ -1038,11 +1038,16 @@ function chatPane(owner) {
           m.usage && m.usage.cost_usd
             ? el("span", { class: "muted", text: ` · ${money(m.usage.cost_usd)}` })
             : null));
-      if (m.state === "running") {
+      if (m.state === "running" && !m.content) {
         entry.append(el("p", { class: "muted", text: "Working…" }));
       } else {
         // Never innerHTML: the agent's output is untrusted and lands as text.
         entry.append(el("p", { class: "chat-body", text: m.content || "(nothing said)" }));
+        // A running turn's content is the answer so far, so say that rather
+        // than letting a half-written sentence read as a finished one.
+        if (m.state === "running") {
+          entry.append(el("p", { class: "muted chat-writing", text: "still writing…" }));
+        }
       }
       if (m.state === "failed" && m.state_reason) {
         entry.append(el("p", { class: "muted", text: m.state_reason }));
@@ -1087,7 +1092,18 @@ function chatPane(owner) {
   const unsubscribe = live.subscribe((event) => {
     if (event.workspace_id === owner.id) refresh();
   });
-  host.dispose = unsubscribe;
+
+  // While a turn is in flight, poll as well. The answer arrives as text long
+  // before the event that says the turn finished, and an interface that only
+  // moves at the end is the thing streaming exists to replace.
+  const poll = setInterval(() => {
+    if (busy) refresh();
+  }, 1200);
+
+  host.dispose = () => {
+    unsubscribe();
+    clearInterval(poll);
+  };
 
   send.addEventListener("click", submit);
   input.addEventListener("keydown", (event) => {

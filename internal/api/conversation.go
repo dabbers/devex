@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/domain"
@@ -121,6 +122,11 @@ func (s *Server) runAgentTurn(ws *domain.Workspace, prompt, reply *domain.Messag
 			return
 		}
 
+		// Partial text is written back to the row so the interface can show
+		// the agent working rather than a spinner. Throttled, because the
+		// alternative is a database write per token.
+		progress := newProgressWriter(ctx, s, reply)
+
 		res, err := s.agent.Run(ctx, agent.Request{
 			InstanceID: ws.InstanceID,
 			Prompt: agent.BuildConversationPrompt(
@@ -129,6 +135,7 @@ func (s *Server) runAgentTurn(ws *domain.Workspace, prompt, reply *domain.Messag
 			// last instead of starting from an empty context -- which is the
 			// thing that would make a chat useless.
 			Session: &ws.AgentSession,
+			OnText:  progress.write,
 		})
 		if err != nil {
 			s.failTurn(ctx, ws, reply, err)
@@ -219,4 +226,48 @@ func truncate(text string, limit int) string {
 		return clean
 	}
 	return clean[:limit] + "…"
+}
+
+// progressInterval bounds how often a turn in flight is written back.
+//
+// Every update carries the whole answer so far, so a dropped one costs
+// nothing: the next write supersedes it. A second is slow enough to be a
+// handful of writes over a long run and fast enough that the text visibly
+// moves.
+const progressInterval = time.Second
+
+// progressWriter records the agent's answer as it is written.
+//
+// It holds no lock of its own because the agent calls it from one goroutine,
+// in order. What it does guard against is writing on every token: the callback
+// fires per delta, which is far too often to put in a database.
+type progressWriter struct {
+	ctx     context.Context
+	server  *Server
+	message *domain.Message
+	last    time.Time
+}
+
+func newProgressWriter(ctx context.Context, server *Server, message *domain.Message) *progressWriter {
+	return &progressWriter{ctx: ctx, server: server, message: message}
+}
+
+// write records the answer so far, at most once per interval.
+func (p *progressWriter) write(text string) {
+	if text == "" || time.Since(p.last) < progressInterval {
+		return
+	}
+	p.last = time.Now()
+
+	// Still running: this is the answer so far, not the answer. Writing a
+	// state here would mark the turn finished while the agent is mid-sentence.
+	partial := *p.message
+	partial.Content = text
+	partial.State = domain.MessageRunning
+	if err := p.server.store.FinishMessage(p.ctx, &partial); err != nil {
+		// Losing progress is cosmetic; the turn still completes and the final
+		// write carries everything. Worth a line, not worth stopping for.
+		p.server.logger.Debug("could not record partial agent output",
+			"message", p.message.ID, "error", err)
+	}
 }

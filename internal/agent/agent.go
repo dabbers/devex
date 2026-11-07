@@ -96,6 +96,15 @@ type Request struct {
 	Env map[string]string
 	// Timeout overrides the configured timeout.
 	Timeout time.Duration
+	// OnText receives the agent's answer as it is written, when the driver can
+	// stream and the caller wants to show progress. Each call carries
+	// everything written so far, not the increment: a consumer that renders it
+	// does not have to accumulate, and one that misses a call is not left with
+	// a hole in the middle of a sentence.
+	//
+	// It is called from the goroutine reading the command and must return
+	// quickly -- a slow consumer stalls the agent's output.
+	OnText func(text string)
 	// Session carries the conversation across runs. When it names one, the
 	// agent resumes it instead of starting from an empty context and
 	// rebuilding its understanding from the prompt.
@@ -190,9 +199,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Session.Started() {
 		resumeID = req.Session.ID
 	}
+	// Streaming is only worth asking for when something is watching and the
+	// driver can deliver it. Otherwise print mode stays, which is one result
+	// object instead of a few thousand lines.
+	streamer, canStream := r.driver.(vm.Streaming)
+	streaming := canStream && req.OnText != nil
 
 	started := time.Now()
-	exec, err := r.invoke(ctx, req, env, resumeID, timeout)
+	exec, err := r.invoke(ctx, req, env, resumeID, timeout, streaming, streamer)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +220,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 		resumed = false
 		req.Session.ID = ""
 		req.Session.Accounted = domain.Usage{}
-		exec, err = r.invoke(ctx, req, env, "", timeout)
+		exec, err = r.invoke(ctx, req, env, "", timeout, streaming, streamer)
 		if err != nil {
 			return nil, err
 		}
@@ -268,9 +282,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 }
 
 // invoke runs the agent once, optionally resuming a conversation.
-func (r *Runner) invoke(ctx context.Context, req Request, env map[string]string, resumeID string, timeout time.Duration) (*vm.ExecResult, error) {
-	exec, err := r.driver.Exec(ctx, req.InstanceID, vm.Command{
-		Argv: r.argv(resumeID),
+func (r *Runner) invoke(ctx context.Context, req Request, env map[string]string, resumeID string, timeout time.Duration, streaming bool, streamer vm.Streaming) (*vm.ExecResult, error) {
+	cmd := vm.Command{
+		Argv: r.argv(resumeID, streaming),
 		Dir:  req.Dir,
 		Env:  env,
 		// The prompt goes over stdin rather than the command line: workstream
@@ -278,7 +292,22 @@ func (r *Runner) invoke(ctx context.Context, req Request, env map[string]string,
 		// characters no argv should have to carry.
 		Stdin:   []byte(req.Prompt),
 		Timeout: timeout,
-	})
+	}
+
+	var (
+		exec *vm.ExecResult
+		err  error
+	)
+	if streaming {
+		reader := &streamReader{}
+		exec, err = streamer.ExecStream(ctx, req.InstanceID, cmd, func(line []byte) {
+			if reader.push(line) {
+				req.OnText(reader.text())
+			}
+		})
+	} else {
+		exec, err = r.driver.Exec(ctx, req.InstanceID, cmd)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("agent: run in %s: %w", req.InstanceID, err)
 	}
@@ -291,13 +320,21 @@ func (r *Runner) invoke(ctx context.Context, req Request, env map[string]string,
 // here. Choosing it would need the installed version to accept --session-id,
 // and reading it back works with any version that can resume at all: if none
 // comes back, each run simply starts fresh, which is what happened before.
-func (r *Runner) argv(resumeID string) []string {
+func (r *Runner) argv(resumeID string, streaming bool) []string {
 	argv := []string{
 		r.cfg.Binary,
-		// Print mode: run to completion non-interactively and emit a machine
-		// readable result rather than a TUI.
+		// Print mode: run non-interactively and emit a machine readable
+		// result rather than a TUI.
 		"-p",
-		"--output-format", "json",
+	}
+	if streaming {
+		// One JSON object per line as the run proceeds, the last of which is
+		// the result print mode would have returned. --verbose is required
+		// alongside it, and partial messages are what make the answer appear
+		// as it is written rather than in finished paragraphs.
+		argv = append(argv, "--output-format", "stream-json", "--verbose", "--include-partial-messages")
+	} else {
+		argv = append(argv, "--output-format", "json")
 	}
 	if resumeID != "" {
 		// Continue the conversation instead of starting from an empty context
@@ -332,8 +369,11 @@ func parseResult(stdout string) *claudeResult {
 		return nil
 	}
 
+	// Only a result object counts. Stream mode emits many typed objects, and
+	// accepting any of them would read an assistant turn as the result --
+	// which carries no cost, so the run would silently look free.
 	var direct claudeResult
-	if err := json.Unmarshal([]byte(trimmed), &direct); err == nil && direct.Type != "" {
+	if err := json.Unmarshal([]byte(trimmed), &direct); err == nil && direct.Type == "result" {
 		return &direct
 	}
 
