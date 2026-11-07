@@ -1144,6 +1144,8 @@ const ROUTES = [
 ];
 
 async function route() {
+  // Suspended while the sign-in form is up; see signingIn.
+  if (signingIn) return;
   if (disposeView) { disposeView(); disposeView = null; }
 
   const [path, queryString = ""] = (location.hash || "#/").split("?");
@@ -1212,7 +1214,15 @@ window.addEventListener("hashchange", route);
 // Sign-in screen. Deliberately plain: this is the one part of the interface
 // expected to be replaced wholesale by a real web application, so it gets no
 // more than it needs.
+// signingIn suspends this application's router. The sign-in component may
+// navigate for its own steps, and whatever it pushes is not a route here: left
+// unguarded, entering an email replaced the form with "Not found" half way
+// through signing in. Virtual routing is requested as well, but the guard is
+// what makes it safe regardless of whether the provider honours it.
+let signingIn = false;
+
 function renderSignIn(reason) {
+  signingIn = true;
   live.stop();
   // Otherwise the header reads "connecting" behind the sign-in form, which is
   // not true and suggests the control plane is unreachable.
@@ -1290,6 +1300,7 @@ async function start() {
     }
   }
 
+  signingIn = false;
   live.start();
   refreshStatus();
   setInterval(refreshStatus, 5000);
