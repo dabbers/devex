@@ -314,21 +314,27 @@ Only the publishable key is needed to verify a token -- it encodes the instance
 host, which is where the issuer and signing keys come from. The secret key is
 used solely to resolve a new user's email for attribution.
 
-### What is still manual
+### The proxy password is gone
 
-The deployed instance keeps its proxy password for now. The application
-enforces its own boundary, so the password is redundant in principle, but a
-complete sign-in has not been driven to the end: a user created through the
-provider's backend API has no second factor enrolled, so the flow stops there.
-Removing the one access path that is known to work, on the assumption that the
-other one completes, is not a trade worth making. Sign in once by hand, then
-the password comes off.
+The deployed instance briefly carried an HTTP basic-auth password at the proxy,
+as a stand-in while the application had no boundary of its own. It has been
+removed, and that is a hardening rather than a loosening: a single static
+credential, shared and unrotatable, is weaker than a session a provider issues
+and expires, and it was redundant the moment the application started refusing
+unidentified requests.
 
-That removal is also what unblocks the preview edge described above: the
-proxy attaches its password per application, so every hostname on it inherits
-one, and previews must not be authenticated. Once the application is the only
-thing authenticating, previews can be published alongside the panel on the same
-listener -- which the host mux already keeps separate.
+Verified afterwards with no credentials at all: the health check, the sign-in
+configuration and the page itself answer, and every data route -- overview,
+repositories, workspaces, the audit trail, the event stream and the shell --
+returns 401. The retired password buys nothing. The page carries no data of its
+own; it is a shell that reads the open sign-in configuration, sees it is not
+signed in, and shows the form without requesting anything it would be refused.
+
+This also removes the obstacle that made a per-hostname preview router
+impossible: the proxy attached its password per application, so every hostname
+on it inherited one, and previews must not be authenticated. What remains in
+the way of the public preview edge is only the wildcard-routing problem
+described above.
 
 A development instance of an identity provider may also need this deployment's
 origin added to it before sign-in completes from that hostname.
