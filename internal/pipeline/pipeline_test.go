@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -72,7 +73,7 @@ func (d *stubDriver) Create(_ context.Context, spec vm.Spec) (*vm.Instance, erro
 		Name:    spec.Name,
 		State:   vm.StateRunning,
 		Spec:    spec,
-		Address: "172.30.0.2",
+		Address: "127.0.0.1",
 	}
 	d.created[instance.ID] = instance
 	return instance, nil
@@ -214,9 +215,15 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	if err := st.CreateProject(ctx, project); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
+	// A real listener on a real port, because provisioning now waits for the
+	// service to answer and that check is an actual network probe. A stub
+	// that reports the start command succeeded while nothing listens is a
+	// stub that lies: it made every one of these tests wait out the health
+	// timeout and then fail.
+	servicePort := listeningPort(t)
 	service := &domain.Service{
 		ProjectID: project.ID, Name: "web", Kind: domain.ServiceWeb,
-		Command: "npm run dev", Port: 5173, Exposed: true, Primary: true,
+		Command: "npm run dev", Port: servicePort, Exposed: true, Primary: true,
 	}
 	if err := st.CreateService(ctx, service); err != nil {
 		t.Fatalf("CreateService: %v", err)
@@ -762,4 +769,28 @@ func claudeResultJSON(result string, in, out int64, cost float64, sessionID stri
 		},
 	})
 	return string(body)
+}
+
+// listeningPort opens a socket for the test's lifetime and returns its port,
+// standing in for a dev server that came up on the machine.
+func listeningPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	// Accept and drop: the health probe only needs the connection to be
+	// accepted, and an unaccepted backlog would still answer but leaves
+	// sockets in a confusing state.
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	return listener.Addr().(*net.TCPAddr).Port
 }
