@@ -762,11 +762,49 @@ function validateButton(fork) {
 // reachable. An agent or a person debugging a broken preview needs to know a
 // worker or a database is part of this project; its absence from the list
 // would read as "there isn't one" rather than "it has no URL".
-function servicesSection(services, previews) {
+
+// serviceStatusTag says what a service is doing. Running and reachable are
+// separate because a service can be up and not yet answering, which is what
+// starting looks like and is not a failure.
+function serviceStatusTag(status) {
+  if (status.reachable) return el("span", { class: "svc-ok", text: " · answering" });
+  if (status.running) return el("span", { class: "svc-wait", text: " · starting" });
+  return el("span", { class: "svc-down", text: ` · not running${status.detail ? ` (${status.detail})` : ""}` });
+}
+
+// showServiceLogs opens a service's recent output.
+async function showServiceLogs(workspaceID, name) {
+  const root = view();
+  clear(root);
+  root.append(pageHead(`${name} log`, {
+    crumbs: [
+      { label: "Workspaces", href: "#/workspaces" },
+      { label: "Workspace", href: `#/workspace/${workspaceID}` },
+      { label: "Log" },
+    ],
+  }));
+  const body = el("pre", { class: "service-log", text: "Reading…" });
+  root.append(section("Recent output", body));
+  try {
+    const data = await api.get(`/v1/workspaces/${workspaceID}/services/${name}/logs`);
+    // textContent, never innerHTML: this is a process's output.
+    body.textContent = data.logs || "(nothing logged yet)";
+  } catch (err) {
+    body.textContent = err.message;
+  }
+}
+
+function servicesSection(services, previews, options) {
   const urlFor = {};
   for (const entry of previews || []) {
     if (entry.service_id) urlFor[entry.service_id] = entry.url;
   }
+  // Status is looked up live rather than stored: a recorded one goes stale
+  // the moment a dev server falls over, and "running" when it is not is worse
+  // than no answer.
+  const statusFor = {};
+  for (const entry of (options && options.status) || []) statusFor[entry.name] = entry;
+  const workspaceID = options && options.workspaceID;
 
   const rows = services.map((service) => {
     const url = urlFor[service.id];
@@ -777,11 +815,22 @@ function servicesSection(services, previews) {
       detail.push(`needs ${service.depends_on.join(", ")}`);
     }
 
+    const status = statusFor[service.name];
     return el("div", { class: "service-row" },
       el("div", {},
         el("span", { class: "service-name", text: service.name }),
         el("span", { class: "muted", text: ` ${service.kind}` }),
-        service.primary ? el("span", { class: "muted", text: " · front door" }) : null),
+        service.primary ? el("span", { class: "muted", text: " · front door" }) : null,
+        status ? serviceStatusTag(status) : null,
+        // The log is where the reason a service would not start actually is,
+        // so it is one click from the service rather than somewhere else.
+        workspaceID && service.command
+          ? el("button", {
+              class: "btn btn-secondary btn-sm service-logs",
+              text: "Log",
+              onclick: () => showServiceLogs(workspaceID, service.name),
+            })
+          : null),
       el("div", { class: "muted", text: detail.join(" · ") }),
       service.command
         ? el("div", { class: "mono muted service-command", text: service.command })
@@ -937,7 +986,14 @@ async function renderWorkspace(workspaceID) {
       el("dd", { text: ws.last_used_at ? relativeTime(ws.last_used_at) : "never" }))));
 
   if (data.services && data.services.length) {
-    root.append(servicesSection(data.services, previews));
+    let status = null;
+    try {
+      status = (await api.get(`/v1/workspaces/${ws.id}/services`)).status;
+    } catch {
+      // The definitions are still worth showing; a machine that cannot be
+      // reached is itself part of the answer.
+    }
+    root.append(servicesSection(data.services, previews, { status, workspaceID: ws.id }));
   }
 
   // The same workspace panel sub-tasks use: the machine and its previews are

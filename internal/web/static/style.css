@@ -581,3 +581,22 @@ details.data pre {
   font-style: italic;
   margin-top: var(--space-1);
 }
+
+/* Service state, said in words rather than coloured dots: "starting" and
+   "not running" are different situations and a dot cannot tell them apart. */
+.svc-ok { color: var(--color-accent-2-700); }
+.svc-wait { color: var(--ink-60); }
+.svc-down { color: var(--color-accent-700); }
+
+.service-logs { margin-left: var(--space-2); }
+
+/* A process's output, kept as it was written. */
+.service-log {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  margin: 0;
+  max-height: 600px;
+  overflow-y: auto;
+}

@@ -152,6 +152,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/workspaces/{workspace}/stop", s.stopWorkspace)
 	mux.HandleFunc("POST /v1/workspaces/{workspace}/archive", s.archiveWorkspace)
 	mux.HandleFunc("GET /v1/workspaces/{workspace}/shell", s.workspaceShell)
+	mux.HandleFunc("GET /v1/workspaces/{workspace}/services", s.workspaceServices)
+	mux.HandleFunc("GET /v1/workspaces/{workspace}/services/{service}/logs", s.workspaceServiceLogs)
 	mux.HandleFunc("GET /v1/workspaces/{workspace}/messages", s.listMessages)
 	mux.HandleFunc("POST /v1/workspaces/{workspace}/messages", s.sendMessage)
 

@@ -287,3 +287,77 @@ func (s *Server) workspaceForUser(r *http.Request) (*domain.Workspace, error) {
 	}
 	return ws, nil
 }
+
+// workspaceServices reports what each service is doing right now.
+//
+// Live rather than stored: a recorded status goes stale the moment a dev
+// server falls over, and "it says running" when it is not is worse than a
+// slightly slower page.
+func (s *Server) workspaceServices(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ws, err := s.workspaceForUser(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	services, err := s.store.ListServices(ctx, ws.ProjectID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	response := map[string]any{"services": services}
+	if s.workspaces != nil && ws.InstanceID != "" {
+		status, err := s.workspaces.Status(ctx, ws, services)
+		if err != nil {
+			// The definitions are still worth returning: a machine that
+			// cannot be reached is itself the answer to "what is running".
+			response["status_error"] = err.Error()
+		} else {
+			response["status"] = status
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// workspaceServiceLogs returns the tail of one service's output, which is
+// where the reason a service would not start actually is.
+func (s *Server) workspaceServiceLogs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ws, err := s.workspaceForUser(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if s.workspaces == nil {
+		writeStatus(w, http.StatusNotImplemented, "this deployment cannot read service logs")
+		return
+	}
+
+	name := r.PathValue("service")
+	// Only a service this project declares, so the path cannot be used to
+	// read an arbitrary file off the machine.
+	services, err := s.store.ListServices(ctx, ws.ProjectID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	known := false
+	for _, service := range services {
+		if service.Name == name {
+			known = true
+			break
+		}
+	}
+	if !known {
+		writeStatus(w, http.StatusNotFound, "this project has no service called "+name)
+		return
+	}
+
+	logs, err := s.workspaces.Logs(ctx, ws, name, intParam(r, "lines", 200))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"service": name, "logs": logs})
+}

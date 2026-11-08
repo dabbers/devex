@@ -162,6 +162,13 @@ func (m *Manager) bringUp(ctx context.Context, w *domain.Workspace) (*Started, e
 		return nil, err
 	}
 
+	// Services before previews: a route published to a port nothing serves is
+	// a link that goes nowhere, and the whole point of the preview is that it
+	// is the running thing.
+	if err := m.startServices(ctx, w, instance, services, env); err != nil {
+		return nil, err
+	}
+
 	previews := agent.Previews{URLs: map[string]string{}}
 	if m.preview != nil {
 		routes, primary, err := m.preview.AllocateAll(ctx, preview.Target{ID: w.ID, Name: w.Name}, project, services, instance.Address)
@@ -236,8 +243,20 @@ func (m *Manager) Stop(ctx context.Context, w *domain.Workspace) error {
 	}
 	*w = *moved
 
-	// The machine is deliberately left alone. Nothing is reclaimed
-	// automatically, and the disk holds uncommitted work.
+	// The services go down; the machine is deliberately left alone. Nothing
+	// is reclaimed automatically, and the disk holds uncommitted work.
+	if w.InstanceID != "" {
+		if instance, err := m.driver.Get(ctx, w.InstanceID); err == nil {
+			services, err := m.store.ListServices(ctx, w.ProjectID)
+			if err != nil {
+				return err
+			}
+			m.stopServices(ctx, instance, services)
+		} else if !errors.Is(err, vm.ErrNotFound) {
+			return fmt.Errorf("workspace: look up machine %s: %w", w.InstanceID, err)
+		}
+	}
+
 	stopped, err := m.store.TransitionWorkspace(ctx, w.ID,
 		domain.WorkspaceStopping, domain.WorkspaceStopped, "")
 	if err != nil {
