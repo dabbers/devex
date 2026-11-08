@@ -155,6 +155,13 @@ func (m *Manager) bringUp(ctx context.Context, w *domain.Workspace) (*Started, e
 		return nil, err
 	}
 
+	// The code has to be on the machine before anything else makes sense: an
+	// agent in an empty directory and a preview route pointing at a port
+	// nothing serves are both the same mistake.
+	if err := m.ensureCheckout(ctx, w, repo, instance, env); err != nil {
+		return nil, err
+	}
+
 	previews := agent.Previews{URLs: map[string]string{}}
 	if m.preview != nil {
 		routes, primary, err := m.preview.AllocateAll(ctx, preview.Target{ID: w.ID, Name: w.Name}, project, services, instance.Address)
