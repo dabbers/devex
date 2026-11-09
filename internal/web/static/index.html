@@ -12,11 +12,19 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="#/">dabberz</a>
+    <a class="brand" href="#/">
+      <!-- The burst from the original dabberz mark, redrawn flat: the one
+           element both the 2007 and the 2014 sites shared. -->
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 1.5 14.2 8l6.3-2.4-4.1 5.4 5.6 3.6-6.7.6 1.6 6.6-5-4.6-5 4.6 1.6-6.6-6.7-.6 5.6-3.6L3.5 5.6 9.8 8z"/>
+      </svg>
+      <span>dabberz</span>
+    </a>
     <nav class="tabs">
       <a href="#/" data-route="repos">Repositories</a>
       <a href="#/workspaces" data-route="workspaces">Workspaces</a>
       <a href="#/activity" data-route="activity">Activity</a>
+      <a href="#/account" data-route="account">Account</a>
     </nav>
     <div class="status" id="status-strip" aria-live="polite"></div>
     <div class="conn" id="conn" title="Live connection"><span class="dot"></span><span id="conn-label">connecting</span></div>

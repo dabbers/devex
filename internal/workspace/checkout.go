@@ -167,3 +167,45 @@ func firstLine(text string) string {
 	}
 	return line
 }
+
+// gitEnv returns the environment git itself runs with.
+//
+// Deliberately not the machine's environment. The repo's secrets are injected
+// into the instance and so are readable by the agent and by every service a
+// project starts; a person's GitHub token is not a repo secret and has no
+// business being there. It is handed to the git invocations that need it and
+// nowhere else, so a workspace can clone a private repository without the
+// credential that opened it being left lying around inside.
+//
+// A token the user set as a repo secret still wins: that is an explicit
+// choice, and it is also what lets a repo be cloned by a machine account
+// rather than by whoever happened to open the workspace.
+func (m *Manager) gitEnv(ctx context.Context, w *domain.Workspace, env map[string]string) map[string]string {
+	if m.gitTokens == nil {
+		return env
+	}
+	if existing, ok := env[GitTokenEnv]; ok && existing != "" {
+		return env
+	}
+
+	token, err := m.gitTokens.Token(ctx, w.UserID)
+	if err != nil || token == "" {
+		// Not a failure: a public repository clones without a credential, and
+		// a private one fails later with git's own message, which says more
+		// about what went wrong than anything that could be guessed here.
+		if err != nil {
+			m.opts.Logger.Info("no per-user git credential for this workspace",
+				"workspace", w.ID, "user", w.UserID, "reason", err)
+		}
+		return env
+	}
+
+	// A copy, so the caller's map -- which does reach the machine -- is not
+	// quietly given a credential.
+	scoped := make(map[string]string, len(env)+1)
+	for name, value := range env {
+		scoped[name] = value
+	}
+	scoped[GitTokenEnv] = token
+	return scoped
+}

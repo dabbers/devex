@@ -21,6 +21,7 @@ import (
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/api"
 	"github.com/dabbers/devex/internal/config"
+	"github.com/dabbers/devex/internal/gitauth"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/merge"
@@ -204,8 +205,20 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	// and previews answering", shared by forks and by workspaces opened by
 	// hand. Written twice the two would drift, and the half that gets less use
 	// would be the half that breaks.
+	// Each account clones with its own GitHub connection rather than with one
+	// shared deploy token. The token is never stored: the identity provider
+	// holds it, and it is fetched when a clone needs one.
+	gitTokens := gitauth.New(gitauth.Options{
+		SecretKey: cfg.Auth.Clerk.SecretKey,
+		Users:     db,
+	})
+	if gitTokens.Configured() {
+		logger.Info("per-account git credentials ready", "provider", gitauth.Provider)
+	}
+
 	workspaces, err := workspace.New(workspace.Deps{
 		Store: db, Driver: driver, Preview: allocator, Vault: vault,
+		GitTokens: gitTokens,
 	}, workspace.Options{
 		Resources: cfg.Driver.ForkResources,
 		Image:     cfg.Driver.Image,
@@ -254,7 +267,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
 		UI: ui, Authn: authenticator, Workspaces: workspaces,
-		Agent: agentRunner, Logger: logger,
+		Agent: agentRunner, GitTokens: gitTokens, Logger: logger,
 	})
 	if err != nil {
 		return nil, err

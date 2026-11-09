@@ -423,3 +423,64 @@ described above.
 
 A development instance of an identity provider may also need this deployment's
 origin added to it before sign-in completes from that hostname.
+
+
+## Multiple users, each with their own GitHub
+
+Two things had to be true before a second person could be let in, and neither
+was.
+
+**Tenancy was per-handler rather than per-route.** Authentication said who was
+asking; what they were allowed to ask about was left to each handler
+remembering to compare a user id, and several did not. Six routes served
+anyone who knew an id, and `GET /v1/forks/{fork}/shell` was a terminal on the
+machine holding somebody else's checkout. `POST /v1/tasks` took a repo id in
+its body and never checked it at all.
+
+The gate is now derived from the route pattern: a pattern naming `{repo}`,
+`{task}`, `{fork}` or `{workspace}` is authorized before its handler runs, and
+a route cannot opt out by forgetting. The test walks the registered route
+table rather than a copy of it, so a route added later is covered the day it
+is added. Something owned by somebody else is reported as missing rather than
+forbidden, and a nonexistent id answers identically, so the two cannot be told
+apart.
+
+**One shared deploy token does not survive more than one person.** Whose
+repository is cloned and what shows up in the commit history are per-account
+questions. `internal/gitauth` resolves a git credential per user from the
+identity provider, which already holds the GitHub connection. Nothing is
+stored: no row, no vault entry, no file. Revoking the connection at GitHub
+takes effect without dabberz having to notice.
+
+The credential is handed to git and to nothing else. The repo's secrets are
+injected into the machine and so are readable by the agent and by every
+service a project runs; a person's GitHub token is not a repo secret and has
+no business being there. A `GIT_TOKEN` set as a repo secret still wins, which
+is what lets a repo be cloned by a machine account rather than by whoever
+happened to open the workspace.
+
+### The one thing only the account owner can fix
+
+Clerk will not hand over a provider token while a connection uses its **shared
+development OAuth credentials**. It answers
+`oauth_shared_credentials_token_retrieval_not_supported`, which is what the
+current `pk_test` instance will do. Making this work needs a GitHub OAuth app
+of our own, registered and set as custom credentials for the GitHub connection
+in the Clerk dashboard; connections made before that switch stay unretrievable
+(`oauth_shared_credentials_stored_token_not_retrievable`), so each user
+reconnects once afterwards. Private repositories additionally need the `repo`
+scope on that app.
+
+The account page says exactly this rather than reporting a generic failure,
+because the symptom -- a GitHub account that is plainly connected and still
+produces no token -- is otherwise unreadable.
+
+## The look
+
+The maroon came back. Both previous dabberz sites had the same one element: a
+dark maroon band across the top with the wordmark and the burst on it. The
+2007 one did it with gradients, bevels and highlights and the 2014 one did it
+flat; this does it flat, because the page underneath is set in a serif and a
+bevelled bar would fight it. The band is deliberately the only dark surface in
+the interface, and the two status inks invert on it, since the cyan is
+unreadable against maroon and the maroon would vanish into it.

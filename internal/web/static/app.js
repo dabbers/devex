@@ -1527,11 +1527,114 @@ const currentPath = () => (location.hash || "#/").split("?")[0];
 
 let disposeView = null;
 
+
+// ---------------------------------------------------------------- account
+
+// The account page. Its job is one question: can this person's own GitHub
+// credential be used to clone and push, and if not, what do they do about it.
+//
+// The connection itself is made in the identity provider's account UI, which
+// is what makes it self-serve: dabberz never sees the OAuth exchange and never
+// stores a token. This page reports and explains, and hands off for the rest.
+async function renderAccount() {
+  const root = view();
+  clear(root);
+  root.append(pageHead("Your account", {
+    lede: "Who you are signed in as, and what dabberz can do on your behalf.",
+  }));
+
+  const [who, link] = await Promise.all([
+    api.get("/v1/auth/whoami").catch(() => null),
+    api.get("/v1/github").catch((err) => ({ github: { blocked: err.message } })),
+  ]);
+
+  if (who?.user) {
+    const identity = el("div", { class: "section" },
+      el("h6", { text: "Signed in" }),
+      el("p", { text: who.user.email || who.user.id }),
+      who.provider ? el("p", { class: "muted", text: `Identity provided by ${who.provider}.` }) : null,
+    );
+    root.append(identity);
+  }
+
+  const host = el("div", { class: "section" });
+  root.append(host);
+  renderGithubLink(host, link?.github || {});
+}
+
+// renderGithubLink draws the connection state and the one action that moves it
+// forward. Redrawn in place rather than re-routing, so a recheck does not
+// scroll the page back to the top.
+function renderGithubLink(host, github) {
+  clear(host);
+  host.append(el("h6", { text: "GitHub" }));
+
+  const connected = Boolean(github.connected);
+  const usable = Boolean(github.usable);
+  const tone = usable ? "good" : connected ? "warn" : "idle";
+  const words = usable ? "connected" : connected ? "connected, not usable" : "not connected";
+
+  host.append(el("p", {},
+    el("span", { class: `tag tag-${tone}`, text: words }),
+    github.account ? el("span", { class: "muted", text: ` ${github.account}` }) : null,
+  ));
+
+  if (usable) {
+    host.append(el("p", { class: "muted", text:
+      "Workspaces you start clone with your own GitHub credential. It is never stored by dabberz: " +
+      "it is read from your identity provider when a clone needs one, and it is handed to git only — " +
+      "not to the machine, the agent, or the services your project runs." }));
+    if (github.scopes?.length) {
+      host.append(el("p", { class: "muted", text: `Permissions granted: ${github.scopes.join(", ")}.` }));
+    }
+    if (!github.scopes?.includes("repo")) {
+      host.append(el("p", { class: "muted", text:
+        "Private repositories need the repo scope. Without it public repositories still clone." }));
+    }
+  } else if (github.blocked) {
+    host.append(el("p", { text: github.blocked }));
+  }
+
+  const row = el("div", { class: "actions" });
+  if (window.Clerk?.openUserProfile) {
+    row.append(el("button", {
+      class: connected ? "btn btn-secondary" : "btn btn-primary",
+      text: connected ? "Manage connected accounts" : "Connect GitHub",
+      onclick: () => {
+        try {
+          window.Clerk.openUserProfile();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    }));
+  }
+  if (github.configured) {
+    row.append(el("button", {
+      class: "btn btn-secondary",
+      text: "Check again",
+      onclick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          const fresh = await api.send("POST", "/v1/github/recheck");
+          renderGithubLink(host, fresh.github || {});
+        } catch (err) {
+          toast(err.message, true);
+          button.disabled = false;
+        }
+      },
+    }));
+  }
+  host.append(row);
+}
+
 const ROUTES = [
   [/^#\/$/, () => renderRepos(), "repos"],
   [/^#\/workspaces$/, () => renderWorkspaces(), "workspaces"],
   [/^#\/workspace\/([\w-]+)$/, (m) => renderWorkspace(m[1]), "workspaces"],
   [/^#\/activity$/, (_, params) => renderActivity(params), "activity"],
+  [/^#\/account$/, () => renderAccount(), "account"],
   [/^#\/new$/, (_, params) => renderNew(params), "repos"],
   [/^#\/repo\/([\w-]+)$/, (m) => renderRepo(m[1]), "repos"],
   [/^#\/task\/([\w-]+)$/, (m) => renderTask(m[1]), "repos"],

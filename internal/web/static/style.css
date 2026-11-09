@@ -111,6 +111,12 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
 
 /* ---------------------------------------------------------------- chrome */
 
+/* The masthead is the one thing every dabberz has had: a dark maroon band
+   across the top with the wordmark on it. The 2007 site did it with gradients
+   and bevels and the 2014 one did it flat; this does it flat, because the page
+   below is set in a serif and a bevelled bar would fight it.
+
+   The band is deliberately the only dark surface in the interface. */
 .topbar {
   position: sticky;
   top: 0;
@@ -119,27 +125,42 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) clamp(16px, 4vw, 56px);
-  background: var(--color-bg);
+  background: var(--color-accent-900);
+  border-bottom: 3px solid var(--color-accent-700);
+  color: var(--color-neutral-100);
   flex-wrap: wrap;
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
   font-size: 19px;
   letter-spacing: -0.02em;
   text-decoration: none;
-  color: inherit;
+  color: #fff;
+}
+
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  /* The burst was the accent in both eras, never the body colour. */
+  fill: var(--color-accent-400);
+  flex: none;
 }
 
 .tabs { display: flex; gap: var(--space-3); }
 .tabs a {
-  color: var(--ink-70);
+  color: color-mix(in srgb, #fff 72%, transparent);
   text-decoration: none;
   font-size: 14px;
+  padding-bottom: 2px;
+  border-bottom: 2px solid transparent;
 }
-.tabs a:hover { color: var(--color-accent); }
-.tabs a.active { color: var(--color-text); border-bottom: 2px solid var(--color-accent); }
+.tabs a:hover { color: #fff; }
+.tabs a.active { color: #fff; border-bottom-color: var(--color-accent-400); }
 
 .status {
   margin-left: auto;
@@ -148,16 +169,19 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
   font-size: 11px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--ink-60);
+  color: color-mix(in srgb, #fff 62%, transparent);
   align-items: center;
   flex-wrap: wrap;
 }
-.status b { font-weight: var(--font-heading-weight); color: var(--color-text); font-variant-numeric: tabular-nums; }
+.status b { font-weight: var(--font-heading-weight); color: #fff; font-variant-numeric: tabular-nums; }
 
-.conn { display: inline-flex; align-items: center; gap: 6px; }
-.conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-neutral-400); }
-.conn.live .dot { background: var(--color-accent-2); }
-.conn.down .dot { background: var(--color-accent); }
+.conn { display: inline-flex; align-items: center; gap: 6px; color: color-mix(in srgb, #fff 62%, transparent); }
+.conn .dot { width: 7px; height: 7px; border-radius: 50%; background: color-mix(in srgb, #fff 45%, transparent); }
+/* On a dark band the two inks invert: the cyan is too dark to read against
+   maroon, and the maroon would vanish into it. */
+.conn.live .dot { background: var(--color-accent-2-300); }
+.conn.down .dot { background: var(--color-accent-300); }
+.topbar :focus-visible { outline-color: var(--color-accent-300); }
 
 /* ---------------------------------------------------------------- layout */
 
@@ -373,6 +397,9 @@ details.data pre {
 
 .empty { padding: var(--space-6) 0; color: var(--ink-60); }
 .muted { color: var(--ink-60); }
+
+/* A row of buttons under a section's prose. */
+.actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; margin-top: var(--space-3); }
 .mono { font-family: var(--font-mono); font-size: 12px; }
 .row-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-top: var(--space-3); }
 .row-actions + .section { margin-top: var(--space-6); }

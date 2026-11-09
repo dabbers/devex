@@ -47,6 +47,7 @@ type Server struct {
 	authn      auth.Authenticator
 	workspaces *workspace.Manager
 	agent      *agent.Runner
+	gitTokens  GitLinks
 	logger     *slog.Logger
 	streamGap  time.Duration
 	// routes is the registered route table, recorded as it is built so the
@@ -78,6 +79,9 @@ type Deps struct {
 	// without it a workspace is somewhere to work but not somewhere to ask
 	// for work.
 	Agent *agent.Runner
+	// GitLinks reports and resolves each account's GitHub connection.
+	// Optional: without it the UI says the deployment does not link accounts.
+	GitTokens GitLinks
 	// Authn identifies the person behind each request. It is required: without
 	// it every request would be anonymous, and this process hands out a shell.
 	// internal/auth.Single is the explicit way to run without a provider.
@@ -105,7 +109,8 @@ func New(deps Deps) (*Server, error) {
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
 		authn: deps.Authn, workspaces: deps.Workspaces, agent: deps.Agent,
-		logger: logger,
+		gitTokens: deps.GitTokens,
+		logger:    logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -125,6 +130,10 @@ func (s *Server) Handler() http.Handler {
 	// unified audit trail behind it.
 	rt.handle("GET /v1/overview", s.overview)
 	rt.handle("GET /v1/audit", s.auditFeed)
+
+	// The signed-in account's own GitHub connection.
+	rt.handle("GET /v1/github", s.githubLink)
+	rt.handle("POST /v1/github/recheck", s.recheckGithubLink)
 
 	rt.handle("GET /v1/repos", s.listRepos)
 	rt.handle("POST /v1/repos", s.createRepo)

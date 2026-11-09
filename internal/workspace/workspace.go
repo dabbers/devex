@@ -24,12 +24,23 @@ import (
 	"github.com/dabbers/devex/internal/vm"
 )
 
+// GitTokens resolves the git credential a user's own work is done with.
+//
+// An interface, and optional: a deployment with no identity provider still
+// starts workspaces, it just clones with whatever the repo's own secrets
+// carry.
+type GitTokens interface {
+	Token(ctx context.Context, userID string) (string, error)
+}
+
 // Deps are the collaborators a manager needs.
 type Deps struct {
 	Store   *store.Store
 	Driver  vm.Driver
 	Preview *preview.Allocator
 	Vault   *secrets.Vault
+	// GitTokens is consulted when the repo's own secrets carry no token.
+	GitTokens GitTokens
 }
 
 // Options configure what a workspace gets.
@@ -50,11 +61,12 @@ func (o Options) withDefaults() Options {
 
 // Manager starts and stops workspaces.
 type Manager struct {
-	store   *store.Store
-	driver  vm.Driver
-	preview *preview.Allocator
-	vault   *secrets.Vault
-	opts    Options
+	store     *store.Store
+	driver    vm.Driver
+	preview   *preview.Allocator
+	vault     *secrets.Vault
+	gitTokens GitTokens
+	opts      Options
 }
 
 // New returns a manager.
@@ -65,7 +77,8 @@ func New(deps Deps, opts Options) (*Manager, error) {
 	return &Manager{
 		store: deps.Store, driver: deps.Driver,
 		preview: deps.Preview, vault: deps.Vault,
-		opts: opts.withDefaults(),
+		gitTokens: deps.GitTokens,
+		opts:      opts.withDefaults(),
 	}, nil
 }
 
@@ -158,7 +171,7 @@ func (m *Manager) bringUp(ctx context.Context, w *domain.Workspace) (*Started, e
 	// The code has to be on the machine before anything else makes sense: an
 	// agent in an empty directory and a preview route pointing at a port
 	// nothing serves are both the same mistake.
-	if err := m.ensureCheckout(ctx, w, repo, instance, env); err != nil {
+	if err := m.ensureCheckout(ctx, w, repo, instance, m.gitEnv(ctx, w, env)); err != nil {
 		return nil, err
 	}
 

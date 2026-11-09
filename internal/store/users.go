@@ -164,3 +164,16 @@ func nullableString(value string) any {
 	}
 	return value
 }
+
+// ExternalID returns the identity provider's subject for a user, or an empty
+// string when there is none.
+//
+// It exists so credential resolution can map a dabberz user onto the provider
+// without being handed the whole store to read.
+func (s *Store) ExternalID(ctx context.Context, userID string) (string, error) {
+	user, err := s.GetUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return user.ExternalID, nil
+}
