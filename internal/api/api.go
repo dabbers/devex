@@ -49,6 +49,10 @@ type Server struct {
 	agent      *agent.Runner
 	logger     *slog.Logger
 	streamGap  time.Duration
+	// routes is the registered route table, recorded as it is built so the
+	// tenancy gate can be tested against the real routes rather than a copy
+	// of them that drifts.
+	routes []string
 }
 
 // Deps are the collaborators the API exposes.
@@ -110,72 +114,73 @@ func New(deps Deps) (*Server, error) {
 
 // Handler returns the HTTP routes.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+	rt := newRouter(s)
 
-	mux.HandleFunc("GET /healthz", s.health)
+	rt.handle("GET /healthz", s.health)
 	// Read before anyone is signed in, by definition.
-	mux.HandleFunc("GET /v1/auth/config", s.authConfig)
-	mux.HandleFunc("GET /v1/auth/whoami", s.whoami)
-	mux.HandleFunc("GET /v1/capacity", s.capacity)
+	rt.handle("GET /v1/auth/config", s.authConfig)
+	rt.handle("GET /v1/auth/whoami", s.whoami)
+	rt.handle("GET /v1/capacity", s.capacity)
 	// The two surfaces the UI opens on: what is in flight everywhere, and the
 	// unified audit trail behind it.
-	mux.HandleFunc("GET /v1/overview", s.overview)
-	mux.HandleFunc("GET /v1/audit", s.auditFeed)
+	rt.handle("GET /v1/overview", s.overview)
+	rt.handle("GET /v1/audit", s.auditFeed)
 
-	mux.HandleFunc("GET /v1/repos", s.listRepos)
-	mux.HandleFunc("POST /v1/repos", s.createRepo)
-	mux.HandleFunc("GET /v1/repos/{repo}", s.getRepo)
-	mux.HandleFunc("GET /v1/repos/{repo}/projects", s.listProjects)
-	mux.HandleFunc("POST /v1/repos/{repo}/discover", s.discoverProjects)
-	mux.HandleFunc("POST /v1/repos/{repo}/projects/confirm", s.confirmProjects)
+	rt.handle("GET /v1/repos", s.listRepos)
+	rt.handle("POST /v1/repos", s.createRepo)
+	rt.handle("GET /v1/repos/{repo}", s.getRepo)
+	rt.handle("GET /v1/repos/{repo}/projects", s.listProjects)
+	rt.handle("POST /v1/repos/{repo}/discover", s.discoverProjects)
+	rt.handle("POST /v1/repos/{repo}/projects/confirm", s.confirmProjects)
 
-	mux.HandleFunc("GET /v1/repos/{repo}/secrets", s.listSecrets)
-	mux.HandleFunc("PUT /v1/repos/{repo}/secrets/{name}", s.putSecret)
-	mux.HandleFunc("DELETE /v1/repos/{repo}/secrets/{name}", s.deleteSecret)
+	rt.handle("GET /v1/repos/{repo}/secrets", s.listSecrets)
+	rt.handle("PUT /v1/repos/{repo}/secrets/{name}", s.putSecret)
+	rt.handle("DELETE /v1/repos/{repo}/secrets/{name}", s.deleteSecret)
 
-	mux.HandleFunc("GET /v1/repos/{repo}/memory", s.listFindings)
-	mux.HandleFunc("PUT /v1/repos/{repo}/memory/{slug}", s.putFinding)
+	rt.handle("GET /v1/repos/{repo}/memory", s.listFindings)
+	rt.handle("PUT /v1/repos/{repo}/memory/{slug}", s.putFinding)
 
-	mux.HandleFunc("GET /v1/tasks", s.listTasks)
-	mux.HandleFunc("POST /v1/tasks", s.createTask)
-	mux.HandleFunc("GET /v1/tasks/{task}", s.getTask)
-	mux.HandleFunc("POST /v1/tasks/{task}/plan", s.planTask)
-	mux.HandleFunc("POST /v1/tasks/{task}/answers", s.answerQuestions)
-	mux.HandleFunc("POST /v1/tasks/{task}/approve", s.approvePlan)
-	mux.HandleFunc("POST /v1/tasks/{task}/cancel", s.cancelTask)
-	mux.HandleFunc("GET /v1/tasks/{task}/forks", s.listForks)
+	rt.handle("GET /v1/tasks", s.listTasks)
+	rt.handle("POST /v1/tasks", s.createTask)
+	rt.handle("GET /v1/tasks/{task}", s.getTask)
+	rt.handle("POST /v1/tasks/{task}/plan", s.planTask)
+	rt.handle("POST /v1/tasks/{task}/answers", s.answerQuestions)
+	rt.handle("POST /v1/tasks/{task}/approve", s.approvePlan)
+	rt.handle("POST /v1/tasks/{task}/cancel", s.cancelTask)
+	rt.handle("GET /v1/tasks/{task}/forks", s.listForks)
 
-	mux.HandleFunc("GET /v1/workspaces", s.listWorkspaces)
-	mux.HandleFunc("POST /v1/workspaces", s.createWorkspace)
-	mux.HandleFunc("GET /v1/workspaces/{workspace}", s.getWorkspace)
-	mux.HandleFunc("POST /v1/workspaces/{workspace}/start", s.startWorkspace)
-	mux.HandleFunc("POST /v1/workspaces/{workspace}/stop", s.stopWorkspace)
-	mux.HandleFunc("POST /v1/workspaces/{workspace}/archive", s.archiveWorkspace)
-	mux.HandleFunc("GET /v1/workspaces/{workspace}/shell", s.workspaceShell)
-	mux.HandleFunc("GET /v1/workspaces/{workspace}/services", s.workspaceServices)
-	mux.HandleFunc("GET /v1/workspaces/{workspace}/services/{service}/logs", s.workspaceServiceLogs)
-	mux.HandleFunc("GET /v1/workspaces/{workspace}/messages", s.listMessages)
-	mux.HandleFunc("POST /v1/workspaces/{workspace}/messages", s.sendMessage)
+	rt.handle("GET /v1/workspaces", s.listWorkspaces)
+	rt.handle("POST /v1/workspaces", s.createWorkspace)
+	rt.handle("GET /v1/workspaces/{workspace}", s.getWorkspace)
+	rt.handle("POST /v1/workspaces/{workspace}/start", s.startWorkspace)
+	rt.handle("POST /v1/workspaces/{workspace}/stop", s.stopWorkspace)
+	rt.handle("POST /v1/workspaces/{workspace}/archive", s.archiveWorkspace)
+	rt.handle("GET /v1/workspaces/{workspace}/shell", s.workspaceShell)
+	rt.handle("GET /v1/workspaces/{workspace}/services", s.workspaceServices)
+	rt.handle("GET /v1/workspaces/{workspace}/services/{service}/logs", s.workspaceServiceLogs)
+	rt.handle("GET /v1/workspaces/{workspace}/messages", s.listMessages)
+	rt.handle("POST /v1/workspaces/{workspace}/messages", s.sendMessage)
 
-	mux.HandleFunc("GET /v1/forks/{fork}", s.getFork)
-	mux.HandleFunc("POST /v1/forks/{fork}/resolve", s.resolveEscalation)
-	mux.HandleFunc("POST /v1/forks/{fork}/validate", s.validateFork)
-	mux.HandleFunc("GET /v1/forks/{fork}/shell", s.shell)
+	rt.handle("GET /v1/forks/{fork}", s.getFork)
+	rt.handle("POST /v1/forks/{fork}/resolve", s.resolveEscalation)
+	rt.handle("POST /v1/forks/{fork}/validate", s.validateFork)
+	rt.handle("GET /v1/forks/{fork}/shell", s.shell)
 
-	mux.HandleFunc("GET /v1/events", s.listEvents)
-	mux.HandleFunc("GET /v1/events/stream", s.streamEvents)
+	rt.handle("GET /v1/events", s.listEvents)
+	rt.handle("GET /v1/events/stream", s.streamEvents)
 
 	// The UI is served from the same origin as the API, so the browser needs
 	// no cross-origin configuration and the page can stream events directly.
 	// More specific patterns above still win, so this only catches UI routes.
 	if s.ui != nil {
-		mux.Handle("GET /", s.ui)
+		rt.mux.Handle("GET /", s.ui)
 	}
 
 	// Authentication wraps everything, with a short list of deliberate
 	// exceptions inside. Opting routes in one at a time would leave the next
 	// route somebody adds open by default.
-	return logRequests(s.logger, s.requireUser(mux))
+	s.routes = rt.routes
+	return logRequests(s.logger, s.requireUser(rt.mux))
 }
 
 // audit records a user action. Actions taken through the control plane are
@@ -278,12 +283,7 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
-	repo, err := s.store.GetRepo(r.Context(), r.PathValue("repo"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, repo)
+	writeJSON(w, http.StatusOK, scopedRepo(r))
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -447,8 +447,15 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The repo arrives in the body, where the route pattern cannot see it.
+	repo, err := s.ownedRepo(r, req.RepoID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
 	task, err := s.orch.CreateTask(r.Context(), orchestrator.CreateTaskRequest{
-		UserID: s.userID(r), RepoID: req.RepoID, Title: req.Title, Request: req.Request,
+		UserID: s.userID(r), RepoID: repo.ID, Title: req.Title, Request: req.Request,
 		MergeTarget: req.MergeTarget, MergeTiming: req.MergeTiming,
 		IntegrationBranch: req.IntegrationBranch,
 	})
@@ -479,11 +486,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
-	task, err := s.store.GetTask(r.Context(), r.PathValue("task"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	task := scopedTask(r)
 	forks, err := s.store.ListForks(r.Context(), store.ForkFilter{TaskID: task.ID})
 	if err != nil {
 		writeError(w, err)
@@ -555,11 +558,7 @@ func (s *Server) listForks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getFork(w http.ResponseWriter, r *http.Request) {
-	fork, err := s.store.GetFork(r.Context(), r.PathValue("fork"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	fork := scopedFork(r)
 
 	response := map[string]any{
 		"fork": fork,

@@ -47,15 +47,10 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	repo, err := s.store.GetRepo(ctx, req.RepoID)
+	// The repo arrives in the body, where the route pattern cannot see it.
+	repo, err := s.ownedRepo(r, req.RepoID)
 	if err != nil {
 		writeError(w, err)
-		return
-	}
-	if repo.UserID != s.userID(r) {
-		// Not found rather than forbidden: whether somebody else's repo exists
-		// is not this user's business.
-		writeStatus(w, http.StatusNotFound, "no such repository")
 		return
 	}
 
@@ -276,13 +271,11 @@ func (s *Server) archiveWorkspace(w http.ResponseWriter, r *http.Request) {
 // workspaceForUser loads the workspace named in the path and refuses one that
 // belongs to somebody else.
 func (s *Server) workspaceForUser(r *http.Request) (*domain.Workspace, error) {
-	ws, err := s.store.GetWorkspace(r.Context(), r.PathValue("workspace"))
-	if err != nil {
-		return nil, err
-	}
-	if ws.UserID != s.userID(r) {
-		// Reported as missing, so the listing cannot be used to learn that
-		// somebody else's workspace exists.
+	// The tenancy gate loaded and authorized it before this handler ran, so
+	// there is nothing left to check here; an absent one means the route was
+	// registered without a {workspace} in its pattern.
+	ws := scopedWorkspace(r)
+	if ws == nil {
 		return nil, store.ErrNotFound
 	}
 	return ws, nil

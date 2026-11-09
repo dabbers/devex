@@ -383,11 +383,7 @@ func (s *Server) validateFork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	fork, err := s.store.GetFork(ctx, r.PathValue("fork"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	fork := scopedFork(r)
 	if fork.PreviewURL == "" {
 		writeStatus(w, http.StatusConflict, "this sub-task has no live preview yet")
 		return

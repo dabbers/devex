@@ -26,11 +26,7 @@ type shellMessage struct {
 
 // shell attaches a browser terminal to a sub-task's machine.
 func (s *Server) shell(w http.ResponseWriter, r *http.Request) {
-	fork, err := s.store.GetFork(r.Context(), r.PathValue("fork"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	fork := scopedFork(r)
 	s.attachShell(w, r, shellTarget{
 		InstanceID: fork.InstanceID,
 		Name:       fork.Name,

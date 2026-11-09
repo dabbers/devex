@@ -465,8 +465,13 @@ func TestManualValidationNeedsAPreview(t *testing.T) {
 }
 
 func TestManualValidationWithoutAUIVMIsUnavailable(t *testing.T) {
-	f := newFixtureWithoutVerifier(t)
-	if status := f.call(t, http.MethodPost, "/v1/forks/fork_x/validate", nil, nil); status != http.StatusServiceUnavailable {
+	f := buildFixture(t, false, planJSON(nil, oneWorkstream()))
+	_, forks := f.startTask(t, "add ratings")
+
+	// A fork of the caller's own, so what is being measured is the missing UI
+	// VM rather than the tenancy gate refusing an id that is not theirs.
+	status := f.call(t, http.MethodPost, "/v1/forks/"+forks[0].ID+"/validate", nil, nil)
+	if status != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 with no UI VM configured", status)
 	}
 }

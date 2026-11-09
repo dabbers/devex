@@ -79,11 +79,6 @@ func newFixture(t *testing.T, responses ...llm.Response) *fixture {
 }
 
 // newFixtureWithoutVerifier models a deployment with no shared UI VM.
-func newFixtureWithoutVerifier(t *testing.T) *fixture {
-	t.Helper()
-	return buildFixture(t, false)
-}
-
 func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *fixture {
 	t.Helper()
 	ctx := context.Background()
