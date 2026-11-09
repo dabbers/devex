@@ -96,9 +96,14 @@ agent:
 
 verify:
   # Auto-provisioning under the local driver yields a workspace in this
-  # container rather than a browser VM, which is enough to keep the pipeline
-  # wired end to end. Real verification needs the Firecracker driver.
+  # container rather than a separate browser VM. Verification still really
+  # runs: the harness drives the chromium in this image at the preview's
+  # public URL. What is missing is isolation, not the check -- every profile
+  # shares this container, so the browser is not insulated from the services
+  # it is pointed at. Real separation needs the Firecracker driver.
   ui_instance_id: ""
+  # Two profiles, because every browser here shares this container's memory
+  # with the control plane and whatever services a workspace is running.
   profiles: 2
   vm:
     auto_provision: true

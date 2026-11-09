@@ -83,10 +83,14 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		Message: truncate(content, 200),
 	})
 
-	s.runAgentTurn(ws, prompt, reply)
 	// Accepted: the agent takes minutes, and the reply arrives on the event
 	// stream rather than on this request.
+	//
+	// The response is written before the run starts, and deliberately: the
+	// background turn writes to this same reply row as it goes, so encoding it
+	// alongside a running turn is a read of something being written.
 	writeJSON(w, http.StatusAccepted, map[string]any{"message": prompt, "reply": reply})
+	s.runAgentTurn(ws, prompt, reply)
 }
 
 // runAgentTurn works the agent in the background and records what it said.

@@ -175,6 +175,9 @@ verify:
       vcpus: 2
       memory_mib: 8192
       disk_gib: 20
+  # The harness inside the UI VM. It is handed a JSON job on stdin and emits a
+  # JSON report; `dabberz-verify help` documents its own environment. It must
+  # be on the UI VM's PATH, along with a browser for it to drive.
   driver_command: ["dabberz-verify"]
   timeout: 10m
 

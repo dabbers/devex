@@ -232,7 +232,57 @@ machinery underneath:
    optional driver capability, and a run asks for it only when the driver has
    it and something is watching. The plan-and-fork path is still a separate
    door rather than something reachable from a conversation.
-5. Mobile layout for the four surfaces that make sense on a phone.
+5. ~~The verification harness: a real binary behind `verify.driver_command`.~~
+   **Done.** See below.
+6. Mobile layout for the four surfaces that make sense on a phone.
+
+## The verify loop closes
+
+`verify.driver_command` named `dabberz-verify` from the beginning and nothing
+answered to that name, so the fix loop was wired to a command that did not
+exist. `cmd/dabberz-verify` is that command: it reads a job on stdin, drives a
+real Chromium at the preview over its public URL, and writes a report on
+stdout. A failing verification exits zero, because the report is the verdict
+and the loop needs to read the reason to feed it back.
+
+There is no browser-driver dependency. DevTools is JSON over a websocket, this
+tree already had a hand-written RFC 6455 server for the terminal socket, and
+the only thing the protocol asks a client to do differently is mask its frames.
+So the framing moved to `internal/wsframe` and both ends use it: the control
+plane as a server, the harness as a client. `internal/browser` adds the client
+handshake, the command/event multiplexing, and a page visit that reports what
+it saw rather than deciding what it means.
+
+What the browser is asked:
+
+- **reachable** -- a plain request over the public URL, before a browser is
+  worth starting. A preview that only answers from inside the machine is not a
+  working preview, and that is the break this is here to catch.
+- **loads** -- the browser navigated, the document came back under 400, the
+  load event fired.
+- **renders** -- the page painted something a user could see. An agent that
+  breaks a build still serves HTTP 200, and a blank page is the most common
+  regression there is.
+- **no_page_errors** -- no uncaught exceptions.
+- **resources** -- nothing the page asked for failed or 404'd. Chrome asks for
+  a favicon whether or not a page references one, so that one is not counted.
+- **console** -- no `console.error`.
+
+Every run photographs the page, broken ones included: the screenshot is how a
+person sees what the checks are describing.
+
+**What it does not check is the intent.** The job carries what the workstream
+set out to do, and the harness cannot tell whether it was done -- it checks
+that the preview works, not that it works *as asked*. The report says so in as
+many words rather than letting a green verification imply more than it means.
+Closing that gap needs a judgement the harness does not have; the obvious
+candidate is the agent itself, reading the screenshot.
+
+The deployed image now carries chromium and the harness, so verification runs
+for real in the container rather than being wired to nothing. What the
+container still gives up is isolation: every profile shares it with the control
+plane and with whatever services a workspace is running. `--build-arg
+WITH_BROWSER=0` gets the old, much smaller image back.
 
 ## What has not been run against a real agent
 
@@ -245,6 +295,11 @@ behaviour of the real agent on a real repository.
 The gap closes when a workspace runs on a machine with KVM. Until then, treat
 every claim here as "the control plane does this correctly", not "the agent
 does good work".
+
+The verifier is no longer in that category. `cmd/dabberz-verify` is driven
+end to end in its own tests -- a real browser, a real preview served over a
+real socket, the report read back through `internal/verify` by way of a VM
+driver -- so what it reports about a page is what a browser actually saw.
 
 
 ## Later: the preview zone, and a Mac as a build runner

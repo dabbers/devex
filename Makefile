@@ -11,13 +11,18 @@ LDFLAGS := -s -w -X main.version=$(shell git describe --tags --always --dirty 2>
 all: build
 
 .PHONY: build
-build: $(BIN)/dabberzd $(BIN)/dabberzctl
+build: $(BIN)/dabberzd $(BIN)/dabberzctl $(BIN)/dabberz-verify
 
 $(BIN)/dabberzd: $(SOURCES)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./cmd/dabberzd
 
 $(BIN)/dabberzctl: $(SOURCES)
 	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./cmd/dabberzctl
+
+# The verification harness runs inside the UI VM, not the control plane, but it
+# is built from the same tree so the two never disagree about the wire shape.
+$(BIN)/dabberz-verify: $(SOURCES)
+	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./cmd/dabberz-verify
 
 .PHONY: test
 test:

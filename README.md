@@ -41,7 +41,7 @@ for the full list.
 
 ```sh
 make check                      # fmt, vet, race tests
-make build                      # bin/dabberzd, bin/dabberzctl
+make build                      # bin/dabberzd, bin/dabberzctl, bin/dabberz-verify
 
 cp configs/dabberz.example.yaml configs/dabberz.yaml
 export DABBERZ_MASTER_KEY=$(./bin/dabberzctl keygen | head -1)
