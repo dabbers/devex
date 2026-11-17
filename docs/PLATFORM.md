@@ -175,7 +175,7 @@ should be refused.
 | **Webhooks** | Signing, delivery, retries, dead-letter, replay — inbound and outbound | Emitting the events and handling the ones it receives | `WEBHOOKS_URL` |
 | **Search** | Indexing, query, ranking | Declaring what is indexable | `SEARCH_URL` |
 | **Import** | Source adapters, mapping, dry runs, resumable jobs | Describing its own schema as a target | invoked at install |
-| **Export** | Packaging, delivery, scheduling, retention | Rendering its own data in a documented, re-importable form | invoked on request |
+| **Export** | Packaging data and repository together, delivery, scheduling, retention | Rendering its own data in a documented, re-importable form | invoked on request |
 | **Agent access** | Publishing the MCP endpoint, authenticating it, auditing every call, fair-use limits | Defining the tools and honouring its own permissions | served at `mcp.path` |
 | **Observability** | Logs, health checks, the audit trail | Reporting health honestly | `/healthz` |
 
@@ -488,6 +488,57 @@ deliberately.
   built before the shapes it must serve does not stay general: it accumulates
   a special case per app that arrived after it, until the abstraction is a
   pile of conditionals wearing a shared name.
+
+## Where an installation's code lives
+
+Git is load-bearing and GitHub must not be.
+
+Every mechanism in this document is git underneath. An installation is a fork
+of an app. A change is a commit, a preview is a branch, a promote is a deploy
+of a known revision, a rollback is a redeploy of the previous one, and a
+carried patch is a patch. None of that is negotiable.
+
+But requiring a GitHub account to run a booking page is the exact friction this
+product exists to remove. The buyer is a ten-person company who does not have a
+developer, and "first, create an account on a code hosting site" is where they
+close the tab. It also makes a competitor's uptime a dependency of ours.
+
+So the platform hosts the repositories, and GitHub becomes optional. Three
+postures, and the first is the default because most customers should never
+learn that any of this is git:
+
+- **Managed.** The repository lives on dabberz, created at install from the
+  app's current release. The customer never sees it. Most installations stay
+  here forever.
+- **Mirrored.** The repository lives on dabberz and is pushed continuously to
+  the customer's own GitHub. They hold a copy they control, and nothing on the
+  critical path depends on it being reachable. This is the honest form of "you
+  own this".
+- **Origin elsewhere.** The repository lives in the customer's GitHub and
+  dabberz works against it. For people who want their own review and their own
+  CI. Per-account GitHub credentials already exist for this.
+
+### What this actually needs built
+
+Less than it sounds, because **the default posture needs bare repositories,
+not a forge.** Issues, pull requests, code review, a web file browser — the
+platform already has better surfaces for all of it. The change is a preview
+with checks against it, and the review is a person looking at the running thing
+and pressing promote. A smart-HTTP git endpoint serving bare repositories over
+the platform's existing identity is the whole requirement.
+
+A forge is needed in exactly one place, and it is dabberz's own: the
+open-source app repositories that carried patches are sent upstream to. Those
+can live on GitHub publicly, because that is dabberz's dependency rather than a
+customer's, and because open source wants to be where contributors already are.
+
+### What this changes about export
+
+An export has to include the repository, not only the database. An installation
+is code and data together — the data without the code is a table nobody can
+run, which is a sophisticated way of being locked in. So the archive is the
+database contents plus the git history, and a customer leaving can stand the
+whole thing up somewhere else.
 
 ## Choosing what goes in the catalog
 
