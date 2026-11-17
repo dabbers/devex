@@ -427,6 +427,70 @@ machines. Fair-use rate limits apply and are published. The distinction worth
 holding: a limit protects the service, a paywall extracts from the customer.
 These are not the same thing and customers can tell.
 
+### Sharing an app's agent, without building entitlements
+
+The owner of an installation can hand its agent surface to someone else —
+a colleague, or a colleague's agent — scoped to that installation and nothing
+else. "Dana can drive Forms with her own Claude. Dana cannot see anything else
+in this account."
+
+The thing that makes this shippable is refusing to build a permission system.
+Granular entitlements are a matrix of roles against resources against verbs,
+they are miserable to reason about, they are where enterprise SaaS hides its
+upgrade pricing, and nobody running a ten-person company wants to configure
+one. **The boundary is the installation.** One app, whole or not at all. That
+is a sentence an owner can hold in their head, and it is the only scope this
+product needs.
+
+How it works:
+
+- **A grant mints an identity; it does not bypass one.** The platform issues a
+  credential bound to one installation, and when a call arrives it resolves to
+  either a real platform user or a service identity created for that grant.
+  Either way the app receives the same authenticated request it always does, so
+  "a view onto the same operations under the same identity and permissions"
+  stays true and **the app needs no code at all** to support this. Forms works
+  with it unchanged.
+- **Two modes, not a matrix.** Read-only, or full. Anything finer is the
+  permission system this is refusing to build, and anything coarser cannot
+  express "let them look but not send".
+- **Off until the owner turns it on**, per installation. Sharing an agent is a
+  decision, not a default.
+- **Revocable in one click, and listed plainly**: who holds a grant on what,
+  visible on the installation rather than buried in settings.
+- **Every call attributed to the grant** in the audit trail, so "the agent did
+  something strange" names which grant did it.
+- **Rate limited per grant.** An agent in a loop is not a person, and a limit
+  protects the service — which is not the same as a paywall.
+
+Two boundaries that are not negotiable:
+
+- **A grant never reaches the platform.** Operations MCP — open a change,
+  promote, roll back, see other apps — is a separate credential belonging to
+  the account owner. Someone who can read your form submissions must not be
+  able to deploy to your site.
+- **A grant is access to data, not to the code.** Changing the app is the
+  owner's, through the platform.
+
+And one thing to say out loud in the interface rather than discover later: a
+grant is **bulk** access by its nature. Someone who can read submissions
+through an agent can read all of them at once, which is different in practice
+from the same person clicking through a list. The sharing dialog should say
+that plainly instead of presenting a casual toggle.
+
+### Why this is free
+
+Because the alternative is the thing this product exists to replace.
+
+The incumbent shape is: charge per seat, then charge again for API or AI access
+on top, then gate sharing it behind a tier. Three separate extractions from one
+capability that costs almost nothing to provide.
+
+Here, seats are unlimited, agent access is included, and sharing agent access
+is included. The feature an incumbent would make the premium SKU is the
+default, and that is not generosity — it is the position. A pricing page with
+"AI access" on it would undo everything else in this document.
+
 ### The side effect worth having
 
 An app that must expose its operations as tools ends up with a documented,
