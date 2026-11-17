@@ -635,6 +635,44 @@ run, which is a sophisticated way of being locked in. So the archive is the
 database contents plus the git history, and a customer leaving can stand the
 whole thing up somewhere else.
 
+## What assumes one machine
+
+The platform runs on one host today and will not always. Writing down where
+that is baked in turns a future migration from a discovery into a list, and
+costs nothing now.
+
+Scaling this vertically is a dead end whatever the box: a single machine cannot
+take a kernel update without downtime, its blast radius is everything at once,
+and dedicated hardware does not live-migrate. So the direction is more hosts,
+not bigger ones, and the useful thing is knowing which four places would have
+to change.
+
+- **The preview router** (`internal/proxy/hostmux`) resolves a preview hostname
+  to a service in this process. Across hosts it has to resolve to a host first,
+  which means the route table stops being in-memory and the edge stops being
+  the same process as the control plane.
+- **The data block** (`internal/database`) takes one admin connection string
+  and provisions into one cluster. More hosts means either a cluster per host,
+  with installations pinned to the host their data is on, or one cluster
+  reached over a private network. The first is simpler and the second is what
+  makes an installation movable.
+- **The VM drivers** create instances on the machine they run on. Multi-host
+  needs a driver that places work on a chosen host, which is mostly a matter
+  of the scheduler already knowing capacity per driver rather than in total.
+- **Snapshots** are written to a local directory. They have to be somewhere
+  every host can reach before an installation can be restored onto a different
+  machine than it was taken from — which is also the only way to prove a backup
+  actually works.
+
+None of these is hostile to more than one host; they just have not been asked
+to do it. The scheduler already accounts for capacity, which is the part that
+would have been hard.
+
+The honest sequencing is to run on one cheap machine until something real is
+constrained by it, and to add the second host before the first customer whose
+downtime costs them money — because the second host is what buys a maintenance
+window, not what buys capacity.
+
 ## Choosing what goes in the catalog
 
 The test is not what is cheap to host. Cost is a property of the blocks, not of
