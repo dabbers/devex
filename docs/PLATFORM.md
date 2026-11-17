@@ -27,6 +27,42 @@ changes of its own.
 The distinction matters everywhere below. "Instance" is deliberately not used
 for either: `vm.Instance` already means a machine.
 
+## Blocks, components, apps
+
+Three layers, and keeping them straight is what keeps the catalog from being a
+pile of unrelated products.
+
+**Blocks** are runtime infrastructure: data, identity, secrets, mail, storage,
+jobs, payments, domains, realtime, webhooks, search, import, agent access.
+Shared across every installation of every app, operated once, amortised across
+the whole customer base. The blocks are the company. The catalog is the
+visible part, but app six is only cheap because the blocks already exist.
+
+**Components** are UI and domain parts that recur across apps: a table view, a
+kanban board, a record detail pane, a form renderer, an inbox, a calendar, a
+rich text surface. Owned by dabberz, versioned, shared.
+
+**Apps** are compositions of components over blocks, plus the domain logic that
+is genuinely particular to them. An app should be thin. If an app is thick,
+something in it belongs in a block or a component and has been written in the
+wrong place.
+
+This is why "just enough to be useful to eighty per cent of people" is
+achievable rather than wishful: most of the eighty per cent is blocks and
+components that already exist and already work. The app supplies the shape, not
+the substance.
+
+It is also why a **custom app builder** is not a separate product line. A
+template is a saved composition; a custom app is a composition assembled on
+request. Same machine, different starting point. Which means the component
+library is the actual deliverable and the templates are its first customers.
+
+Sequencing matters here and is easy to get wrong: **do not build the component
+library first.** Build two or three real apps, see what genuinely repeats, and
+extract. A library designed before its users is the classic framework trap —
+it ends up full of abstractions nobody needed and missing the ones everybody
+did.
+
 ## The manifest
 
 Every app declares itself in `dabberz.yaml` at its repository root. The
@@ -135,6 +171,10 @@ should be refused.
 | **Jobs** | The scheduler, retries, overlap prevention | The handler at the declared path | invoked over HTTP |
 | **Payments** | Brokering Stripe Connect onto the customer's own account | Prices, checkout, webhooks | `STRIPE_ACCOUNT_ID` and scoped keys |
 | **Domains** | Custom hostnames, TLS issue and renewal | Nothing | the app sees a normal request |
+| **Realtime** | The sync fabric: CRDT documents, presence, rooms, pub/sub | Deciding what is a document and what it means | `REALTIME_URL` |
+| **Webhooks** | Signing, delivery, retries, dead-letter, replay — inbound and outbound | Emitting the events and handling the ones it receives | `WEBHOOKS_URL` |
+| **Search** | Indexing, query, ranking | Declaring what is indexable | `SEARCH_URL` |
+| **Import** | Source adapters, mapping, dry runs, resumable jobs | Describing its own schema as a target | invoked at install |
 | **Agent access** | Publishing the MCP endpoint, authenticating it, auditing every call, fair-use limits | Defining the tools and honouring its own permissions | served at `mcp.path` |
 | **Observability** | Logs, health checks, the audit trail | Reporting health honestly | `/healthz` |
 
@@ -159,6 +199,23 @@ Basic single sign-on across a customer's own apps is included and always will
 be. Charging for it would be the exact behaviour this product exists to escape.
 Connecting a customer's *own customers* through their Okta or a SAML IdP is a
 different thing with real support cost, and may be charged for.
+
+**Realtime is a block, not an app's problem.** A whiteboard or a collaborative
+document that runs its own sync server is an always-on process per
+installation, which is the cost shape that makes those categories look
+unaffordable. One sync fabric, with rooms that spin up and down per document
+and are shared across every app that needs them, changes the arithmetic
+completely. The first app that needs it pays to build it; every app after
+that gets it for the price of a connection string.
+
+**Import is the door on the escape hatch.** Nobody leaves HubSpot if leaving
+means retyping four thousand contacts, and nobody leaves Airtable if their
+formulas do not come with them. Migration is the single largest adoption
+blocker in every category in this catalog, it is the same work every time —
+read a source, map it, dry run it, resume when it fails halfway — and it is
+exactly the kind of thing that gets rewritten badly once per app if it is not
+a block. It is also the most on-brand feature dabberz could ship: the product
+is an exit, and an exit needs a door at both ends.
 
 **Mail is centralised because deliverability is a specialty.** Every app here
 sends: confirmations, notifications, password resets, digests. Reputation,
@@ -414,22 +471,91 @@ deliberately.
 - **No per-app special cases.** If an app needs something the contract does not
   offer, the contract grows. The first exception is the end of the contract
   meaning anything.
+- **No component library written ahead of its users.** Components are extracted
+  from apps that already exist, never designed for apps that might.
+
+## Choosing what goes in the catalog
+
+The test is not what is cheap to host. Cost is a property of the blocks, not of
+the catalog, and letting it pick the apps would aim this product at categories
+that are already commoditised — nobody is in pain over the price of a form
+builder, because free ones are good.
+
+The test is **what the incumbent's price is actually paying for.**
+
+Expensive SaaS is rarely expensive because of hosting. It is expensive because
+of the no-code configuration layer built on top: formula editors, workflow
+canvases, field builders, view designers, automation rules, permission
+matrices. That surface is most of their engineering, most of their tier
+gating, and most of what a seat costs. It is also precisely the layer an agent
+replaces — describing an automation in a sentence instead of dragging nodes
+onto a canvas. Skip the configuration UI and what remains is a data model and
+a runtime, which is the cheap half.
+
+So, in order:
+
+1. **Is the price justified by a configuration layer, or by a crafted core
+   interaction?** An agent can replace a config UI. It cannot replace a text
+   editor or a drawing canvas. A grid, a list, a mailbox, a form, a page — all
+   solved interactions where a good implementation is genuinely good. A block
+   editor or a canvas is the product itself, and eighty per cent of one is a
+   tax paid every day rather than a saving.
+2. **How often is the core interaction touched?** This is the sharper version
+   of the question above, and it cuts within a product rather than between
+   products. A wiki that is read daily and edited weekly tolerates an
+   eighty-per-cent editor. A team that writes all day does not. A whiteboard
+   used once a month for a retrospective tolerates a great deal. Replace the
+   *use*, not the logo.
+3. **Does every company configure it differently?** Variance is where the agent
+   earns its place. Pipelines, routing rules and automations differ per
+   company, which is why configuring them is a consulting industry. If
+   everyone uses it the same way, the incumbent's defaults are fine and there
+   is nothing to sell.
+4. **What does it cost ten people?** The pain is sharpest between five and
+   fifteen seats: enterprise-shaped pricing, no enterprise budget, and maybe
+   five per cent of the feature surface in use.
+5. **What happens when it breaks?** Data gravity is what makes these categories
+   sticky and expensive to leave, and it cuts both ways. Losing a company's
+   CRM is business-ending for them. Blast radius is not a reason to refuse an
+   app, but it is a reason to not ship it before restores are routine.
+
+Cost has not disappeared, it has moved. It no longer decides which apps exist;
+it decides **which capabilities are blocks and which are per-installation**,
+and it decides pricing. An app whose cost to serve is fifty times another's
+cannot sit behind the same flat price without either overcharging the cheap one
+or losing money on the expensive one.
 
 ## The first app
 
-**Forms**, and not because it is the easiest.
+**Forms** — as the shakedown, not the flagship.
 
-Pick the first app to exercise the *whole* contract, so the contract is proven
-rather than asserted. Forms touches every platform service: a database for
-submissions, identity for the admin side, mail for notifications, storage for
-file uploads, jobs for digests, and optionally payments for paid submissions.
-Its critical path is short and genuinely checkable — submit, store, notify —
-and the customisation story is both obvious and visual, which is what makes the
-agent's value legible to someone who is not a developer.
+"Cheaper forms" is a dead wedge and should not be marketed as one. The reason
+to build it first is that it is small, low stakes, and exercises the entire
+contract: database, identity, mail, storage, jobs, payments, webhooks, MCP. Its
+critical path is short and genuinely checkable — submit, store, notify. Writing
+one real app is how the missing manifest fields are discovered, and that
+discovery should happen on a form rather than on somebody's CRM.
+
+It is not throwaway. The CRM needs lead capture and the helpdesk needs ticket
+submission, so Forms becomes the first component of the suite rather than a
+product line of its own.
 
 The thing being proven is not the form builder. It is the loop: they deploy it,
 use it, ask for a change in English, the change goes through preview and
 checks, they promote it, and it works.
+
+Then, in rough order of how well they satisfy the criteria above: **marketing
+site and landing pages** (cheapest to serve, strongest agentic story, and the
+lowest-commitment first install, which makes it the funnel entrance as much as
+a product), **a base** — the grid, views, formulas and automations an
+Airtable costs two hundred to four hundred a month for ten people — then
+**CRM** and **helpdesk**, which are the same components pointed at different
+domains.
+
+They are deliberately a suite rather than a set. A lead arrives on the
+marketing site, lands in the CRM, and support goes to the helpdesk, under one
+sign-in and reachable through one MCP endpoint. No incumbent can offer that
+without abandoning the per-seat model that funds it.
 
 ## Scheduling
 

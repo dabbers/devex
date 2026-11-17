@@ -563,3 +563,61 @@ dabberz becomes an operations company. Downtime is a customer's lost revenue;
 their customers' personal data makes dabberz a processor with the obligations
 that carries; restores have to be tested rather than assumed. That work is the
 unglamorous majority of what remains, and none of it is agent work.
+
+
+### The blocks are the company
+
+A refinement of the above, and a correction to it.
+
+An earlier pass selected the catalog by what was cheap to host. That was the
+wrong axis. Cheap to host is cheap for everyone, so those categories are
+already commoditised and nobody is in pain over the price of a form builder.
+The right axis is what the incumbent's price is paying for: almost always a
+no-code configuration layer, which is exactly what an agent replaces.
+
+The deeper correction is structural. The model is not a contract that apps
+conform to, it is a set of **blocks** that apps are composed from — the Bending
+Spoons move of putting every acquisition onto the same handful of core
+services, applied to products built rather than bought. Data, identity,
+secrets, mail, storage, jobs, payments, domains, realtime, webhooks, search,
+import, agent access. Shared across every installation of every app, operated
+once, amortised across everyone.
+
+That changes which apps are possible. Realtime collaboration looked
+unaffordable because a sync server per installation is an always-on process per
+customer; one sync fabric with per-document rooms, shared across every app that
+needs it, is a different arithmetic entirely. The first app to need it pays to
+build it and every app after gets a connection string. Our Notion. Our Miro.
+
+What does not change is the quality question, which is separate from the cost
+one: an eighty-per-cent block editor is a tax paid every day by a team that
+writes all day. The resolution is to replace a *use* rather than a logo. A wiki
+that is read daily and edited weekly is a different product from a writing
+tool, and the first is most of the market.
+
+Three layers, kept straight: **blocks** are infrastructure, **components** are
+the UI and domain parts that recur, **apps** are compositions. A thick app has
+something in it that belongs a layer down. This is also why a custom app
+builder is not a separate product — a template is a saved composition and a
+custom app is one assembled on request, so the component library is the real
+deliverable and the templates are its first customers. Extracted from real
+apps, never designed ahead of them.
+
+One block was missing from every earlier list and is the most on-brand thing
+here: **import**. Nobody leaves HubSpot if leaving means retyping four thousand
+contacts. Migration is the largest adoption blocker in every category in the
+catalog and it is the same work every time. The product is an exit; an exit
+needs a door at both ends.
+
+### What it is
+
+"The self-host for people who are not technical."
+
+The objection that kills self-hosting for this buyer is never *can I run it* —
+it is *do I want to be the person who runs it*. You built your own HubSpot;
+now who patches it, who notices it is down, who restores it. dabberz is the
+answer to that sentence, which makes the thing being sold operational
+confidence rather than software. Everything in `docs/PLATFORM.md` that looks
+like overhead — the check suite the agent cannot edit, promotion a human
+performs, snapshots before migrations, tested restores, export as a feature —
+is the product rather than a tax on it.
