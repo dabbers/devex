@@ -254,6 +254,37 @@ In exchange:
 - **No credentials of its own.** Everything it needs arrives in the
   environment from the platform.
 
+### The handshake, which is not a URL
+
+Most of what the platform hands an app is a connection string. Two things are
+not, and they were nearly left for each app to invent:
+
+- **`DABBERZ_TRUSTED_PROXY=1`** is the platform asserting that this app is
+  unreachable except through it. It is what makes the identity headers below
+  safe to believe. An app that does not see it must refuse to serve anything
+  behind an identity rather than assume the headers are real.
+- **`X-Dabberz-User` and `X-Dabberz-Email`** carry the person the platform
+  authenticated.
+
+One set of names for every app, because an app that invents its own can be
+started without it by accident and fall open. That is the failure that matters
+most and it is silent: nothing is broken, the admin pages simply serve anyone
+who asks.
+
+### Nothing is injected that was not declared
+
+An app that never asked for storage does not receive storage credentials, even
+on a platform that has them. This keeps the blast radius of a compromised app
+to the blocks it actually uses, and it makes `requires` mean something at
+runtime rather than being documentation.
+
+The inverse is enforced too: an installation whose manifest declares a block
+the platform cannot provide **does not start**, and the refusal names every
+unmet requirement at once. An app started without the mail it declared does not
+fail at boot — it fails at three in the morning when the first notification
+does not arrive, and by then nobody connects the two. Refusing is the kinder
+failure.
+
 ## The extension surface
 
 The core/extension split is what makes agentic modification survivable. It is

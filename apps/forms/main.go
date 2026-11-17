@@ -130,8 +130,10 @@ func waitForDatabase(ctx context.Context, store *Store, logger *slog.Logger) err
 // Environment variables the platform sets, named here so there is one list.
 const (
 	// trustEnv says this app is reachable only through the platform, which is
-	// what makes the identity headers below trustworthy.
-	trustEnv = "FORMS_TRUST_PROXY_HEADERS"
+	// what makes the identity headers below trustworthy. The name is the
+	// platform's, not this app's: an app that invents its own can be started
+	// without it by accident and fall open.
+	trustEnv = "DABBERZ_TRUSTED_PROXY"
 	// devUserEnv runs the admin surface as a fixed person, for local work.
 	devUserEnv = "FORMS_DEV_USER"
 )

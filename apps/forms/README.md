@@ -19,7 +19,7 @@ go run . serve
 ```
 
 `FORMS_DEV_USER` is for local work only. In a real installation the platform
-terminates identity and passes it on, and sets `FORMS_TRUST_PROXY_HEADERS=1` to
+terminates identity and passes it on, and sets `DABBERZ_TRUSTED_PROXY=1` to
 say that this app is unreachable except through it. Without one of the two the
 admin surface serves no one, which is deliberate: an app that falls open when
 identity is misconfigured is the worst failure available to it.

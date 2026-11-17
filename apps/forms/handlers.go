@@ -23,7 +23,7 @@ var theme embed.FS
 // apps each implementing sign-in is five chances to get it wrong and five
 // passwords for the customer. The platform terminates identity and passes the
 // result on, which is only safe while this app is unreachable except through
-// the platform. FORMS_TRUST_PROXY_HEADERS is the operator asserting exactly
+// the platform. DABBERZ_TRUSTED_PROXY is the platform asserting exactly
 // that, and without it the admin surface serves no one.
 const (
 	userHeader  = "X-Dabberz-User"
