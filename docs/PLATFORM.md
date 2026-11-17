@@ -175,6 +175,7 @@ should be refused.
 | **Webhooks** | Signing, delivery, retries, dead-letter, replay — inbound and outbound | Emitting the events and handling the ones it receives | `WEBHOOKS_URL` |
 | **Search** | Indexing, query, ranking | Declaring what is indexable | `SEARCH_URL` |
 | **Import** | Source adapters, mapping, dry runs, resumable jobs | Describing its own schema as a target | invoked at install |
+| **Export** | Packaging, delivery, scheduling, retention | Rendering its own data in a documented, re-importable form | invoked on request |
 | **Agent access** | Publishing the MCP endpoint, authenticating it, auditing every call, fair-use limits | Defining the tools and honouring its own permissions | served at `mcp.path` |
 | **Observability** | Logs, health checks, the audit trail | Reporting health honestly | `/healthz` |
 
@@ -217,6 +218,15 @@ exactly the kind of thing that gets rewritten badly once per app if it is not
 a block. It is also the most on-brand feature dabberz could ship: the product
 is an exit, and an exit needs a door at both ends.
 
+**Export is not import's poor relation.** A platform for rescuing people from
+SaaS must not become the thing they were escaping, and a lock-in built from
+"technically you can export, it just doesn't quite work" is the most common
+kind. So export is a block with the same standing as import, it exists for
+every app from that app's first release, and it is held to a property that can
+actually be checked: **an app's export must be a valid import to that same
+app.** Round trip, in the app's own check suite, every release. A promise about
+data portability decays silently; a test does not.
+
 **Mail is centralised because deliverability is a specialty.** Every app here
 sends: confirmations, notifications, password resets, digests. Reputation,
 bounce handling and suppression are miserable, shared, and exactly the kind of
@@ -239,6 +249,8 @@ In exchange:
   or trust: for Forms, submit → store → notify. Not coverage; consequences.
 - **An MCP endpoint.** Its own operations, exposed as tools. Not optional, and
   not a paid tier — see below.
+- **An export that round-trips.** Every record the app holds, in a documented
+  form its own importer accepts, tested as part of its check suite.
 - **No credentials of its own.** Everything it needs arrives in the
   environment from the platform.
 
@@ -472,7 +484,10 @@ deliberately.
   offer, the contract grows. The first exception is the end of the contract
   meaning anything.
 - **No component library written ahead of its users.** Components are extracted
-  from apps that already exist, never designed for apps that might.
+  from apps that already exist, never designed for apps that might. A block
+  built before the shapes it must serve does not stay general: it accumulates
+  a special case per app that arrived after it, until the abstraction is a
+  pile of conditionals wearing a shared name.
 
 ## Choosing what goes in the catalog
 
@@ -524,6 +539,41 @@ it decides **which capabilities are blocks and which are per-installation**,
 and it decides pricing. An app whose cost to serve is fifty times another's
 cannot sit behind the same flat price without either overcharging the cheap one
 or losing money on the expensive one.
+
+## Pricing: one principle, and a deferral
+
+The mechanism is deliberately undecided — it wants usage data that does not
+exist yet, and designing a price for workloads nobody has run is how a platform
+ends up defending a number instead of changing it.
+
+One principle is decided, because it is the whole position: **never charge for
+a person.**
+
+The objection to per-seat pricing was never that larger customers pay more.
+Almost everyone accepts that scale costs more. It is that per-seat pricing
+*taxes collaboration* — adding a colleague so they can see one dashboard costs
+a full seat, so people share logins or leave out someone who should be
+involved, and the pricing makes the tool worse at its job. Charge on anything
+that is not a human being.
+
+Which rules out the obvious compromise. A "resource slice" sounds like cost
+recovery, but resource consumption tracks headcount, so slices are seats with
+extra steps — and worse, unpredictable ones. Honest about costs, hostile in
+exactly the same way.
+
+Two cautions worth carrying into whatever is eventually chosen:
+
+- **Per-app pricing punishes composition.** If a CRM and a helpdesk are
+  separate line items, customers will ask the agent to bolt helpdesk features
+  onto the CRM to avoid the second bill. That is worse for them and it breaks
+  the suite, which is the thing no incumbent can copy.
+- **A limit is not a paywall.** Throughput allowances protect the service and
+  scale with a customer's own success rather than their headcount. Gating a
+  capability behind a tier is the move this product exists to be the
+  alternative to, and doing it once makes the positions on single sign-on and
+  agent access read as marketing rather than principle. That applies to
+  realtime too, whatever it turns out to cost: included, with an allowance,
+  not withheld and sold back.
 
 ## The first app
 
