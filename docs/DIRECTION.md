@@ -484,3 +484,82 @@ flat; this does it flat, because the page underneath is set in a serif and a
 bevelled bar would fight it. The band is deliberately the only dark surface in
 the interface, and the two status inks invert on it, since the cyan is
 unreadable against maroon and the maroon would vanish into it.
+
+## The pivot: from development platform to SaaS host
+
+The product this was becoming — an agentic development platform — competes
+directly with Lovable, Replit and v0, on a problem all of them are solving
+badly: an agent starting from nothing, for a user who does not know what to
+ask for.
+
+The product it is becoming instead inverts that. A catalog of apps that replace
+common per-seat SaaS — forms, links, a helpdesk — deployed in one click onto
+dabberz infrastructure, pointed at the customer's own domain, and then modified
+in English by an agent. Agent-on-a-known-small-codebase is a different
+difficulty class from agent-on-greenfield: the blank page disappears, the
+critical paths are known in advance so verification actually means something,
+and rollback is correct because there is always a known-good baseline.
+
+The fork → preview → verify → merge-gate pipeline, which was arguably
+over-built for a development tool, turns out to be exactly the right shape for
+"change a live app that takes real money". Almost nothing in the engine is
+wasted. What changes is the surface, and what is missing is the operational
+half: isolation, databases, backups, restore, export.
+
+`docs/PLATFORM.md` is the contract that falls out of this, written before the
+second app rather than after the fifth.
+
+### The decisions taken
+
+**Apps are built, not packaged.** Forking an existing open-source product means
+maintaining thousands of divergent trees, each unable to take upstream's
+security patches without risking a customer's changes. Agent capability was
+never the constraint — upstream drift was. Building them means owning both
+ends of that line: dabberz publishes the app as open source, and a customer's
+fix flows back by pull request rather than into a private fork.
+
+**The customer brings their own Claude, and dabberz never holds it.** Not
+because it would be hard to bill tokens, but because it is the wrong business:
+a margin race against the people who own the models, with no incentive to
+optimise the agent workflows. "dabberz provides the environment, not the AI."
+
+The mechanism matters legally. "Hand us your Claude credential" is the case the
+terms above name explicitly. A hosted, unmodified binary that the customer
+authenticates themselves, in their own isolated container, with the credential
+never touching the control plane, is a different posture — and the same terms
+contemplate it existing under Commercial Terms, which means there is a door to
+ask about rather than a wall. Someone is already running that posture
+commercially: the open-source Claude Code UI the design is modelled on also
+powers a managed hosted product on bring-your-own-subscription. Precedent, not
+permission.
+
+So: ask, design so the answer is likely yes, and keep the credential layer
+swappable so a no means a config change rather than a rewrite — which is what
+this document already said to do.
+
+**Per-tenant isolation moves onto the critical path.** It was stage 3. Once a
+stranger's app runs next to another stranger's, with another customer's
+attached Claude credential on the same box, Firecracker is table stakes for
+both data and credentials.
+
+**Agent access is free in every app.** Charging for it is the SSO tax wearing a
+new hat, and one line on a pricing page would undo the entire position.
+
+**Pricing is flat per app, unlimited seats.** Metered bandwidth is 2007 dabberz
+muscle memory: the costs are not there any more, and an unpredictable bill is
+precisely what this customer is running away from. "Unlimited seats" is the
+wedge.
+
+**Agentic on-call sells triage, not autonomy.** Diagnose, propose, run the
+checks, ask. The moment an AI changes production unsupervised, dabberz owns
+every outage it causes on somebody else's revenue.
+
+**Scheduling is deferred**, on conflict-of-interest grounds rather than
+technical ones. See the last section of `docs/PLATFORM.md`.
+
+### What this costs
+
+dabberz becomes an operations company. Downtime is a customer's lost revenue;
+their customers' personal data makes dabberz a processor with the obligations
+that carries; restores have to be tested rather than assumed. That work is the
+unglamorous majority of what remains, and none of it is agent work.
