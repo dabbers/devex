@@ -20,3 +20,8 @@
 .DS_Store
 .idea/
 *.swp
+
+# App binaries. Each app is its own module and builds to a binary named after
+# it, next to its source.
+/apps/forms/forms
+/apps/*/app-*

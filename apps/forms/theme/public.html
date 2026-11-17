@@ -1,0 +1,18 @@
+{{define "body"}}
+<h1>{{.Form.Title}}</h1>
+{{if .Form.Description}}<p class="lede">{{.Form.Description}}</p>{{end}}
+{{if .Error}}<div class="note">{{.Error}}</div>{{end}}
+<form method="post" action="/f/{{.Form.Slug}}">
+  {{range .Form.Fields}}
+    <label for="f-{{.Key}}">{{.Label}}{{if .Required}} <span class="req">*</span>{{end}}</label>
+    {{if eq .Type "textarea"}}
+      <textarea id="f-{{.Key}}" name="{{.Key}}"{{if .Required}} required{{end}}></textarea>
+    {{else if eq .Type "checkbox"}}
+      <input type="checkbox" id="f-{{.Key}}" name="{{.Key}}" value="yes" style="width:auto">
+    {{else}}
+      <input type="{{.Type}}" id="f-{{.Key}}" name="{{.Key}}"{{if .Required}} required{{end}}>
+    {{end}}
+  {{end}}
+  <button type="submit">Send</button>
+</form>
+{{end}}

@@ -1,0 +1,24 @@
+{{define "body"}}
+<h1>{{.Form.Title}}</h1>
+<p class="lede">
+  Published at <a href="/f/{{.Form.Slug}}"><code>/f/{{.Form.Slug}}</code></a> &middot;
+  {{len .Submissions}} answer{{if ne (len .Submissions) 1}}s{{end}} &middot;
+  <a href="/export">export everything</a>
+</p>
+
+{{if .Submissions}}
+<table>
+  <tr><th>When</th>{{range .Form.Fields}}<th>{{.Label}}</th>{{end}}</tr>
+  {{range .Submissions}}
+  <tr>
+    <td>{{.When}}</td>
+    {{range .Values}}<td>{{.}}</td>{{end}}
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="empty">Nobody has answered yet. Send someone the address above.</p>
+{{end}}
+
+<p style="margin-top:28px"><a href="/">&larr; All forms</a></p>
+{{end}}

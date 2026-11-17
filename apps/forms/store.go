@@ -1,0 +1,400 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/base32"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// ErrNotFound reports that a record does not exist.
+var ErrNotFound = errors.New("forms: not found")
+
+// Field is one question on a form.
+type Field struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+}
+
+// fieldTypes are the input kinds a form may ask for. Deliberately few: this is
+// the eighty per cent, and a customer who needs a ninety-first type asks the
+// agent for it rather than waiting for a release.
+var fieldTypes = map[string]bool{
+	"text": true, "email": true, "textarea": true, "number": true, "checkbox": true,
+}
+
+// Form is a questionnaire with a public address.
+type Form struct {
+	ID          string    `json:"id"`
+	Slug        string    `json:"slug"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Fields      []Field   `json:"fields"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Submission is one person's answers.
+type Submission struct {
+	ID        string            `json:"id"`
+	FormID    string            `json:"form_id"`
+	Data      map[string]string `json:"data"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// Store is the app's data, in the Postgres the platform provisioned.
+type Store struct{ db *sql.DB }
+
+// migrations run in order, forward only, each recorded once. Forward only
+// because a down migration against live customer data is a restore wearing a
+// disguise, and the platform already snapshots before it promotes.
+//
+// Core owns these tables. An installation's own additions live behind the
+// manifest's schema_prefix, so a core migration can never collide with one an
+// agent wrote.
+var migrations = []struct {
+	name string
+	sql  string
+}{
+	{"0001_forms", `
+		CREATE TABLE forms (
+			id          TEXT PRIMARY KEY,
+			slug        TEXT NOT NULL UNIQUE,
+			title       TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			fields      JSONB NOT NULL DEFAULT '[]'::jsonb,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`},
+	{"0002_submissions", `
+		CREATE TABLE submissions (
+			id         TEXT PRIMARY KEY,
+			form_id    TEXT NOT NULL REFERENCES forms(id) ON DELETE CASCADE,
+			data       JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`},
+	{"0003_submissions_by_form", `
+		CREATE INDEX submissions_by_form ON submissions (form_id, created_at DESC, id DESC)`},
+}
+
+// Migrate brings the schema up to date.
+func (s *Store) Migrate(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			name       TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+		return fmt.Errorf("forms: migration table: %w", err)
+	}
+
+	for _, migration := range migrations {
+		var applied bool
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`,
+			migration.name).Scan(&applied); err != nil {
+			return fmt.Errorf("forms: check migration %s: %w", migration.name, err)
+		}
+		if applied {
+			continue
+		}
+
+		// Each migration in its own transaction: a failure leaves the ones
+		// before it applied and recorded, so a re-run resumes rather than
+		// starting over against a half-changed schema.
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("forms: migration %s: %w", migration.name, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO schema_migrations (name) VALUES ($1)`, migration.name); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("forms: record migration %s: %w", migration.name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Ready reports whether the app can actually serve.
+//
+// A service that answers 200 before it can reach its database is worse than
+// one that answers nothing, because the platform will route traffic to it.
+func (s *Store) Ready(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return s.db.PingContext(ctx)
+}
+
+// CreateForm stores a new form.
+func (s *Store) CreateForm(ctx context.Context, form *Form) error {
+	if err := form.normalise(); err != nil {
+		return err
+	}
+	if form.ID == "" {
+		form.ID = newID("frm")
+	}
+
+	encoded, err := json.Marshal(form.Fields)
+	if err != nil {
+		return err
+	}
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO forms (id, slug, title, description, fields)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING created_at, updated_at`,
+		form.ID, form.Slug, form.Title, form.Description, encoded,
+	).Scan(&form.CreatedAt, &form.UpdatedAt)
+	if err != nil {
+		if strings.Contains(err.Error(), "forms_slug_key") {
+			return fmt.Errorf("forms: a form already answers at /f/%s", form.Slug)
+		}
+		return fmt.Errorf("forms: create form: %w", err)
+	}
+	return nil
+}
+
+// FormBySlug loads the form published at an address.
+func (s *Store) FormBySlug(ctx context.Context, slug string) (*Form, error) {
+	return s.form(ctx, `SELECT id, slug, title, description, fields, created_at, updated_at
+		FROM forms WHERE slug = $1`, slug)
+}
+
+// FormByID loads one form.
+func (s *Store) FormByID(ctx context.Context, id string) (*Form, error) {
+	return s.form(ctx, `SELECT id, slug, title, description, fields, created_at, updated_at
+		FROM forms WHERE id = $1`, id)
+}
+
+func (s *Store) form(ctx context.Context, query string, arg any) (*Form, error) {
+	var (
+		form   Form
+		fields []byte
+	)
+	err := s.db.QueryRowContext(ctx, query, arg).Scan(
+		&form.ID, &form.Slug, &form.Title, &form.Description, &fields,
+		&form.CreatedAt, &form.UpdatedAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, fmt.Errorf("forms: load form: %w", err)
+	}
+	if err := json.Unmarshal(fields, &form.Fields); err != nil {
+		return nil, fmt.Errorf("forms: unreadable fields on %s: %w", form.ID, err)
+	}
+	return &form, nil
+}
+
+// ListForms returns every form, newest first.
+func (s *Store) ListForms(ctx context.Context) ([]*Form, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, slug, title, description, fields, created_at, updated_at
+		FROM forms ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("forms: list forms: %w", err)
+	}
+	defer rows.Close()
+
+	forms := make([]*Form, 0, 8)
+	for rows.Next() {
+		var (
+			form   Form
+			fields []byte
+		)
+		if err := rows.Scan(&form.ID, &form.Slug, &form.Title, &form.Description,
+			&fields, &form.CreatedAt, &form.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(fields, &form.Fields); err != nil {
+			return nil, err
+		}
+		forms = append(forms, &form)
+	}
+	return forms, rows.Err()
+}
+
+// CountSubmissions reports how many answers each form has, keyed by form id.
+func (s *Store) CountSubmissions(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT form_id, count(*) FROM submissions GROUP BY form_id`)
+	if err != nil {
+		return nil, fmt.Errorf("forms: count submissions: %w", err)
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var (
+			id    string
+			count int
+		)
+		if err := rows.Scan(&id, &count); err != nil {
+			return nil, err
+		}
+		counts[id] = count
+	}
+	return counts, rows.Err()
+}
+
+// Submit records one person's answers.
+func (s *Store) Submit(ctx context.Context, submission *Submission) error {
+	if submission.ID == "" {
+		submission.ID = newID("sub")
+	}
+	if submission.Data == nil {
+		submission.Data = map[string]string{}
+	}
+
+	encoded, err := json.Marshal(submission.Data)
+	if err != nil {
+		return err
+	}
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO submissions (id, form_id, data) VALUES ($1, $2, $3)
+		RETURNING created_at`,
+		submission.ID, submission.FormID, encoded).Scan(&submission.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("forms: record submission: %w", err)
+	}
+	return nil
+}
+
+// ListSubmissions returns a form's answers, newest first.
+func (s *Store) ListSubmissions(ctx context.Context, formID string, limit int) ([]*Submission, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, form_id, data, created_at FROM submissions
+		WHERE form_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`, formID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("forms: list submissions: %w", err)
+	}
+	defer rows.Close()
+
+	submissions := make([]*Submission, 0, limit)
+	for rows.Next() {
+		var (
+			submission Submission
+			data       []byte
+		)
+		if err := rows.Scan(&submission.ID, &submission.FormID, &data, &submission.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &submission.Data); err != nil {
+			return nil, err
+		}
+		submissions = append(submissions, &submission)
+	}
+	return submissions, rows.Err()
+}
+
+// normalise checks a form and fills what it can.
+func (f *Form) normalise() error {
+	f.Slug = strings.ToLower(strings.TrimSpace(f.Slug))
+	f.Title = strings.TrimSpace(f.Title)
+	f.Description = strings.TrimSpace(f.Description)
+
+	if f.Title == "" {
+		return errors.New("forms: a form needs a title")
+	}
+	if f.Slug == "" {
+		f.Slug = slugify(f.Title)
+	}
+	if !slugOK(f.Slug) {
+		return fmt.Errorf("forms: %q is not a usable address; use letters, numbers and hyphens", f.Slug)
+	}
+	if len(f.Fields) == 0 {
+		return errors.New("forms: a form with no questions would collect nothing")
+	}
+
+	seen := make(map[string]bool, len(f.Fields))
+	for i := range f.Fields {
+		field := &f.Fields[i]
+		field.Label = strings.TrimSpace(field.Label)
+		if field.Label == "" {
+			return errors.New("forms: every question needs a label")
+		}
+		if field.Key == "" {
+			field.Key = slugify(field.Label)
+		}
+		if !slugOK(field.Key) {
+			return fmt.Errorf("forms: %q is not a usable field key", field.Key)
+		}
+		if seen[field.Key] {
+			return fmt.Errorf("forms: two questions share the key %q, so one would overwrite the other", field.Key)
+		}
+		seen[field.Key] = true
+
+		if field.Type == "" {
+			field.Type = "text"
+		}
+		if !fieldTypes[field.Type] {
+			return fmt.Errorf("forms: %q is not a question type this app knows", field.Type)
+		}
+	}
+	return nil
+}
+
+func slugOK(s string) bool {
+	if s == "" || len(s) > 64 || strings.HasPrefix(s, "-") || strings.HasSuffix(s, "-") {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func slugify(s string) string {
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		default:
+			if !lastHyphen && b.Len() > 0 {
+				b.WriteRune('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// idAlphabet is Crockford-ish base32: no padding, no vowels to accidentally
+// spell anything, and sortable because the timestamp leads.
+var idAlphabet = base32.NewEncoding("0123456789abcdefghjkmnpqrstvwxyz").WithPadding(base32.NoPadding)
+
+// newID returns a prefixed, time-ordered identifier. Sortable ids mean a
+// listing can page on the primary key instead of an offset.
+func newID(prefix string) string {
+	var raw [14]byte
+	binary.BigEndian.PutUint64(raw[:8], uint64(time.Now().UTC().UnixMilli()))
+	if _, err := rand.Read(raw[8:]); err != nil {
+		// Unreachable on any platform this runs on; a predictable id is worse
+		// than a crash here, because ids end up in public URLs.
+		panic("forms: no randomness available: " + err.Error())
+	}
+	return prefix + "_" + idAlphabet.EncodeToString(raw[2:])
+}

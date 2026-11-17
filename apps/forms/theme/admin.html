@@ -1,0 +1,34 @@
+{{define "body"}}
+<h1>Your forms</h1>
+<p class="lede">Each one has a public address. Answers land here.</p>
+
+{{if .Forms}}
+<table>
+  <tr><th>Form</th><th>Address</th><th>Answers</th></tr>
+  {{range .Forms}}
+  <tr>
+    <td><a href="/forms/{{.Form.ID}}">{{.Form.Title}}</a></td>
+    <td><a href="/f/{{.Form.Slug}}"><code>/f/{{.Form.Slug}}</code></a></td>
+    <td>{{.Count}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p class="empty">No forms yet. The one below is the whole product: a title and some questions.</p>
+{{end}}
+
+<h2>New form</h2>
+{{if .Error}}<div class="note">{{.Error}}</div>{{end}}
+<form method="post" action="/forms">
+  <label for="title">Title</label>
+  <input type="text" id="title" name="title" required>
+  <label for="description">Description</label>
+  <input type="text" id="description" name="description">
+  <label for="fields">Questions</label>
+  <textarea id="fields" name="fields"
+    placeholder="One per line: Label | type | required&#10;type is text, email, textarea, number or checkbox">Your name | text | required
+Email | email | required
+What can we help with? | textarea</textarea>
+  <button type="submit">Create form</button>
+</form>
+{{end}}

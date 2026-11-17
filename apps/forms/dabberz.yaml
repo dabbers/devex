@@ -1,0 +1,52 @@
+# Forms, the first app on the dabberz platform.
+#
+# It is deliberately small. Its job is to prove the contract in
+# docs/PLATFORM.md end to end -- a database, identity, mail, storage, jobs, an
+# agent surface and an export that round-trips -- so that the fields the
+# manifest is missing are discovered here rather than on somebody's CRM.
+app: forms
+name: Forms
+version: 0.1.0
+platform: 1
+license: AGPL-3.0
+upstream: https://github.com/dabbers/app-forms
+
+services:
+  - name: web
+    kind: web
+    command: ./forms serve
+    port: 3000
+    health_path: /healthz
+    primary: true
+    exposed: true
+
+requires:
+  database:
+    engine: postgres
+    version: "16"
+  identity: true
+  mail: true
+  storage: true
+
+secrets:
+  - name: TURNSTILE_SECRET
+    description: Spam protection for public form submissions. Without it, public forms accept anything.
+    required: false
+
+mcp:
+  path: /mcp
+  tools: tools/
+
+jobs:
+  - name: digest
+    schedule: "0 13 * * 1"
+    path: /jobs/digest
+
+extends:
+  theme: theme/
+  plugins: plugins/
+  config: config/
+  schema_prefix: ext_
+
+checks:
+  suite: checks/
