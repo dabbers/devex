@@ -136,10 +136,10 @@ func (b *Block) Ping(ctx context.Context) error { return b.admin.PingContext(ctx
 // to the app as an environment variable; keeping a copy would make this package
 // a place worth stealing.
 func (b *Block) Provision(ctx context.Context, owner string) (*Database, string, error) {
-	suffix := randomName()
+	name := "app_" + randomName()
 	db := &Database{
-		Name:      "app_" + suffix,
-		Role:      "app_" + suffix + "_rw",
+		Name:      name,
+		Role:      RoleFor(name),
 		Owner:     owner,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -449,3 +449,31 @@ func (b *Block) Connect(name string) (*sql.DB, error) {
 	}
 	return sql.Open("pgx", b.adminDSNFor(name))
 }
+
+// Credentials rotates a database's password and returns a connection string.
+//
+// Called when a workspace starts rather than remembered from when the database
+// was created, which means no DSN is ever written down -- not in the vault,
+// not in a row, not in a log. A credential that is never stored cannot be
+// taken from storage, and the platform owns the role, so minting a new one
+// costs nothing.
+//
+// It invalidates whatever was issued before. That is the point: the only thing
+// holding the old one is a process that is being replaced.
+func (b *Block) Credentials(ctx context.Context, db *Database) (string, error) {
+	password, err := randomSecret()
+	if err != nil {
+		return "", err
+	}
+	if _, err := b.admin.ExecContext(ctx, fmt.Sprintf(
+		`ALTER ROLE %s WITH PASSWORD %s`, quoteID(db.Role), quoteLiteral(password))); err != nil {
+		return "", fmt.Errorf("database: rotate credentials for %s: %w", db.Name, err)
+	}
+	return b.dsn(db.Name, db.Role, password), nil
+}
+
+// RoleFor returns the role name belonging to a database this package created.
+//
+// Derived rather than remembered, so a caller holding only a database name --
+// which is all the control plane records -- can still reach it.
+func RoleFor(databaseName string) string { return databaseName + "_rw" }

@@ -210,6 +210,18 @@ func (d *tracked) Drop(ctx context.Context, db *database.Database) error {
 	return d.block.Drop(ctx, db)
 }
 
+func (d *tracked) Credentials(ctx context.Context, db *database.Database) (string, error) {
+	return d.block.Credentials(ctx, db)
+}
+
+func (d *tracked) Snapshot(ctx context.Context, db *database.Database, label string) (*database.Snapshot, error) {
+	return d.block.Snapshot(ctx, db, label)
+}
+
+func (d *tracked) Restore(ctx context.Context, db *database.Database, snapshot *database.Snapshot) error {
+	return d.block.Restore(ctx, db, snapshot)
+}
+
 // QueryRow reads one value out of an installation's own database.
 func (d *tracked) QueryRow(ctx context.Context, name, query string, into *string) error {
 	conn, err := d.block.Connect(name)
@@ -265,8 +277,12 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 		t.Fatalf("preview.New: %v", err)
 	}
 
+	// Set after the installer exists, since it is the thing that knows which
+	// database a workspace belongs to.
+	overrides := &lateOverrides{}
 	workspaces, err := workspace.New(workspace.Deps{
 		Store: db, Driver: driver, Preview: allocator, Vault: vault,
+		Overrides: overrides,
 	}, workspace.Options{
 		Resources: vm.Resources{VCPUs: 2, MemoryMiB: 2048, DiskGiB: 10},
 		Image:     "dabberz-golden",
@@ -312,7 +328,20 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	if err != nil {
 		t.Fatalf("install.New: %v", err)
 	}
+	overrides.to = installer
 	return installer, databases, owner, edge.URL
+}
+
+// lateOverrides breaks the circle between the workspace manager and the
+// installer: the manager needs somewhere to ask which database a workspace
+// belongs to, and the only thing that knows is built on top of the manager.
+type lateOverrides struct{ to workspace.Overrides }
+
+func (l *lateOverrides) For(ctx context.Context, w *domain.Workspace) (map[string]string, error) {
+	if l.to == nil {
+		return nil, nil
+	}
+	return l.to.For(ctx, w)
 }
 
 // serviceAddress is where an installation's service is actually listening, for
@@ -395,4 +424,14 @@ func post(t *testing.T, client *http.Client, edge, previewURL, path string, valu
 		t.Fatalf("POST %s = %d: %s", previewURL+path, resp.StatusCode, body)
 	}
 	return resp.StatusCode
+}
+
+// QueryRowInt reads one number out of an installation's own database.
+func (d *tracked) QueryRowInt(ctx context.Context, name, query string, into *int) error {
+	conn, err := d.block.Connect(name)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return conn.QueryRowContext(ctx, query).Scan(into)
 }

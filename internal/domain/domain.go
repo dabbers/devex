@@ -772,6 +772,15 @@ type Installation struct {
 	// WorkspaceID is the environment currently serving it.
 	WorkspaceID string `json:"workspace_id,omitempty"`
 
+	// Revision is the commit currently deployed. A serving installation is
+	// exactly this revision, not whatever happens to be on its disk: nobody
+	// edits production by hand, so there is no uncommitted work to protect.
+	Revision string `json:"revision,omitempty"`
+	// PreviousRevision is what a rollback returns to. One deep, deliberately:
+	// a customer rolling back wants the thing that was working ten minutes
+	// ago, and a list of twenty revisions is a decision they cannot make.
+	PreviousRevision string `json:"previous_revision,omitempty"`
+
 	// Database is the name of the provisioned Postgres database. The
 	// connection string is not here and never is: it is sealed in the vault
 	// and injected, so this record can be read, logged and returned over the
@@ -805,3 +814,103 @@ func (i *Installation) Validate() error {
 
 // Serving reports whether this installation is answering requests.
 func (i *Installation) Serving() bool { return i.State == InstallationRunning }
+
+// ChangeState is where a proposed change has got to.
+type ChangeState string
+
+// A change moves forward only. An abandoned change is not reopened; a new one
+// is opened, because the branch it was working on has diverged from whatever
+// has been promoted since.
+const (
+	// ChangeOpen is being worked on. Its preview is live and its own copy of
+	// the data is there to experiment against.
+	ChangeOpen ChangeState = "open"
+	// ChangeChecking is running the app's critical-path suite.
+	ChangeChecking ChangeState = "checking"
+	// ChangeReady passed its checks and is waiting for a person.
+	ChangeReady ChangeState = "ready"
+	// ChangeBlocked failed its checks and says which.
+	ChangeBlocked ChangeState = "blocked"
+	// ChangePromoting is being deployed to the installation.
+	ChangePromoting ChangeState = "promoting"
+	// ChangePromoted is live.
+	ChangePromoted ChangeState = "promoted"
+	// ChangeAbandoned was dropped without being promoted.
+	ChangeAbandoned ChangeState = "abandoned"
+)
+
+// CheckResult is one thing the platform looked at before letting a change
+// through.
+type CheckResult struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// Change is a proposed change to an installation.
+//
+// This is the record behind the sentence the whole product is selling: somebody
+// asks for something in English, sees it running somewhere that is not their
+// live site, and decides whether it goes live. The branch, the preview, the
+// checks and the promote are all one thing from the customer's side, so they
+// are one record here.
+type Change struct {
+	ID             string `json:"id"`
+	InstallationID string `json:"installation_id"`
+	UserID         string `json:"user_id"`
+
+	// Title is what was asked for, in the words it was asked in.
+	Title string `json:"title"`
+	// Branch holds the work in the installation's own repository.
+	Branch string `json:"branch"`
+	// WorkspaceID is the environment it is being worked on in: its own
+	// machine, its own services, its own copy of the data.
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Database is the scratch copy the preview runs against, so experimenting
+	// cannot touch anything real.
+	Database string `json:"database,omitempty"`
+
+	State       ChangeState `json:"state"`
+	StateReason string      `json:"state_reason,omitempty"`
+
+	PreviewURL string        `json:"preview_url,omitempty"`
+	Checks     []CheckResult `json:"checks,omitempty"`
+	// Revision is the commit promotion would deploy.
+	Revision string `json:"revision,omitempty"`
+
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	PromotedAt *time.Time `json:"promoted_at,omitempty"`
+}
+
+// Validate checks a change before it is stored.
+func (c *Change) Validate() error {
+	switch {
+	case c.InstallationID == "":
+		return errors.New("domain: a change is a change to something")
+	case c.UserID == "":
+		return errors.New("domain: a change belongs to whoever asked for it")
+	case strings.TrimSpace(c.Title) == "":
+		return errors.New("domain: a change needs a title; it is what the customer will see in the history")
+	case strings.TrimSpace(c.Branch) == "":
+		return errors.New("domain: a change needs a branch to hold the work")
+	}
+	return nil
+}
+
+// Promotable reports whether a change may go live.
+//
+// Only from ready, which means its checks ran and passed. A change that has
+// not been checked is not promotable even if somebody asks twice: the gate is
+// the product, not a formality in front of it.
+func (c *Change) Promotable() bool { return c.State == ChangeReady }
+
+// Passed reports whether every check succeeded.
+func (c *Change) Passed() bool {
+	for _, check := range c.Checks {
+		if !check.Passed {
+			return false
+		}
+	}
+	return len(c.Checks) > 0
+}

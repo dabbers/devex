@@ -34,6 +34,9 @@ const (
 	// Installation is one customer's copy of one app, as distinct from the
 	// workspace a change to it is made in.
 	Installation = "ins"
+	// Change is a proposed change to an installation, from the sentence
+	// somebody typed to the promote that makes it live.
+	Change = "chg"
 )
 
 // encoding is Crockford-style base32 in lowercase without padding, chosen so

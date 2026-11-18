@@ -23,6 +23,9 @@ import (
 // for one.
 type Databases interface {
 	Provision(ctx context.Context, owner string) (*database.Database, string, error)
+	Credentials(ctx context.Context, db *database.Database) (string, error)
+	Snapshot(ctx context.Context, db *database.Database, label string) (*database.Snapshot, error)
+	Restore(ctx context.Context, db *database.Database, snapshot *database.Snapshot) error
 	Drop(ctx context.Context, db *database.Database) error
 }
 
@@ -202,6 +205,9 @@ func (i *Installer) provision(ctx context.Context, app App, installation *domain
 			return err
 		}
 		installation.Database = db.Name
+		// Satisfies the manifest's requirement for the check below. It is
+		// deliberately not sealed with the rest: the workspace mints a fresh
+		// one when it starts, so no connection string is ever stored.
 		provided.DatabaseURL = dsn
 		i.deps.Logger.Info("database provisioned",
 			"installation", installation.ID, "database", db.Name)
@@ -217,6 +223,9 @@ func (i *Installer) provision(ctx context.Context, app App, installation *domain
 	// that injects a repo's secrets into its machine.
 	if i.deps.Vault != nil {
 		for name, value := range env {
+			if name == "DATABASE_URL" {
+				continue
+			}
 			if err := i.deps.Vault.Set(ctx, repo.ID, name, value); err != nil {
 				return fmt.Errorf("install: seal %s: %w", name, err)
 			}
@@ -256,11 +265,21 @@ func (i *Installer) start(ctx context.Context, installation *domain.Installation
 		return err
 	}
 
+	// What is actually deployed. Recorded from the machine rather than
+	// assumed, and recorded at install rather than at the first promote:
+	// without it the first change has nothing to roll back to, which is
+	// exactly when a customer is most likely to want one.
+	revision, err := i.deps.Workspaces.Revision(ctx, ws)
+	if err != nil {
+		return err
+	}
+
 	now := time.Now().UTC()
 	installation.State = domain.InstallationRunning
 	installation.StateReason = ""
 	installation.StartedAt = &now
 	installation.URL = started.Previews.Primary
+	installation.Revision = revision
 	return i.deps.Store.UpdateInstallation(ctx, installation)
 }
 

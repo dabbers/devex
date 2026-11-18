@@ -33,6 +33,18 @@ type GitTokens interface {
 	Token(ctx context.Context, userID string) (string, error)
 }
 
+// Overrides supplies environment belonging to one workspace rather than to its
+// repository.
+//
+// The vault is scoped to a repo, which is right for a repo's secrets and wrong
+// for anything a particular workspace needs. A change working against its own
+// copy of the data is exactly that case: same repository, same branch lineage,
+// different database -- and its connection string must not reach the
+// installation that change is proposed against.
+type Overrides interface {
+	For(ctx context.Context, w *domain.Workspace) (map[string]string, error)
+}
+
 // Deps are the collaborators a manager needs.
 type Deps struct {
 	Store   *store.Store
@@ -41,6 +53,8 @@ type Deps struct {
 	Vault   *secrets.Vault
 	// GitTokens is consulted when the repo's own secrets carry no token.
 	GitTokens GitTokens
+	// Overrides supplies per-workspace environment. Optional.
+	Overrides Overrides
 }
 
 // Options configure what a workspace gets.
@@ -66,6 +80,7 @@ type Manager struct {
 	preview   *preview.Allocator
 	vault     *secrets.Vault
 	gitTokens GitTokens
+	overrides Overrides
 	opts      Options
 }
 
@@ -78,6 +93,7 @@ func New(deps Deps, opts Options) (*Manager, error) {
 		store: deps.Store, driver: deps.Driver,
 		preview: deps.Preview, vault: deps.Vault,
 		gitTokens: deps.GitTokens,
+		overrides: deps.Overrides,
 		opts:      opts.withDefaults(),
 	}, nil
 }
@@ -154,7 +170,7 @@ func (m *Manager) bringUp(ctx context.Context, w *domain.Workspace) (*Started, e
 		return nil, err
 	}
 
-	env, err := m.environment(ctx, w.RepoID)
+	env, err := m.workspaceEnvironment(ctx, w)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +334,7 @@ func (m *Manager) describe(ctx context.Context, w *domain.Workspace) (*Started, 
 	if err != nil {
 		return nil, err
 	}
-	env, err := m.environment(ctx, w.RepoID)
+	env, err := m.workspaceEnvironment(ctx, w)
 	if err != nil {
 		return nil, err
 	}
@@ -338,6 +354,29 @@ func (m *Manager) describe(ctx context.Context, w *domain.Workspace) (*Started, 
 		}
 	}
 	return &Started{Instance: instance, Services: services, Previews: previews, Env: env}, nil
+}
+
+// workspaceEnvironment is the repo's secrets with this workspace's own
+// environment laid over them.
+//
+// The override wins, because it is the more specific statement: a change's
+// database is this workspace's database, whatever the repository says.
+func (m *Manager) workspaceEnvironment(ctx context.Context, w *domain.Workspace) (map[string]string, error) {
+	env, err := m.environment(ctx, w.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	if m.overrides == nil {
+		return env, nil
+	}
+	particular, err := m.overrides.For(ctx, w)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: resolve environment for %s: %w", w.ID, err)
+	}
+	for name, value := range particular {
+		env[name] = value
+	}
+	return env, nil
 }
 
 // environment resolves the repo's secrets.

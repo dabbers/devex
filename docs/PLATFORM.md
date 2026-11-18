@@ -166,6 +166,7 @@ should be refused.
 | **Database** | Provisioning, connection pooling, backups, point-in-time restore, snapshots | Schema, queries, migrations | `DATABASE_URL` |
 | **Identity** | Sign-in, sessions, the user directory, federation out to Google/Microsoft/SAML | Authorization — who may do what inside the app | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` |
 | **Secrets** | Sealing, injection, rotation | Reading them from the environment | named env vars |
+| **Database credentials** | Minting one per start, never storing it | Reading `DATABASE_URL` | `DATABASE_URL` |
 | **Mail** | Sending domain, DKIM/SPF, reputation, bounces, suppression | Composing the message | `SMTP_URL` |
 | **Storage** | Buckets, per-installation prefixes, scoped credentials, lifecycle | What it puts there | `STORAGE_*` |
 | **Jobs** | The scheduler, retries, overlap prevention | The handler at the declared path | invoked over HTTP |
@@ -181,6 +182,12 @@ should be refused.
 
 Three of these deserve their reasoning spelled out, because they are the ones
 an app author will be tempted to do themselves.
+
+**No connection string is ever written down.** Not in the vault, not in a row,
+not in a log. The platform owns the role, so a workspace mints a fresh
+credential when it starts and the old one stops working — which costs an
+`ALTER ROLE` and means there is nowhere for a database password to be read out
+of. The only thing holding a superseded credential is a process being replaced.
 
 **Postgres and only Postgres.** One engine means one backup story, one restore
 procedure, one snapshot mechanism, one pooler and one migration runner. A
@@ -378,6 +385,23 @@ requests.
 5. **A human promotes.** Not the agent. Ever.
 6. **The platform deploys**, snapshotting the database first if migrations are
    pending.
+
+A change is one record, because it is one thing from the customer's side: the
+branch, the preview, the checks and the promote are not four features. At most
+one is open against an installation at a time — two means two previews, two
+copies of the data, and a promote that has to reason about what the other one
+did, which is a merge conflict presented to somebody who does not know what git
+is.
+
+Promoting is a fast-forward of the installation's branch onto the change's.
+Anything else means something moved while the change was open, and resolving
+that is a decision rather than a deploy.
+
+A serving workspace is the one place a checkout is disposable. Everywhere else
+in this platform the disk is somebody's work and nothing resets it; production
+is the opposite, because nobody edits it by hand and "whatever is on the disk"
+must not decide what customers see. A serving installation is the promoted
+revision or it is wrong.
 
 Four rules the platform enforces structurally, so that a confused or hostile
 agent cannot work around them:
@@ -587,6 +611,11 @@ So: migrations are forward-only; a promote with pending migrations snapshots
 first, automatically; extension migrations are additive and confined to the
 reserved namespace; and a change that alters the meaning of existing data gets
 a louder confirmation than one that adds a column.
+
+**A rollback is one deep, deliberately.** A customer rolling back wants the
+thing that was working ten minutes ago; a list of twenty revisions is a
+decision they cannot make. The two revisions swap rather than the older one
+being dropped, so rolling back is itself undoable by rolling back again.
 
 **Export is a feature, not a concession.** A customer can take their database
 and their repository and leave. Saying so plainly is most of the trust this

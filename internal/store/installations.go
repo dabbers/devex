@@ -13,7 +13,8 @@ import (
 )
 
 const installationColumns = `id, user_id, app, app_version, name, state, state_reason,
-	repo_id, project_id, workspace_id, database, url, domain, created_at, updated_at, started_at`
+	repo_id, project_id, workspace_id, database, url, domain, revision, previous_revision,
+	created_at, updated_at, started_at`
 
 // CreateInstallation records a new installation.
 func (s *Store) CreateInstallation(ctx context.Context, i *domain.Installation) error {
@@ -34,9 +35,10 @@ func (s *Store) CreateInstallation(ctx context.Context, i *domain.Installation) 
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO installations (`+installationColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		i.ID, i.UserID, i.App, i.AppVersion, i.Name, string(i.State), i.StateReason,
 		i.RepoID, i.ProjectID, nullableString(i.WorkspaceID), i.Database, i.URL, i.Domain,
+		i.Revision, i.PreviousRevision,
 		formatTime(i.CreatedAt), formatTime(i.UpdatedAt), nullTime(i.StartedAt))
 	if err != nil {
 		if strings.Contains(err.Error(), "installations_name_per_user") {
@@ -105,10 +107,12 @@ func (s *Store) UpdateInstallation(ctx context.Context, i *domain.Installation) 
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE installations SET app_version = ?, name = ?, state = ?, state_reason = ?,
-			workspace_id = ?, database = ?, url = ?, domain = ?, updated_at = ?, started_at = ?
+			workspace_id = ?, database = ?, url = ?, domain = ?,
+			revision = ?, previous_revision = ?, updated_at = ?, started_at = ?
 		WHERE id = ?`,
 		i.AppVersion, i.Name, string(i.State), i.StateReason,
 		nullableString(i.WorkspaceID), i.Database, i.URL, i.Domain,
+		i.Revision, i.PreviousRevision,
 		formatTime(i.UpdatedAt), nullTime(i.StartedAt), i.ID)
 	if err != nil {
 		return wrapErr("update installation", err)
@@ -139,7 +143,8 @@ func scanInstallation(row scannable) (*domain.Installation, error) {
 	)
 	err := row.Scan(&one.ID, &one.UserID, &one.App, &one.AppVersion, &one.Name,
 		&state, &one.StateReason, &one.RepoID, &one.ProjectID, &workspaceID,
-		&one.Database, &one.URL, &one.Domain, &createdAt, &updatedAt, &startedAt)
+		&one.Database, &one.URL, &one.Domain, &one.Revision, &one.PreviousRevision,
+		&createdAt, &updatedAt, &startedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, fmt.Errorf("%w: installation", ErrNotFound)
@@ -159,4 +164,13 @@ func scanInstallation(row scannable) (*domain.Installation, error) {
 		return nil, err
 	}
 	return &one, nil
+}
+
+// InstallationByWorkspace returns the installation a workspace is serving, if
+// it is serving one.
+func (s *Store) InstallationByWorkspace(ctx context.Context, workspaceID string) (*domain.Installation, error) {
+	row := s.db.QueryRowContext(ctx,
+		"SELECT "+installationColumns+" FROM installations WHERE workspace_id = ? LIMIT 1",
+		workspaceID)
+	return scanInstallation(row)
 }
