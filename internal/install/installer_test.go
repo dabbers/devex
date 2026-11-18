@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -278,8 +279,14 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	edge := httptest.NewServer(router)
 	t.Cleanup(edge.Close)
 
+	// A port range of this test's own. Packages run in parallel and each has
+	// its own store, so every allocator would otherwise start from the same
+	// number and hand two packages the same port -- which only shows up later,
+	// as a service that cannot restart because something else took its port.
+	base := freeTestPort(t)
 	allocator, err := preview.New(db, router, preview.Config{
 		Domain: "test.invalid", Scheme: "http",
+		PortStart: base, PortEnd: base + 200,
 	})
 	if err != nil {
 		t.Fatalf("preview.New: %v", err)
@@ -442,4 +449,17 @@ func (d *tracked) QueryRowInt(ctx context.Context, name, query string, into *int
 	}
 	defer conn.Close()
 	return conn.QueryRowContext(ctx, query).Scan(into)
+}
+
+// freeTestPort returns a port nothing is listening on, used as the base of
+// this package's own preview range.
+func freeTestPort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }

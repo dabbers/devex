@@ -27,7 +27,7 @@ identity is misconfigured is the worst failure available to it.
 ## The checks
 
 ```sh
-FORMS_TEST_DATABASE_URL=postgres://localhost/forms_test?sslmode=disable ./checks/run.sh
+DABBERZ_CHECK_DATABASE_URL=postgres://localhost/forms_test?sslmode=disable ./checks/run.sh
 ```
 
 These are the paths whose breakage costs a customer money or trust, not a

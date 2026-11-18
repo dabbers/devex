@@ -13,6 +13,7 @@ import (
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
+	"github.com/dabbers/devex/internal/verify"
 	"github.com/dabbers/devex/internal/workspace"
 )
 
@@ -39,7 +40,11 @@ type Deps struct {
 	Workspaces *workspace.Manager
 	Vault      *secrets.Vault
 	Databases  Databases
-	Logger     *slog.Logger
+	// Verifier drives a real browser at a change's preview. Optional: without
+	// it a change is judged by its own suite alone, which notices a broken
+	// query and not a blank page.
+	Verifier *verify.Verifier
+	Logger   *slog.Logger
 }
 
 // Options configure where an installer puts things.

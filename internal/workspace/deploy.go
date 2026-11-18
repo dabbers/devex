@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/vm"
@@ -89,6 +90,17 @@ func (m *Manager) Deploy(ctx context.Context, w *domain.Workspace, revision stri
 		return err
 	}
 
+	ordered, err := domain.StartOrder(services)
+	if err != nil {
+		return err
+	}
+
+	// Stopped before the build, not after it. A build that writes over the
+	// binary its own service is still running fails outright on Linux --
+	// "text file busy" -- and the deploy is a restart anyway, so there is
+	// nothing to protect by keeping the old one alive a few seconds longer.
+	m.stopServices(ctx, instance, ordered)
+
 	// Rebuilt before restarted, for the same reason as a first start: a
 	// service command that runs a binary needs the binary to be the new one.
 	if err := m.build(ctx, w, instance, project, m.gitEnv(ctx, w, env)); err != nil {
@@ -106,12 +118,6 @@ func (m *Manager) Deploy(ctx context.Context, w *domain.Workspace, revision stri
 		ports[route.ServiceID] = route.UpstreamPort
 	}
 
-	ordered, err := domain.StartOrder(services)
-	if err != nil {
-		return err
-	}
-	// startService stops what is there before starting, so this replaces
-	// rather than duplicates.
 	return m.startServices(ctx, w, instance, ordered, env, ports)
 }
 
@@ -130,4 +136,61 @@ func (m *Manager) reach(ctx context.Context, w *domain.Workspace) (*vm.Instance,
 		return nil, nil, err
 	}
 	return instance, m.gitEnv(ctx, w, env), nil
+}
+
+// Run executes a command in a workspace and reports what happened.
+//
+// For the platform's own work in somebody's environment -- running a check
+// suite, asking git a question -- rather than for anything a service does. The
+// result is returned whole, including a non-zero exit, because for a check
+// suite the exit code is the answer rather than an error.
+func (m *Manager) Run(ctx context.Context, w *domain.Workspace, command string, extra map[string]string, timeout time.Duration) (*vm.ExecResult, error) {
+	instance, env, err := m.reach(ctx, w)
+	if err != nil {
+		return nil, err
+	}
+	for name, value := range extra {
+		env[name] = value
+	}
+	return m.driver.Exec(ctx, instance.ID, vm.Command{
+		// Shell-quoted by the caller's shell, not by Go's %q: a command
+		// carrying its own quotes loses them when a double-quoted string is
+		// re-parsed.
+		Argv:    []string{"sh", "-c", command},
+		Env:     env,
+		Timeout: timeout,
+	})
+}
+
+// Changed reports which files a workspace's branch has altered since a
+// revision.
+//
+// Used to notice when a change edits the thing that is supposed to be judging
+// it. A gate the change can rewrite is theatre, and the honest answer here is
+// not to forbid it -- a check sometimes has to change with the code -- but to
+// say so loudly enough that a person decides.
+func (m *Manager) Changed(ctx context.Context, w *domain.Workspace, since, path string) ([]string, error) {
+	instance, env, err := m.reach(ctx, w)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"diff", "--name-only", since + "...HEAD"}
+	if path != "" {
+		args = append(args, "--", path)
+	}
+	res, err := m.git(ctx, instance, env, args...)
+	if err != nil {
+		return nil, err
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("workspace: compare against %s: %s", since, firstLine(res.Stderr))
+	}
+
+	var changed []string
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			changed = append(changed, line)
+		}
+	}
+	return changed, nil
 }

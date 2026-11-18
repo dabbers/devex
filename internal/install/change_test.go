@@ -236,3 +236,115 @@ func installApp(t *testing.T, ctx context.Context, installer *Installer, userID,
 	}
 	return installation
 }
+
+// TestChecksDecideWhetherAChangeCanGoLive runs the app's real critical-path
+// suite against a real change, which is the gate the whole promote path
+// depends on.
+func TestChecksDecideWhetherAChangeCanGoLive(t *testing.T) {
+	if testing.Short() || os.Getenv(clusterEnv) == "" {
+		t.Skip("set " + clusterEnv)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	installer, db, owner, edge := newInstaller(t, os.Getenv(clusterEnv))
+	installation := installApp(t, ctx, installer, owner.ID, "checked")
+	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
+
+	change, err := installer.OpenChange(ctx, installation, "Tidy the wording")
+	if err != nil {
+		t.Fatalf("OpenChange: %v (%s)", err, change.StateReason)
+	}
+
+	checked, err := installer.Check(ctx, change)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if checked.State != domain.ChangeReady {
+		t.Fatalf("an untouched change did not pass its own suite: %s\n%s",
+			checked.State, detailOf(checked.Checks, "critical-path"))
+	}
+	if !checked.Promotable() {
+		t.Fatal("a change that passed its checks is not promotable")
+	}
+
+	// And a change that breaks the app does not get through.
+	working, err := db.store.GetWorkspace(ctx, change.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	// Break the critical path in the way a careless change would: a
+	// submission's answers stop being written. Nothing about the app looks
+	// broken until somebody checks what was recorded.
+	if _, err := installer.deps.Workspaces.Run(ctx, working,
+		`sed -i 's|VALUES ($1, $2, $3)|VALUES ($1, $2, NULL)|' store.go`,
+		nil, 2*time.Minute); err != nil {
+		t.Fatalf("breaking the app: %v", err)
+	}
+
+	blocked, err := installer.Check(ctx, change)
+	if err != nil {
+		t.Fatalf("Check after breaking it: %v", err)
+	}
+	if blocked.State != domain.ChangeBlocked {
+		t.Fatalf("a change that breaks the critical path was marked %s", blocked.State)
+	}
+	if blocked.Promotable() {
+		t.Fatal("a failing change is promotable")
+	}
+	if _, err := installer.Promote(ctx, blocked); err == nil {
+		t.Fatal("a failing change was promoted")
+	}
+}
+
+// TestAChangeThatRewritesItsOwnGateIsReported: a check the change edited is
+// not an independent result, and a person should be told before they promote
+// rather than afterwards.
+func TestAChangeThatRewritesItsOwnGateIsReported(t *testing.T) {
+	if testing.Short() || os.Getenv(clusterEnv) == "" {
+		t.Skip("set " + clusterEnv)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	installer, db, owner, edge := newInstaller(t, os.Getenv(clusterEnv))
+	installation := installApp(t, ctx, installer, owner.ID, "gatekeeper")
+	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
+
+	change, err := installer.OpenChange(ctx, installation, "Relax the checks")
+	if err != nil {
+		t.Fatalf("OpenChange: %v (%s)", err, change.StateReason)
+	}
+	working, err := db.store.GetWorkspace(ctx, change.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+
+	// Edit the suite, and commit it so it is part of the change.
+	if _, err := installer.deps.Workspaces.Run(ctx, working,
+		`echo '# relaxed' >> checks/run.sh && `+
+			`git -c user.email=t@example.invalid -c user.name=t commit -am 'relax the checks'`,
+		nil, 2*time.Minute); err != nil {
+		t.Fatalf("editing the suite: %v", err)
+	}
+
+	checked, err := installer.Check(ctx, change)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if detailOf(checked.Checks, "checks-unmodified") == "" {
+		t.Fatalf("editing the gate was not reported: %+v", checked.Checks)
+	}
+	if checked.State != domain.ChangeBlocked {
+		t.Fatalf("a change that rewrote its own gate was marked %s", checked.State)
+	}
+}
+
+func detailOf(checks []domain.CheckResult, name string) string {
+	for _, check := range checks {
+		if check.Name == name {
+			return check.Detail
+		}
+	}
+	return ""
+}

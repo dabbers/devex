@@ -379,17 +379,34 @@ it. An app that offers too few hooks will be modified in core by an agent that
 had no other option, which is the failure mode this whole structure exists to
 prevent. Designing the hook surface *is* designing the app.
 
-### Checks the agent cannot edit
+### Checks, and the honest limit of them
 
-A gate the agent can edit is theatre. So the check suite is not run from the
-installation's working tree: it is run from the **pinned upstream version of
-the app**. The installation's changes are the thing under test; the test itself
-comes from outside the installation.
+The platform tells a suite two things and expects an exit code:
+`DABBERZ_CHECK_URL` is the change's live preview, and
+`DABBERZ_CHECK_DATABASE_URL` is a throwaway database it may empty. Never the
+change's own copy -- a suite that truncates tables would leave the preview
+blank and look like it had worked.
 
-A customisation that legitimately changes a critical path therefore cannot
-quietly rewrite the check to match. It needs either a pull request that changes
-the check upstream, or an explicit human override recorded in the audit trail
-with a reason. Both are visible. Neither is the default.
+Two different questions get asked. The app's suite asks whether the paths that
+cost a customer money still work, which only the app's author can know. The
+browser harness asks whether the thing renders at all over its public address,
+which no unit test notices and which is the most common way a change breaks
+something.
+
+A gate the change can edit is theatre, and the obvious fix -- run the suite
+from the pinned upstream version instead of the change's tree -- does not
+survive contact with how tests are actually written. For most toolchains the
+test bodies compile with the code they test, so taking them from an older
+revision either fails to build or tests the wrong thing. There is no version of
+this that both tests the change and is immune to it.
+
+So the honest answer is detection rather than prevention. The platform compares
+the change against the revision the installation is serving and reports when it
+has altered anything under the suite's path. That is not forbidden -- a check
+sometimes has to change with the code it checks, and a platform that refused
+would simply be routed around -- but it appears as a failed check, so a person
+is told before they promote rather than afterwards. A change that rewrites its
+own gate can still go live; it cannot do it quietly.
 
 ## From a sentence to production
 
