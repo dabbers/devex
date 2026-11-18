@@ -12,7 +12,9 @@
 #   DABBERZ_ORCHESTRATOR_API_KEY  optional; without it planning is unavailable
 #   CLAUDE_CODE_OAUTH_TOKEN       optional; without it the agent cannot run
 
-owner: dabitp@gmail.com
+# Set this to the operator's address before deploying. A real one does not
+# belong in a template that lives in a public repository.
+owner: you@example.com
 
 # Reached over the internet, so requests are identified here rather than by
 # whatever happens to sit in front. A proxy password protects only the path
