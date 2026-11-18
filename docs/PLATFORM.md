@@ -506,7 +506,8 @@ makes acting freely safe is not a flag, it is step 3 -- its own machine, its
 own branch, its own copy of the data, a preview nobody depends on -- and step
 5. Those are the controls. A deployment whose driver does not actually isolate
 is giving the agent its host instead, and says so at startup rather than
-leaving it to be inferred from a config file.
+leaving it to be inferred from a config file -- which is a judgement the
+operator makes, on the understanding that such a host is rebuildable.
 
 Which makes "nobody edits it by hand" something the platform has to enforce
 rather than assume. An agent is addressed by workspace, and a serving
@@ -942,6 +943,38 @@ Two cautions worth carrying into whatever is eventually chosen:
   agent access read as marketing rather than principle. That applies to
   realtime too, whatever it turns out to cost: included, with an allowance,
   not withheld and sold back.
+
+### Abuse, which is a different problem from pricing
+
+Worth separating, because the two get conflated and the answers point opposite
+ways. Pricing is about what a customer is worth; abuse is about what a stranger
+can take. A platform that hands out a machine, a database and an agent on
+request is an attractive thing to sign up for with no intention of paying, and
+"generous free tier" is the version of this that ends with somebody mining on
+the host.
+
+Three controls, and they are chosen to not be the per-seat trap wearing a hat:
+
+- **A card before anything is provisioned.** Not a charge, a card. It costs an
+  abuser something real -- a working payment instrument -- without costing a
+  legitimate customer anything they were not going to do anyway.
+- **One card, one account.** The point of a card is that it is scarce, and
+  serial signups are how that scarcity gets defeated. So a payment instrument
+  maps to at most one account at a time, in both directions: an account has one
+  card, and a card is not usable to open a second account while it is on the
+  first. Enforced on the processor's fingerprint for the instrument rather than
+  on the digits, which change with every reissue.
+- **Tight allowances, deliberately.** Lower than the hardware could bear. This
+  is the one place where being stingy is the correct early posture: a limit that
+  turns out to be too low is a conversation with a real customer, while one that
+  turns out to be too high is a bill and a cleanup. Raise them with evidence.
+
+Note what these do *not* do, which is the whole reason the isolation question is
+tracked separately in `HOST.md`. A card and a quota decide who gets an account
+and how much they may consume. Neither of them keeps one account's agent out of
+another account's data. That is the driver's job, and while the only working
+driver is the one with no isolation, the real abuse control is that there is
+exactly one account.
 
 ## The first app
 
