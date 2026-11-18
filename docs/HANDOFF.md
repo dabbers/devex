@@ -47,8 +47,8 @@ ready`, `catalog ready apps=1`, and platform-token auth end to end —
 ### Known wrong or unverified, in priority order
 
 1. **`CLERK_SECRET_KEY` is probably under the wrong name in
-   `/etc/dabberz/dabberzd.env`.** The previous session said
-   `DABBERZ_CLERK_SECRET`, which nothing reads. Sign-in still works (verified
+   `/etc/dabberz/dabberzd.env`.** The previous session gave it a
+   `DABBERZ_`-prefixed name, which nothing reads. Sign-in still works (verified
    against the issuer's public keys) but new-user email attribution does not.
    `grep -c CLERK_SECRET_KEY /etc/dabberz/dabberzd.env` — zero means fix it.
 2. **`blocks.mail_url` and `blocks.storage` are empty**, so Forms cannot

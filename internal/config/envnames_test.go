@@ -56,6 +56,8 @@ func TestEveryEnvironmentVariableNamedInDocsIsReal(t *testing.T) {
 		"../../deploy/dbz-alpha.yaml",
 		"../../deploy/bootstrap-host.sh",
 		"../../deploy/dabberzd.service",
+		"../../deploy/standins/dabberz-storage-standin.service",
+		"../../docs/HANDOFF.md",
 		"../../configs/dabberz.example.yaml",
 		"../../docs/HOST.md",
 	} {
