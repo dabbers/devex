@@ -52,6 +52,13 @@ note() { printf '   %s\n' "$*"; }
 warn() { printf '\033[33m   ! %s\033[0m\n' "$*" >&2; }
 die()  { printf '\033[31m   x %s\033[0m\n' "$*" >&2; exit 1; }
 
+# cluster_ready reports whether the local cluster answers. Timed out rather
+# than waited on: the failure it replaces was psql reading a heredoc from a
+# socket nobody was listening on, which produces no output and never returns.
+cluster_ready() {
+	timeout 15 runuser -u postgres -- psql -tAc 'select 1' >/dev/null 2>&1
+}
+
 # at_least reports whether $1 is version $2 or newer.
 at_least() {
 	[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
@@ -155,7 +162,12 @@ storage() {
 		sfdisk -l "/dev/$disk" 2>/dev/null | grep -q '^Disklabel type' || continue
 		[ "$(lsblk -ln -o NAME "/dev/$disk" | tail -n +2 | wc -l)" -gt 0 ] || continue
 
-		free=$(sfdisk --list-free "/dev/$disk" 2>/dev/null | awk '/^ +[0-9]/{s+=$3} END{print s+0}')
+		# Rows matched by shape rather than indentation. sfdisk indents the
+		# header and starts the data rows at column zero, which is the
+		# opposite way round from what it looks like, and a leading-space
+		# pattern silently sums nothing and reports a full disk as empty.
+		free=$(sfdisk --list-free "/dev/$disk" 2>/dev/null |
+			awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {s+=$3} END{print s+0}')
 		[ "${free:-0}" -gt 0 ] || continue
 
 		targets+=("/dev/$disk")
@@ -306,6 +318,32 @@ postgres() {
 		return
 	fi
 
+	# Checked before anything is attempted, with a timeout, because the
+	# failure this replaces was a silent hang: psql reading a heredoc from a
+	# cluster that is not listening produces no output at all, and the script
+	# simply stops with the section heading printed and nothing after it.
+	if ! cluster_ready; then
+		# Debian's postgresql package normally creates and starts a cluster on
+		# install. It does not always: a debconf step that cannot find
+		# pg_lsclusters leaves the package installed and no cluster behind,
+		# and the first sign of it is this script stopping with no output.
+		# Recovered rather than reported, because making the cluster is what
+		# the package was supposed to have done anyway.
+		local major
+		major=$(psql --version | awk '{print $3}' | cut -d. -f1)
+		warn "no cluster is accepting connections; creating ${major}/main"
+		pg_createcluster "$major" main --start >/dev/null 2>&1 || true
+
+		if ! cluster_ready; then
+			warn "postgres is still not accepting connections on the local socket"
+			note "check:  pg_lsclusters"
+			note "        systemctl status postgresql@${major}-main"
+			note "        journalctl -u postgresql@${major}-main --no-pager -n 30"
+			die "cannot create the dabberz role without a running cluster"
+		fi
+		note "cluster ${major}/main is up"
+	fi
+
 	# The data block connects as a role that can create databases and roles,
 	# because provisioning an installation is exactly that. Not the bootstrap
 	# superuser: the restore path passes --role=, and a role that owns nothing
@@ -316,7 +354,7 @@ postgres() {
 	local password
 	password=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
 
-	su - postgres -c "psql -v ON_ERROR_STOP=1 -q" <<-SQL
+	runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - <<-SQL
 		DO \$\$ BEGIN
 		  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dabberz') THEN
 		    CREATE ROLE dabberz LOGIN CREATEDB CREATEROLE PASSWORD '${password}';
