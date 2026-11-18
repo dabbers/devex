@@ -411,10 +411,20 @@ postgres() {
 	# superuser: the restore path passes --role=, and a role that owns nothing
 	# is easier to reason about than one that owns the cluster.
 	# From urandom rather than openssl, which a minimal Debian may not carry.
-	# Stripped to alphanumerics so it is safe both inside a SQL literal and in
-	# a connection string without escaping either.
-	local password
-	password=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+	# Alphanumerics only, so it needs no escaping in either a SQL literal or a
+	# connection string.
+	#
+	# Written in two steps on purpose. The obvious one line --
+	# `tr -dc ... </dev/urandom | head -c 32` -- ends the pipeline with a
+	# consumer that exits early, so tr takes SIGPIPE, pipefail turns that into
+	# a failed assignment, and errexit kills the script. Silently: the exit
+	# status is 141 and nothing is printed, which reads exactly like a hang at
+	# whatever ran last. Reading a fixed amount and trimming in the shell
+	# leaves nothing to signal.
+	local raw password
+	raw=$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')
+	password=${raw:0:32}
+	[ "${#password}" -eq 32 ] || die "could not generate a password"
 
 	runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - <<-SQL
 		DO \$\$ BEGIN
