@@ -64,18 +64,36 @@ afternoon. Repartitioning a server with customers on it is not.
 
 So: a small root filesystem, and the rest left unallocated.
 
-The machine is 2 x 2000 GB, and the installer's default plan spends all of it
-on a root filesystem -- which would put the OS, Postgres, every workspace
-checkout, every guest rootfs and an unpruned snapshot directory on one volume,
-where a runaway build takes down sshd along with the daemon. What to ask for
-instead:
+The machine is a KS-LE-5: two 2000 GB SATA disks presented as JBOD, 3.6 TiB
+in total. The installer's default plan spends all of it on a root filesystem --
+which would put the OS, Postgres, every workspace checkout, every guest rootfs
+and an unpruned snapshot directory on one volume, where a runaway build takes
+down sshd along with the daemon. What was asked for instead, and what the
+machine was built with:
 
-| | Size | FS | RAID |
+| | Usable | FS | RAID |
 |---|---|---|---|
-| `/boot` | 1 GB | ext4 | RAID1 |
-| `/` | 100 GB | ext4 | RAID1 |
-| `swap` | 16 GB | swap | -- |
-| unallocated | ~1.88 TB per disk | -- | -- |
+| `/boot` | 1.0 GiB | ext4 | RAID1 |
+| `/` | 97.7 GiB | ext4 | RAID1 |
+| `swap` | 2 x 7.8 GiB | swap | none |
+| unallocated | 3.4 TiB | -- | -- |
+
+JBOD matters as much as the sizes. The disks are presented individually, which
+is what software RAID1 needs now and what a pool needs later; hardware RAID
+would have obstructed both.
+
+Two things that were traded away deliberately, recorded so they are decisions
+rather than oversights:
+
+- **Swap is not mirrored.** Which makes the redundancy asymmetric: `/boot` and
+  `/` survive losing a disk, and then the machine probably dies anyway because
+  it was swapping onto the one that went. Acceptable on a host that is
+  rebuildable; mirror it on one that is not, at half the swap.
+- **The disks are spinning, not flash.** Fine for validating. The first thing
+  to hurt will be Postgres WAL `fsync` latency, and a copy-on-write pool makes
+  sync writes exactly the operation it is worst at. The fix is flash for the
+  WAL rather than a different layout, so it is an argument about the next
+  machine, not this one.
 
 Then `zpool create tank mirror <part4> <part4>` later, with everything dabberz
 on datasets there. OS redundancy and a mirrored copy-on-write pool, which beats
