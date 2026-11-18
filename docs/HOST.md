@@ -273,7 +273,7 @@ under the preview zone.
 - A wildcard for the preview zone, deliberately not locked down, because that is
   where customers' apps answer.
 
-On this deployment that is `dash.dabberz.com` for the control plane and
+On this deployment that is `panel.dabberz.com` for the control plane and
 `*.ondabberz.link` for previews. Different registrable domains, which is the
 part that matters: the separation is what stops the panel being reachable
 under a preview name.
