@@ -64,6 +64,22 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Not production. A workspace that serves an installation is the promoted
+	// revision or it is wrong: the next deploy resets its checkout, so an
+	// agent's work there is either thrown away or -- until then -- being
+	// served to customers having been checked by nobody. Changing an
+	// installation goes through a change, which is what changes are for.
+	serving, err := s.store.InstallationByWorkspace(ctx, ws.ID)
+	switch {
+	case err == nil:
+		writeStatus(w, http.StatusConflict, "this workspace is serving "+serving.Name+
+			"; open a change against it rather than editing what customers are using")
+		return
+	case !errors.Is(err, store.ErrNotFound):
+		writeError(w, err)
+		return
+	}
+
 	prompt := &domain.Message{WorkspaceID: ws.ID, UserID: s.userID(r), Content: content}
 	reply, err := s.store.StartAgentTurn(ctx, prompt)
 	switch {

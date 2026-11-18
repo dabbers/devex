@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/store"
 )
 
 // TestAChangeGoesLiveWithoutTouchingProductionFirst is the loop the whole
@@ -337,6 +339,70 @@ func TestAChangeThatRewritesItsOwnGateIsReported(t *testing.T) {
 	}
 	if checked.State != domain.ChangeBlocked {
 		t.Fatalf("a change that rewrote its own gate was marked %s", checked.State)
+	}
+}
+
+// TestWorkingOnAChangeAfterItPassedMeansCheckingItAgain is the claim that
+// everything else here rests on.
+//
+// "Nothing goes live unchecked" is about a particular commit. A change that is
+// worked on once more after being told it was ready -- one more commit from an
+// agent that did not stop, a push by hand -- would otherwise promote code that
+// passed nothing, while reporting that its checks were green.
+func TestWorkingOnAChangeAfterItPassedMeansCheckingItAgain(t *testing.T) {
+	if testing.Short() || os.Getenv(clusterEnv) == "" {
+		t.Skip("set " + clusterEnv)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	installer, db, owner, edge, _ := newInstaller(t, os.Getenv(clusterEnv))
+	installation := installApp(t, ctx, installer, owner.ID, "latecomer")
+	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
+
+	change, err := installer.OpenChange(ctx, installation, "Say hello")
+	if err != nil {
+		t.Fatalf("OpenChange: %v (%s)", err, change.StateReason)
+	}
+	working, err := db.store.GetWorkspace(ctx, change.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+
+	checked, err := installer.Check(ctx, change)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if checked.State != domain.ChangeReady {
+		t.Fatalf("a change with nothing wrong with it is %s: %+v", checked.State, checked.Checks)
+	}
+	passed := checked.Revision
+
+	// One more commit, after being told it was ready.
+	if _, err := installer.deps.Workspaces.Run(ctx, working,
+		`echo '// later' >> main.go && `+
+			`git -c user.email=t@example.invalid -c user.name=t commit -am 'one more thing'`,
+		nil, 2*time.Minute); err != nil {
+		t.Fatalf("committing again: %v", err)
+	}
+
+	if _, err := installer.Promote(ctx, checked); err == nil {
+		t.Fatal("a change promoted code that its checks never saw")
+	} else if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Promote refused for the wrong reason: %v", err)
+	}
+
+	// And checking again picks the new commit up, rather than re-blessing the
+	// one that happened to be recorded.
+	rechecked, err := installer.Check(ctx, change)
+	if err != nil {
+		t.Fatalf("Check again: %v", err)
+	}
+	if rechecked.Revision == passed {
+		t.Fatalf("checking again judged the old revision %s", short(passed))
+	}
+	if _, err := installer.Promote(ctx, rechecked); err != nil {
+		t.Fatalf("Promote after re-checking: %v", err)
 	}
 }
 

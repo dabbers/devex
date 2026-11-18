@@ -438,6 +438,31 @@ would simply be routed around -- but it appears as a failed check, so a person
 is told before they promote rather than afterwards. A change that rewrites its
 own gate can still go live; it cannot do it quietly.
 
+### A check is about one commit
+
+"Nothing goes live unchecked" is a claim about a particular commit or it is not
+a claim at all, and two things have to be true for it to hold.
+
+The preview has to be the code being checked. An agent that has committed since
+the change was opened has moved the branch on, while the preview is still
+running the binary built when it opened. Left alone, the app's own suite would
+compile the source as it stands and the browser would open the old build: one
+result about the new code, one about the old, and a pair that describes
+something that never existed. So checking rebuilds the preview on the current
+revision first, and records which revision that was.
+
+And promotion has to deploy that same commit. A change that is worked on again
+after being told it was ready -- one more commit from an agent, a push by hand
+-- has to be checked again. Promoting refuses a revision that has moved since
+its checks passed, and says both so the reason is obvious. The alternative is
+the worst possible failure for this platform: a change that reports green and
+ships something nobody looked at.
+
+Note what this does *not* do: rebuilding a change's preview never resets its
+checkout. That operation exists for a workspace that serves an installation,
+where "whatever is on the disk" must not decide what customers see. In a
+workspace somebody is working in, the uncommitted edit is the work.
+
 ## From a sentence to production
 
 The path a change takes, and which parts the platform *enforces* rather than
@@ -472,6 +497,19 @@ in this platform the disk is somebody's work and nothing resets it; production
 is the opposite, because nobody edits it by hand and "whatever is on the disk"
 must not decide what customers see. A serving installation is the promoted
 revision or it is wrong.
+
+Which makes "nobody edits it by hand" something the platform has to enforce
+rather than assume. An agent is addressed by workspace, and a serving
+installation has one, so without a rule the whole flow above could be
+sidestepped by asking the agent to work in production directly. Its edits
+would then either be discarded by the next deploy or, until then, be served to
+customers having been checked by nobody. So an agent turn is refused in a
+workspace that is serving an installation, and the refusal says to open a
+change instead.
+
+Step 4 is also a claim about one commit rather than about the change in
+general -- see *A check is about one commit* above for what that costs and why
+it is not optional.
 
 Four rules the platform enforces structurally, so that a confused or hostile
 agent cannot work around them:

@@ -66,6 +66,14 @@ func (i *Installer) Check(ctx context.Context, change *domain.Change) (*domain.C
 	}
 	change.Revision = revision
 
+	// The preview is rebuilt on that revision before either check looks at
+	// it. Without this the app's suite compiles the source as it stands while
+	// the browser opens a binary built when the change was opened, and the two
+	// results describe different code.
+	if err := i.deps.Workspaces.Rebuild(ctx, working); err != nil {
+		return nil, i.blocked(ctx, change, err)
+	}
+
 	change.State = domain.ChangeChecking
 	change.Checks = nil
 	if err := i.deps.Store.UpdateChange(ctx, change); err != nil {

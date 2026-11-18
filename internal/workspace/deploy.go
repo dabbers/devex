@@ -81,6 +81,32 @@ func (m *Manager) Deploy(ctx context.Context, w *domain.Workspace, revision stri
 		return fmt.Errorf("workspace: deploy %s: %s", revision, firstLine(res.Stderr))
 	}
 
+	return m.rebuild(ctx, w, instance, env)
+}
+
+// Rebuild builds what is in a workspace's checkout and restarts its services
+// on it, without touching git.
+//
+// Deliberately not Deploy. Deploy resets the checkout to a revision, which is
+// right for a workspace that serves an installation and destructive in one
+// somebody -- or an agent -- is working in, where the uncommitted edit is the
+// work. This is the half of a deploy a change can safely be given.
+//
+// A change needs it, because otherwise its two checks disagree. The app's own
+// suite compiles the source as it stands, while the browser opens the preview,
+// which is still running the binary built when the change was opened. One
+// would be judging the new code and the other the old, and together they would
+// report on something that never existed.
+func (m *Manager) Rebuild(ctx context.Context, w *domain.Workspace) error {
+	instance, env, err := m.reach(ctx, w)
+	if err != nil {
+		return err
+	}
+	return m.rebuild(ctx, w, instance, env)
+}
+
+// rebuild is the shared tail of Deploy and Rebuild: stop, build, start.
+func (m *Manager) rebuild(ctx context.Context, w *domain.Workspace, instance *vm.Instance, env map[string]string) error {
 	project, err := m.store.GetProject(ctx, w.ProjectID)
 	if err != nil {
 		return err
@@ -97,8 +123,8 @@ func (m *Manager) Deploy(ctx context.Context, w *domain.Workspace, revision stri
 
 	// Stopped before the build, not after it. A build that writes over the
 	// binary its own service is still running fails outright on Linux --
-	// "text file busy" -- and the deploy is a restart anyway, so there is
-	// nothing to protect by keeping the old one alive a few seconds longer.
+	// "text file busy" -- and this is a restart anyway, so there is nothing
+	// to protect by keeping the old one alive a few seconds longer.
 	m.stopServices(ctx, instance, ordered)
 
 	// Rebuilt before restarted, for the same reason as a first start: a
@@ -107,8 +133,8 @@ func (m *Manager) Deploy(ctx context.Context, w *domain.Workspace, revision stri
 		return err
 	}
 
-	// The ports a running installation already answers on, kept across a
-	// deploy so its public address does not move when it ships a change.
+	// The ports it already answers on, kept across the restart so its public
+	// address does not move.
 	ports := map[string]int{}
 	routes, err := m.store.ListPreviewRoutesFor(ctx, w.ID)
 	if err != nil {

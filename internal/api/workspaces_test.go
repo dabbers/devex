@@ -334,6 +334,34 @@ func TestSendingAMessageRecordsBothSidesAndReturnsAccepted(t *testing.T) {
 	}
 }
 
+// TestTheAgentIsRefusedInAWorkspaceThatIsServingCustomers is the rule the
+// whole change flow exists to enforce, at the one door that could bypass it.
+//
+// A workspace serving an installation is the promoted revision or it is wrong.
+// An agent turn there would either be thrown away by the next deploy or, until
+// then, be served to customers having been checked by nobody -- which is
+// exactly what opening a change avoids.
+func TestTheAgentIsRefusedInAWorkspaceThatIsServingCustomers(t *testing.T) {
+	f := newFixture(t)
+	project := withProject(t, f)
+	ws := runningWorkspace(t, f)
+
+	installation := &domain.Installation{
+		UserID: f.owner.ID, App: "forms", AppVersion: "0.1.0", Name: "recruiting",
+		State: domain.InstallationRunning, RepoID: f.repo.ID,
+		ProjectID: project.ID, WorkspaceID: ws.ID,
+	}
+	if err := f.store.CreateInstallation(f.ctx, installation); err != nil {
+		t.Fatalf("CreateInstallation: %v", err)
+	}
+
+	status := f.call(t, "POST", "/v1/workspaces/"+ws.ID+"/messages",
+		map[string]any{"content": "add a company field"}, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("the agent was let into a workspace serving customers: %d", status)
+	}
+}
+
 func TestAnotherUsersConversationIsNotReachable(t *testing.T) {
 	f := newFixture(t)
 	withProject(t, f)
