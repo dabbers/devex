@@ -253,13 +253,53 @@ redundant.
 
 - **The config.** `configs/dabberz.example.yaml` is the annotated one. The
   master key comes from `dabberzctl keygen` and belongs in the environment,
-  never the file. The data block's DSN is already in
-  `/etc/dabberz/data.env`.
-- **A systemd unit**, with that env file and `EnvironmentFile`. The daemon
-  binds 80 and 443 and, with the local driver, runs agents as itself -- so it
-  runs as root today. The `dabberz` user the script creates is for when that is
-  no longer true.
+  never the file. The data block's DSN is already in `/etc/dabberz/data.env`.
+- **The binaries**, which nothing has built yet:
+
+  ```
+  cd /opt/dabberz/src && make build
+  install -d /opt/dabberz/bin
+  install -m0755 bin/dabberzd       /opt/dabberz/bin/dabberzd.new
+  install -m0755 bin/dabberzctl     /opt/dabberz/bin/
+  install -m0755 bin/dabberz-verify /usr/local/bin/
+  mv /opt/dabberz/bin/dabberzd.new  /opt/dabberz/bin/dabberzd
+  ```
+
+  The build-then-rename is not ceremony. Writing over the binary of a running
+  process fails outright on Linux -- "text file busy" -- and a rename does not,
+  because the running process keeps the inode it started from. The same
+  mistake inside the platform is why deploying a change stops a service before
+  rebuilding it.
+
+  `dabberz-verify` goes somewhere on `PATH`, because the daemon runs it by
+  name on the machine that drives the browser.
+- **The systemd unit** is `deploy/dabberzd.service`, which reads that env file:
+
+  ```
+  install -m0644 deploy/dabberzd.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl enable --now dabberzd
+  journalctl -u dabberzd -f
+  ```
 - **DNS and TLS**, below.
+
+### Identity is not optional on this machine
+
+The one configuration that will not announce itself. `auth.kind: single`
+treats every request as the owner without asking for anything, which is right
+for a daemon on a loopback address and catastrophic on a public one: whoever
+reaches the port has a shell, the secrets vault and the whole audit trail, and
+nothing about the deployment looks wrong.
+
+The daemon refuses to start in that combination rather than warning about it,
+because a warning scrolls past and the thing it is protecting is a root shell
+on the internet. Two ways out, both configuration:
+
+- bind `server.addr` to `127.0.0.1` and reach the panel through an SSH tunnel,
+  which is the right shape for a first bring-up; or
+- configure a provider, which is the right shape for anything after that.
+
+A credential that has been in a chat log, a terminal transcript or a
+screenshot is not a credential any more. Rotate before this host uses it.
 
 ## DNS, and why it is two names
 

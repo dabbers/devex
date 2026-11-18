@@ -9,6 +9,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -250,6 +251,25 @@ func (c *Config) applyEnv() {
 // components.
 func (c *Config) Env(name string) string { return os.Getenv(name) }
 
+// loopbackAddr reports whether a listen address is reachable only from this
+// machine. A missing host means every interface, which is the dangerous
+// reading, so it is not loopback.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	switch host {
+	case "", "*", "0.0.0.0", "::", "[::]":
+		return false
+	case "localhost":
+		return true
+	}
+	host = strings.Trim(host, "[]")
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // Validate checks the configuration is usable before anything starts.
 func (c *Config) Validate() error {
 	var problems []string
@@ -262,6 +282,20 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.Addr == "" {
 		problems = append(problems, "server.addr is required")
+	}
+
+	// Refused rather than warned about. Single-user auth accepts anything, so
+	// on an address the internet can reach it hands a shell, the secrets vault
+	// and the audit trail to whoever connects -- and it does that while
+	// looking like a working deployment, which is the part that makes a
+	// warning the wrong instrument. There are two ways out and both are
+	// configuration, so neither needs a flag to override this.
+	if c.Auth.Kind == AuthSingle && c.Server.Addr != "" && !loopbackAddr(c.Server.Addr) {
+		problems = append(problems, fmt.Sprintf(
+			"auth.kind is single and server.addr is %s, which is not loopback: "+
+				"every request would be treated as %s without being asked for anything. "+
+				"Bind to 127.0.0.1 and reach it through a tunnel, or configure an identity provider",
+			c.Server.Addr, c.Owner))
 	}
 
 	switch c.Driver.Kind {

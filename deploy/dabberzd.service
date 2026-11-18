@@ -1,0 +1,48 @@
+[Unit]
+Description=dabberz control plane
+Documentation=https://github.com/dabbers/devex/blob/main/docs/HOST.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Not Requires: Postgres being down is a reason for installs to fail with
+# something legible, not a reason for the panel to disappear as well.
+After=zfs-mount.service
+
+[Service]
+Type=simple
+
+# Root, and worth being explicit about why rather than leaving it to look like
+# carelessness. The daemon binds 80 and 443, and with the local driver it runs
+# agents and customers' services as itself. Firecracker's jailer needs it too.
+# The dabberz user the bootstrap creates is for when neither is true.
+User=root
+
+# Secrets come from here, never from the config file: the master key, the
+# provider's secret, the data block's connection string. Root-only, 0600.
+EnvironmentFile=/etc/dabberz/data.env
+EnvironmentFile=-/etc/dabberz/dabberzd.env
+
+WorkingDirectory=/opt/dabberz/src
+ExecStart=/opt/dabberz/bin/dabberzd -config /etc/dabberz/dabberz.yaml
+
+# Reloaded by restarting. Nothing here holds state in memory that the control
+# plane database does not already have.
+Restart=on-failure
+RestartSec=5s
+
+# A long stop, deliberately. Shutting down means stopping customers' services
+# in order, and killing that halfway leaves processes nobody is supervising.
+TimeoutStopSec=120
+
+# Agent runs and Go builds open a lot at once.
+LimitNOFILE=65536
+
+# Deliberately not hardened further. ProtectSystem, PrivateDevices,
+# NoNewPrivileges and friends are the right instincts and the wrong ones here:
+# this process exists to create machines, write to /dev/kvm, manage mounts and
+# run other people's code. Locking it down to the point where it cannot do
+# that and then re-opening each hole one at a time produces a unit that looks
+# careful and is not. The isolation that matters is the guest boundary, which
+# is the Firecracker driver's job.
+
+[Install]
+WantedBy=multi-user.target
