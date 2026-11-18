@@ -24,8 +24,11 @@ import (
 type Databases interface {
 	Provision(ctx context.Context, owner string) (*database.Database, string, error)
 	Credentials(ctx context.Context, db *database.Database) (string, error)
+	// Fork returns a copy of a database. How the copy is made is the block's
+	// business: a dump and restore today, a copy-on-write clone when the data
+	// is big enough for that to matter.
+	Fork(ctx context.Context, source *database.Database, owner string) (*database.Database, error)
 	Snapshot(ctx context.Context, db *database.Database, label string) (*database.Snapshot, error)
-	Restore(ctx context.Context, db *database.Database, snapshot *database.Snapshot) error
 	Drop(ctx context.Context, db *database.Database) error
 }
 

@@ -477,3 +477,57 @@ func (b *Block) Credentials(ctx context.Context, db *Database) (string, error) {
 // Derived rather than remembered, so a caller holding only a database name --
 // which is all the control plane records -- can still reach it.
 func RoleFor(databaseName string) string { return databaseName + "_rw" }
+
+// Fork returns a new database holding a copy of another's contents.
+//
+// This is how a change gets its own data to work against: real rows, nothing
+// shared with the installation it was copied from. One operation rather than
+// three, because how a copy is made is the block's business and is the thing
+// most likely to be replaced.
+//
+// Today it dumps and restores, which is O(the data) in both time and space.
+// That is right for this catalog at this size -- a forms installation is
+// kilobytes and a small CRM is seconds -- and it stops being right somewhere
+// in the gigabytes. The alternatives all exist behind this one method:
+//
+//   - A copy-on-write filesystem. ZFS or btrfs snapshot and clone is O(1) and
+//     pays only for what diverges, which is the property worth wanting. It
+//     needs a Postgres cluster per installation rather than one cluster with
+//     many databases, because what gets cloned is a whole data directory.
+//     That is a real architectural change and buys per-tenant isolation and
+//     per-tenant point-in-time recovery along with it.
+//   - A storage engine built for it, such as Neon's. Instant branching, and
+//     the customer's data leaves this machine -- which is awkward for a
+//     product whose pitch is that they own it.
+//   - Postgres's own CREATE DATABASE ... TEMPLATE, which is a file copy and
+//     faster than a dump, but requires no other session to be connected to
+//     the template. Disqualifying here: that means disconnecting the live
+//     installation to open a change against it.
+//
+// The number that decides is how long opening a change takes. When that is
+// minutes rather than seconds, this method changes and nothing else does.
+func (b *Block) Fork(ctx context.Context, source *Database, owner string) (*Database, error) {
+	snapshot, err := b.Snapshot(ctx, source, "fork for "+owner)
+	if err != nil {
+		return nil, fmt.Errorf("database: snapshot %s before forking: %w", source.Name, err)
+	}
+	// The snapshot is a byproduct here rather than a backup, so it does not
+	// linger: keeping one per change would fill the disk with copies nobody
+	// asked for.
+	defer func() { _ = os.Remove(snapshot.Path) }()
+
+	forked, _, err := b.Provision(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Restore(ctx, forked, snapshot); err != nil {
+		// A fork that could not be filled is worse than none: whatever uses
+		// it would come up empty and look like it worked.
+		if dropErr := b.Drop(ctx, forked); dropErr != nil {
+			return nil, fmt.Errorf("database: fork %s failed (%w), and the empty copy %s could not be dropped: %w",
+				source.Name, err, forked.Name, dropErr)
+		}
+		return nil, fmt.Errorf("database: fill the fork of %s: %w", source.Name, err)
+	}
+	return forked, nil
+}

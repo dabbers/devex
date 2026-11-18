@@ -131,30 +131,17 @@ func (i *Installer) prepare(ctx context.Context, installation *domain.Installati
 
 // copyData gives a change its own database, holding the installation's data as
 // it was a moment ago.
+//
+// A fork rather than a pointer. An agent experimenting cannot destroy a
+// customer's submissions because what it can reach is not the customer's
+// submissions -- and a change tested against an empty database has not been
+// tested, so it has to be a copy of the real thing rather than a blank one.
 func (i *Installer) copyData(ctx context.Context, installation *domain.Installation, change *domain.Change) (*database.Database, error) {
 	live := &database.Database{
 		Name: installation.Database, Role: database.RoleFor(installation.Database),
 		Owner: installation.ID,
 	}
-	snapshot, err := i.deps.Databases.Snapshot(ctx, live, "copy for "+change.ID)
-	if err != nil {
-		return nil, fmt.Errorf("install: snapshot before copying: %w", err)
-	}
-
-	scratch, _, err := i.deps.Databases.Provision(ctx, change.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := i.deps.Databases.Restore(ctx, scratch, snapshot); err != nil {
-		// A scratch database that could not be filled is worse than none: the
-		// preview would come up empty and look like it worked.
-		if dropErr := i.deps.Databases.Drop(ctx, scratch); dropErr != nil {
-			i.deps.Logger.Error("could not drop a half-made scratch database",
-				"database", scratch.Name, "error", dropErr)
-		}
-		return nil, fmt.Errorf("install: fill the change's copy of the data: %w", err)
-	}
-	return scratch, nil
+	return i.deps.Databases.Fork(ctx, live, change.ID)
 }
 
 // Promote makes a checked change live.

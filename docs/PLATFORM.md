@@ -183,6 +183,29 @@ should be refused.
 Three of these deserve their reasoning spelled out, because they are the ones
 an app author will be tempted to do themselves.
 
+**How a copy is made is the block's business.** A change works against a fork
+of its installation's data, and the platform asks for one operation -- give me
+a copy of this -- rather than orchestrating how. Today that is a dump and a
+restore, which costs time and space proportional to the data. That is right at
+this size and stops being right somewhere in the gigabytes, and the number that
+decides is how long opening a change takes. When it is minutes rather than
+seconds, three replacements are waiting behind the same method:
+
+- **A copy-on-write filesystem.** ZFS or btrfs snapshot and clone is
+  effectively free and pays only for what diverges, which is the property worth
+  having. It needs a Postgres cluster per installation rather than one cluster
+  holding many databases, since what gets cloned is a whole data directory --
+  a real architectural change that brings per-tenant isolation and per-tenant
+  point-in-time recovery with it.
+- **A storage engine built for branching**, of the kind Neon popularised.
+  Instant, and the customer's data leaves this machine, which sits badly with
+  a product whose pitch is that they own it. Worth revisiting if self-hosting
+  one ever becomes a weekend rather than a project.
+- **Postgres's own `CREATE DATABASE ... TEMPLATE`**, a file copy rather than a
+  logical replay. Faster, and disqualified: it requires no other session to be
+  connected to the template, which means disconnecting the live installation
+  in order to open a change against it.
+
 **No connection string is ever written down.** Not in the vault, not in a row,
 not in a log. The platform owns the role, so a workspace mints a fresh
 credential when it starts and the old one stops working — which costs an

@@ -356,3 +356,99 @@ func pathOf(t *testing.T, dsn string) string {
 	}
 	return rest[slash:question]
 }
+
+// TestAForkIsARealCopy is the property a change depends on: its data is the
+// installation's data, and nothing it does reaches back.
+func TestAForkIsARealCopy(t *testing.T) {
+	block := testBlock(t)
+	ctx := context.Background()
+
+	source, sourceDSN := provision(t, block, "ins_source")
+	conn := openAs(t, sourceDSN)
+	if _, err := conn.ExecContext(ctx,
+		`CREATE TABLE submissions (id serial primary key, body text)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`INSERT INTO submissions (body) VALUES ('a real customer')`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	forked, err := block.Fork(ctx, source, "chg_1")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := block.Drop(context.Background(), forked); err != nil {
+			t.Logf("dropping %s: %v", forked.Name, err)
+		}
+	})
+	if forked.Name == source.Name {
+		t.Fatal("the fork is the source")
+	}
+
+	// It holds the real data: a change tested against an empty database has
+	// not been tested.
+	forkConn, err := block.Connect(forked.Name)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer forkConn.Close()
+
+	var body string
+	if err := forkConn.QueryRowContext(ctx, `SELECT body FROM submissions`).Scan(&body); err != nil {
+		t.Fatalf("the fork does not hold the source's data: %v", err)
+	}
+	if body != "a real customer" {
+		t.Fatalf("the fork holds %q", body)
+	}
+
+	// And nothing it does reaches back.
+	if _, err := forkConn.ExecContext(ctx, `DELETE FROM submissions`); err != nil {
+		t.Fatalf("delete in the fork: %v", err)
+	}
+	if _, err := forkConn.ExecContext(ctx,
+		`INSERT INTO submissions (body) VALUES ('an experiment')`); err != nil {
+		t.Fatalf("insert in the fork: %v", err)
+	}
+
+	var remaining string
+	if err := conn.QueryRowContext(ctx, `SELECT body FROM submissions`).Scan(&remaining); err != nil {
+		t.Fatalf("reading the source after the fork was changed: %v", err)
+	}
+	if remaining != "a real customer" {
+		t.Fatalf("the source now holds %q; the fork leaked into it", remaining)
+	}
+}
+
+// TestAForkLeavesNoSnapshotBehind: the dump a fork goes through is a byproduct,
+// not a backup, and keeping one per change would fill the disk with copies
+// nobody asked for.
+func TestAForkLeavesNoSnapshotBehind(t *testing.T) {
+	block := testBlock(t)
+	ctx := context.Background()
+
+	source, dsn := provision(t, block, "ins_tidy")
+	conn := openAs(t, dsn)
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE t (a int)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	before, err := block.ListSnapshots(ctx, source)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	forked, err := block.Fork(ctx, source, "chg_tidy")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	t.Cleanup(func() { _ = block.Drop(context.Background(), forked) })
+
+	after, err := block.ListSnapshots(ctx, source)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("forking left %d snapshots behind", len(after)-len(before))
+	}
+}

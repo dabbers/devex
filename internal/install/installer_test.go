@@ -218,8 +218,16 @@ func (d *tracked) Snapshot(ctx context.Context, db *database.Database, label str
 	return d.block.Snapshot(ctx, db, label)
 }
 
-func (d *tracked) Restore(ctx context.Context, db *database.Database, snapshot *database.Snapshot) error {
-	return d.block.Restore(ctx, db, snapshot)
+func (d *tracked) Fork(ctx context.Context, source *database.Database, owner string) (*database.Database, error) {
+	forked, err := d.block.Fork(ctx, source, owner)
+	if err == nil {
+		d.t.Cleanup(func() {
+			if err := d.block.Drop(context.Background(), forked); err != nil {
+				d.t.Logf("dropping %s: %v", forked.Name, err)
+			}
+		})
+	}
+	return forked, err
 }
 
 // QueryRow reads one value out of an installation's own database.
