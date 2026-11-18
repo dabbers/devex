@@ -154,6 +154,11 @@ type LocalDriverConfig struct {
 	// Total is the capacity the local driver pretends to have.
 	Total        vm.Resources `yaml:"total"`
 	MaxInstances int          `yaml:"max_instances"`
+	// RunAs names the unprivileged account every instance's commands run as,
+	// the agent's included. Empty runs them as the control plane, which is
+	// right on a developer's laptop and wrong on a host where that is root:
+	// the agent refuses to run there at all.
+	RunAs string `yaml:"run_as"`
 }
 
 // SchedulerConfig configures fork admission.

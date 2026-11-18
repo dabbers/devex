@@ -84,6 +84,10 @@ driver:
       vcpus: 8
       memory_mib: 16384
       disk_gib: 200
+    # The account every instance's commands run as. Leave empty on a laptop,
+    # where the daemon is you; set it wherever the daemon is root, or the
+    # agent refuses to run.
+    run_as: ""
 
 scheduler:
   interval: 5s

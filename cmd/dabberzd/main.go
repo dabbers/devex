@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -322,6 +324,18 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		if err != nil {
 			return nil, err
 		}
+		// Workspaces clone from and push to these repositories, so whoever
+		// the workspaces run as has to own them.
+		var repoOwner *install.Owner
+		if cfg.Driver.Kind != "firecracker" {
+			runAs, err := lookupRunAs(cfg.Driver.Local.RunAs)
+			if err != nil {
+				return nil, err
+			}
+			if runAs != nil {
+				repoOwner = &install.Owner{UID: int(runAs.UID), GID: int(runAs.GID)}
+			}
+		}
 		installer, err = install.New(install.Deps{
 			Store: db, Catalog: catalog, Workspaces: workspaces,
 			Vault: vault, Databases: provisioner, Verifier: verifier,
@@ -330,7 +344,8 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 			RepoDir: filepath.Join(cfg.DataDir, "repos"),
 			// What the blocks that exist offer. Identity is the platform's
 			// own, so an app behind the edge is told who is asking.
-			Provided: providedBlocks(cfg, authenticator.Name()),
+			Provided:  providedBlocks(cfg, authenticator.Name()),
+			RepoOwner: repoOwner,
 		})
 		if err != nil {
 			return nil, err
@@ -497,12 +512,42 @@ func buildDriver(cfg config.Config, dataDir string) (vm.Driver, error) {
 	case "firecracker":
 		return firecracker.New(cfg.Driver.Firecracker)
 	default:
+		runAs, err := lookupRunAs(cfg.Driver.Local.RunAs)
+		if err != nil {
+			return nil, err
+		}
 		return local.New(local.Options{
 			Root:         filepath.Join(dataDir, "vms"),
 			Total:        cfg.Driver.Local.Total,
 			MaxInstances: cfg.Driver.Local.MaxInstances,
+			RunAs:        runAs,
 		})
 	}
+}
+
+// lookupRunAs resolves the account instances run as. A name that does not
+// resolve stops the daemon: falling back to running as root would be the one
+// outcome the setting exists to prevent.
+func lookupRunAs(name string) (*local.User, error) {
+	if name == "" {
+		return nil, nil
+	}
+	account, err := user.Lookup(name)
+	if err != nil {
+		return nil, fmt.Errorf("driver.local.run_as: %w", err)
+	}
+	uid, err := strconv.ParseUint(account.Uid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("driver.local.run_as: uid %q: %w", account.Uid, err)
+	}
+	gid, err := strconv.ParseUint(account.Gid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("driver.local.run_as: gid %q: %w", account.Gid, err)
+	}
+	if uid == 0 {
+		return nil, fmt.Errorf("driver.local.run_as: %s is root", name)
+	}
+	return &local.User{UID: uint32(uid), GID: uint32(gid)}, nil
 }
 
 // buildRouter selects how preview routes are published, returning the router

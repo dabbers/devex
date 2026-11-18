@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -54,6 +55,16 @@ type Options struct {
 	// Provided is what the platform's blocks offer, apart from the database,
 	// which is provisioned per installation.
 	Provided Provided
+	// RepoOwner, when set, is the account workspaces run as, which is the
+	// account that has to own the repositories: workspaces clone from them
+	// and promote by pushing to them, and git refuses to serve a repository
+	// to an account that does not own it.
+	RepoOwner *Owner
+}
+
+// Owner is a Unix account, by number.
+type Owner struct {
+	UID, GID int
 }
 
 // Installer turns a catalog entry into something a customer is using.
@@ -84,7 +95,41 @@ func New(deps Deps, opts Options) (*Installer, error) {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
+	// Repositories seeded before an owner was configured belong to whoever
+	// ran the control plane then. Handed over at startup, so the first sign
+	// of the change is not a workspace failing to clone.
+	if opts.RepoOwner != nil {
+		if err := os.MkdirAll(opts.RepoDir, 0o750); err != nil {
+			return nil, fmt.Errorf("install: %w", err)
+		}
+		if err := os.Chown(opts.RepoDir, 0, opts.RepoOwner.GID); err != nil {
+			return nil, fmt.Errorf("install: give %s to the workspace group: %w", opts.RepoDir, err)
+		}
+		entries, err := os.ReadDir(opts.RepoDir)
+		if err != nil {
+			return nil, fmt.Errorf("install: %w", err)
+		}
+		for _, entry := range entries {
+			if err := chownTree(filepath.Join(opts.RepoDir, entry.Name()), opts.RepoOwner); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return &Installer{deps: deps, opts: opts}, nil
+}
+
+// chownTree hands a repository to its owner. Links are changed rather than
+// followed, so a link inside cannot hand over anything outside.
+func chownTree(root string, to *Owner) error {
+	return filepath.WalkDir(root, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := os.Lchown(path, to.UID, to.GID); err != nil {
+			return fmt.Errorf("install: hand %s to the workspace account: %w", path, err)
+		}
+		return nil
+	})
 }
 
 // Request is one install.
@@ -182,6 +227,11 @@ func (i *Installer) record(ctx context.Context, app App, installation *domain.In
 	bare := filepath.Join(i.opts.RepoDir, repo.ID+".git")
 	if err := seedRepository(ctx, app.Dir, bare, app.Spec.Version); err != nil {
 		return nil, nil, err
+	}
+	if i.opts.RepoOwner != nil {
+		if err := chownTree(bare, i.opts.RepoOwner); err != nil {
+			return nil, nil, err
+		}
 	}
 	repo.RemoteURL = bare
 	if err := i.deps.Store.UpdateRepo(ctx, repo); err != nil {
