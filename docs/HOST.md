@@ -273,6 +273,25 @@ under the preview zone.
 - A wildcard for the preview zone, deliberately not locked down, because that is
   where customers' apps answer.
 
+On this deployment that is `dash.dabberz.com` for the control plane and
+`*.ondabberz.link` for previews. Different registrable domains, which is the
+part that matters: the separation is what stops the panel being reachable
+under a preview name.
+
+The two are fronted differently, and the difference decides how TLS works.
+The preview zone is proxied by a CDN, so TLS terminates there and the origin
+serves plain HTTP -- which is the whole reason the in-process router exists
+instead of Caddy. The control plane resolves straight to the host, so nothing
+terminates TLS for it yet.
+
+Which is a decision rather than an oversight, and worth making deliberately.
+Putting the control plane behind the same CDN in its most permissive mode
+would leave the hop from the CDN to the origin unencrypted across the public
+internet -- acceptable for a form somebody is filling in, not for the surface
+with a shell, a secrets vault and the audit trail behind it. So either an
+origin certificate with strict verification, or terminate it on the host and
+leave it off the CDN.
+
 Both resolve to the same listener; the daemon routes by `Host`. That listener
 needs 80 and 443, not a high port: a preview URL is `http://host` with no port,
 so a control plane on 8090 produces previews that resolve and then refuse to
