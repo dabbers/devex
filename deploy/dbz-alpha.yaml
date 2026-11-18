@@ -1,0 +1,140 @@
+# dabberz on dbz-alpha, the first host.
+#
+# Copy to /etc/dabberz/dabberz.yaml and fill in the two marked values. Every
+# secret is read from the environment instead of this file, so this one is safe
+# to keep in the repository and diff against what is running.
+#
+# Secrets, all from /etc/dabberz/*.env, all root-only:
+#
+#   DABBERZ_MASTER_KEY        dabberzctl keygen. Without it the vault cannot
+#                             be opened and nothing starts.
+#   DABBERZ_CLERK_SECRET      the provider's secret key.
+#   DABBERZ_DATA_ADMIN_DSN    written by the bootstrap into data.env.
+#   CLAUDE_CODE_OAUTH_TOKEN   the agent's own credential. Without it a change
+#                             can be opened and nobody can work on it.
+#   DABBERZ_STORAGE_SECRET    object store secret, when storage is real.
+
+owner: CHANGE-ME@example.com # the account the first sign-in adopts
+
+# Required on this machine, not a preference. The daemon refuses to start with
+# auth.kind single on an address that is not loopback, because single-user auth
+# accepts anything -- on a public address that is a shell, the vault and the
+# audit trail handed to whoever connects.
+auth:
+  kind: clerk
+  clerk:
+    # pk_live_... or pk_test_... -- not a secret, and it must be the real one:
+    # the key encodes the instance domain in base64, so a placeholder fails to
+    # load rather than starting against nothing.
+    publishable_key: CHANGE-ME
+    authorized_parties: ["https://panel.dabberz.com"]
+
+# The control plane's own store, on the pool rather than the 97 GiB root.
+data_dir: /tank/dabberz/data
+
+server:
+  # Port 80, and both interfaces, deliberately. A preview URL carries no port,
+  # so a control plane on a high one produces previews that resolve and then
+  # refuse to connect -- and the CDN has to be able to reach this machine to
+  # serve them at all. TLS terminates at the CDN; see docs/HOST.md.
+  #
+  # Both interfaces means this machine answers preview hostnames over plain
+  # HTTP to anyone who asks it directly by address, which is how a visitor
+  # bypasses the CDN. Firewall 80 to the CDN's ranges, or the CDN is
+  # decoration.
+  addr: 0.0.0.0:80
+  read_timeout: 30s
+  # No write timeout: the activity feed and the workspace shell are long-lived
+  # streams, and a write deadline cuts them mid-sentence.
+  write_timeout: 0s
+
+driver:
+  # Not firecracker: that driver does not boot guests yet. This one runs agents
+  # and customers' services on the host, as this process. Correct while one
+  # person validates their own apps, and the thing to fix before a second
+  # account exists.
+  kind: local
+  image: dabberz-golden
+  fork_resources:
+    vcpus: 4
+    memory_mib: 8192
+    disk_gib: 40
+  local:
+    # 12 cores and 62 GiB, less a reserve for the control plane, Postgres and
+    # the browser. Disk is bookkeeping for this driver, bounded by the pool.
+    total:
+      vcpus: 10
+      memory_mib: 49152
+      disk_gib: 1400
+
+scheduler:
+  interval: 5s
+  head_of_line_blocking: true
+
+preview:
+  # Deliberately a different registrable domain from the panel. An unrouted
+  # name in this zone is a dead end rather than falling through to the control
+  # plane, which is what stops the panel being reachable, unauthenticated, at
+  # any preview hostname.
+  domain: ondabberz.link
+  # https because that is what a visitor types. The CDN terminates it and
+  # talks to this machine over plain HTTP, which is why the router is in
+  # process rather than Caddy.
+  scheme: https
+  port_start: 41000
+  port_end: 42999
+  router: inprocess
+
+# Where the installable apps are read from.
+catalog:
+  dir: /opt/dabberz/src/apps
+
+# The Postgres cluster installations are provisioned on. The DSN comes from
+# the environment; it is the one credential the bootstrap generated.
+data:
+  public_host: 127.0.0.1
+  snapshot_dir: /tank/dabberz/snapshots
+
+# What this deployment offers an app beyond a database. An app that declares
+# something absent is refused at install time with the missing names, rather
+# than installed and left to fail at runtime -- so Forms needs mail and
+# storage here before it will install.
+blocks:
+  mail_url: "" # CHANGE-ME when mail is real; smtp://user:pass@host:587
+  storage:
+    endpoint: "" # CHANGE-ME when storage is real
+    bucket: dabberz
+    access_key: ""
+
+agent:
+  binary: claude
+  # Empty on purpose. The dabberz MCP server is not built yet, and pointing at
+  # a file that does not exist makes every agent run fail on startup with a
+  # message about configuration rather than about the work.
+  mcp_config: ""
+  timeout: 45m
+  session_dir: /workspace/.dabberz/agent
+
+verify:
+  profiles: 4
+  vm:
+    auto_provision: true
+    name: dabberz-ui
+    resources:
+      vcpus: 2
+      memory_mib: 4096
+      disk_gib: 20
+  driver_command: ["dabberz-verify"]
+  timeout: 10m
+
+merge:
+  git_binary: git
+  remote: origin
+  push: true
+  skip_quality_gate: false
+
+tripwire:
+  max_cycles: 8
+  max_tokens: 4000000
+  max_cost_usd: 25
+  max_wall_clock: 4h
