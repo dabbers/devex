@@ -147,6 +147,27 @@ Leave the key field empty and the provider emails a root password: a credential
 that arrives over email and then lives in a mailbox, for a machine that will
 hold other people's data.
 
+## Getting the script onto the box
+
+A fresh install has no git -- that is one of the things being installed -- so
+the bootstrap arrives as a single file over HTTP rather than as a clone:
+
+```
+apt-get update && apt-get install -y curl
+curl -fsSL -o bootstrap-host.sh \
+  https://raw.githubusercontent.com/dabbers/devex/refs/heads/claude/trusting-brown-dns9i5/deploy/bootstrap-host.sh
+less bootstrap-host.sh
+bash bootstrap-host.sh
+```
+
+Read before run, deliberately. The alternative spelling of those four lines is
+`curl ... | bash`, which asks somebody to trust a URL on a machine that is
+about to hold other people's data, and saves them one command for it.
+
+Note the branch in that URL, and in the clone the script makes. The default
+branch is a long way behind; cloning it would produce a tree with none of this
+in it.
+
 ## Packages
 
 - `qemu-kvm` is not needed; `/dev/kvm` is. On bare metal it is there.

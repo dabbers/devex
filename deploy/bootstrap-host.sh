@@ -20,11 +20,23 @@
 #   ./bootstrap-host.sh --storage    # also partition free space and make the pool
 #   ./bootstrap-host.sh --help
 #
+# Getting it onto a fresh host, which has no git yet -- that is what this
+# installs. Fetch the one file, read it, then run it:
+#
+#   apt-get update && apt-get install -y curl
+#   curl -fsSL -o bootstrap-host.sh \
+#     https://raw.githubusercontent.com/dabbers/devex/refs/heads/claude/trusting-brown-dns9i5/deploy/bootstrap-host.sh
+#   less bootstrap-host.sh
+#   bash bootstrap-host.sh
+#
 set -euo pipefail
 
 readonly POOL=tank
 readonly SERVICE_USER=dabberz
 readonly REPO_URL=https://github.com/dabbers/devex.git
+# The branch this work lives on. Not the default branch, which is a long way
+# behind -- cloning that would hand the session a tree without any of it.
+readonly REPO_BRANCH=claude/trusting-brown-dns9i5
 readonly CHECKOUT=/opt/dabberz/src
 # The floor from go.mod, not a pin. Pinning a series here means this file goes
 # stale and the script fails on a box that is perfectly capable of building.
@@ -46,7 +58,9 @@ at_least() {
 }
 
 usage() {
-	sed -n '3,22p' "$0" | sed 's|^# \{0,1\}||'
+	# Derived from the header rather than a line range, which goes stale the
+	# first time somebody adds a paragraph to it.
+	awk 'NR<3 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0"
 	exit 0
 }
 
@@ -332,10 +346,13 @@ checkout() {
 
 	install -d -m 0755 "$(dirname "$CHECKOUT")"
 	if [ -d "$CHECKOUT/.git" ]; then
-		note "already cloned at $CHECKOUT"
+		# Reported rather than corrected. If somebody has moved this checkout
+		# onto another branch they had a reason, and a bootstrap script is the
+		# wrong thing to be resetting their working tree.
+		note "already cloned at $CHECKOUT (on $(git -C "$CHECKOUT" branch --show-current))"
 	else
-		git clone -q "$REPO_URL" "$CHECKOUT"
-		note "cloned to $CHECKOUT"
+		git clone -q --branch "$REPO_BRANCH" "$REPO_URL" "$CHECKOUT"
+		note "cloned $REPO_BRANCH to $CHECKOUT"
 	fi
 }
 
