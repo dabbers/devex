@@ -9,7 +9,7 @@
 #   DABBERZ_MASTER_KEY        dabberzctl keygen. Without it the vault cannot
 #                             be opened and nothing starts.
 #   DABBERZ_CLERK_SECRET      the provider's secret key.
-#   DABBERZ_DATA_ADMIN_DSN    written by the bootstrap into data.env.
+#   DABBERZ_DATABASE_ADMIN_DSN  written by the bootstrap into data.env.
 #   CLAUDE_CODE_OAUTH_TOKEN   the agent's own credential. Without it a change
 #                             can be opened and nobody can work on it.
 #   DABBERZ_STORAGE_SECRET    object store secret, when storage is real.

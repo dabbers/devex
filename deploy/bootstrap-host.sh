@@ -438,7 +438,7 @@ postgres() {
 	umask 077
 	cat > "$creds" <<-ENV
 		# Read by dabberzd. The password is written once, here, and nowhere else.
-		DABBERZ_DATA_ADMIN_DSN=postgres://dabberz:${password}@127.0.0.1:5432/postgres?sslmode=disable
+		DABBERZ_DATABASE_ADMIN_DSN=postgres://dabberz:${password}@127.0.0.1:5432/postgres?sslmode=disable
 	ENV
 	chmod 0600 "$creds"
 	note "created role 'dabberz' and wrote $creds (0600)"
