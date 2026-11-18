@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -189,6 +190,31 @@ func TestOneChangeAtATime(t *testing.T) {
 	second, err := installer.OpenChange(ctx, installation, "second")
 	if err != nil {
 		t.Fatalf("OpenChange after abandoning: %v (%s)", err, second.StateReason)
+	}
+}
+
+// TestAFinishedChangeGivesBackItsMachine: the harness has room for four
+// machines and the installation takes one, so a change that kept its machine
+// after being abandoned leaves the fourth unable to start at all. On
+// dbz-alpha the same arithmetic allowed exactly one change, ever.
+func TestAFinishedChangeGivesBackItsMachine(t *testing.T) {
+	if testing.Short() || os.Getenv(clusterEnv) == "" {
+		t.Skip("set " + clusterEnv)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	installer, _, owner, _, _ := newInstaller(t, os.Getenv(clusterEnv))
+	installation := installApp(t, ctx, installer, owner.ID, "churn")
+
+	for round := 1; round <= 4; round++ {
+		change, err := installer.OpenChange(ctx, installation, fmt.Sprintf("round %d", round))
+		if err != nil {
+			t.Fatalf("round %d: OpenChange: %v", round, err)
+		}
+		if err := installer.Abandon(ctx, change); err != nil {
+			t.Fatalf("round %d: Abandon: %v", round, err)
+		}
 	}
 }
 

@@ -316,6 +316,39 @@ func (m *Manager) Stop(ctx context.Context, w *domain.Workspace) error {
 	return nil
 }
 
+// Release stops a workspace and destroys its machine, giving back what the
+// machine held.
+//
+// Stop keeps the machine on purpose, because a workspace's disk can hold work
+// nobody has committed. That reasoning is about a workspace somebody is still
+// using. A change that was promoted has its work merged, an abandoned one was
+// thrown away on purpose, and an install that never came up has nothing on its
+// disk but a checkout. Kept, each held its full share of the host forever:
+// nothing else ever destroys a machine, so on dbz-alpha the first change used
+// the last free slot and no second one could start.
+func (m *Manager) Release(ctx context.Context, w *domain.Workspace) error {
+	if err := m.Stop(ctx, w); err != nil {
+		return err
+	}
+	if w.InstanceID == "" {
+		return nil
+	}
+	// A failed start never reached Stop's service shutdown, and may have left
+	// something running before it failed.
+	if instance, err := m.driver.Get(ctx, w.InstanceID); err == nil {
+		services, err := m.store.ListServices(ctx, w.ProjectID)
+		if err != nil {
+			return err
+		}
+		m.stopServices(ctx, instance, services)
+	}
+	if err := m.driver.Destroy(ctx, w.InstanceID); err != nil && !errors.Is(err, vm.ErrNotFound) {
+		return fmt.Errorf("workspace: destroy machine %s: %w", w.InstanceID, err)
+	}
+	w.InstanceID = ""
+	return m.store.UpdateWorkspace(ctx, w)
+}
+
 // describe reports an already-running workspace without changing anything.
 func (m *Manager) describe(ctx context.Context, w *domain.Workspace) (*Started, error) {
 	current, err := m.store.GetWorkspace(ctx, w.ID)

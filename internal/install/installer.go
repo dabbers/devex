@@ -313,6 +313,24 @@ func (i *Installer) fail(ctx context.Context, installation *domain.Installation,
 			"installation", installation.ID, "error", err)
 	}
 	i.deps.Logger.Error("install failed", "installation", installation.ID, "error", cause)
+
+	// The record, repository and database stay, so the failure can be looked
+	// at. The machine does not: an install that never came up has nothing on
+	// it but a checkout, and kept, it holds a full workspace's share of the
+	// host. Two failed installs on dbz-alpha left no room to open a change.
+	if installation.WorkspaceID == "" || i.deps.Workspaces == nil {
+		return
+	}
+	ws, err := i.deps.Store.GetWorkspace(ctx, installation.WorkspaceID)
+	if err != nil {
+		i.deps.Logger.Error("could not load a failed install's workspace",
+			"installation", installation.ID, "error", err)
+		return
+	}
+	if err := i.deps.Workspaces.Release(ctx, ws); err != nil {
+		i.deps.Logger.Error("could not release a failed install's machine",
+			"installation", installation.ID, "error", err)
+	}
 }
 
 // withoutDatabase drops the database requirement from a list of unmet ones,

@@ -275,8 +275,11 @@ func (i *Installer) Abandon(ctx context.Context, change *domain.Change) error {
 func (i *Installer) release(ctx context.Context, change *domain.Change) {
 	if change.WorkspaceID != "" {
 		if ws, err := i.deps.Store.GetWorkspace(ctx, change.WorkspaceID); err == nil {
-			if err := i.deps.Workspaces.Stop(ctx, ws); err != nil {
-				i.deps.Logger.Error("could not stop a finished change's workspace",
+			// Released rather than stopped: what a finished change did is
+			// merged or deliberately discarded, so its machine holds nothing
+			// worth the capacity it would go on claiming.
+			if err := i.deps.Workspaces.Release(ctx, ws); err != nil {
+				i.deps.Logger.Error("could not release a finished change's workspace",
 					"change", change.ID, "error", err)
 			}
 		}
