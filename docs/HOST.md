@@ -301,6 +301,36 @@ on the internet. Two ways out, both configuration:
 A credential that has been in a chat log, a terminal transcript or a
 screenshot is not a credential any more. Rotate before this host uses it.
 
+## Driving it from a terminal
+
+The control plane authenticates every request, including from loopback --
+something in front of it only protects the path that goes through it, so the
+origin cannot assume it was reached that way. Which means curl gets
+`sign in to continue`, correctly, and so did the command line tool until it
+was given a credential to present.
+
+A provider's session token is the wrong credential for this. It lasts about a
+minute, because a browser refreshes it silently and nothing else does. So the
+deployment issues its own:
+
+```
+dabberzctl token create -name "cli on dbz-alpha"
+export DABBERZ_TOKEN=dbz_...
+dabberzctl status
+```
+
+It is shown once and stored only as a hash, so losing it means issuing
+another rather than looking it up. `token list` shows what exists and when
+each was last used; `token revoke <id>` ends one.
+
+Note what minting does not require: a password, a sign-in, or an endpoint.
+It requires being able to read the daemon's data directory, which means being
+root on this host, which already means being able to read the vault and every
+row of the audit trail. The token grants nothing that was not already
+available to whoever can run the command -- it makes it reachable from a
+script. That is also why there is no HTTP route that issues one: an endpoint
+that mints credentials is a way in, and this is deliberately not one.
+
 ## DNS, and why it is two names
 
 The control plane and the previews must not share a registrable domain, and the

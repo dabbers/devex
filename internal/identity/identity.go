@@ -19,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/store"
 )
 
 // ErrUnresolved means the credential was accepted but no dabberz user could be
@@ -34,10 +36,29 @@ type Users interface {
 	EnsureUserByExternalID(ctx context.Context, externalID, email string) (*domain.User, error)
 }
 
+// Tokens resolves a dabberz-issued token to the user that holds it.
+//
+// Optional: a deployment without it simply has no way in that is not a
+// browser, which is the state this interface exists to end.
+type Tokens interface {
+	UserByToken(ctx context.Context, presented string) (*domain.User, error)
+}
+
 // Translator answers "which dabberz user is this request".
 type Translator struct {
-	authn auth.Authenticator
-	users Users
+	authn  auth.Authenticator
+	users  Users
+	tokens Tokens
+}
+
+// WithTokens accepts dabberz-issued tokens as well as the provider's.
+//
+// Added here and not beside the provider, because this is the one place that
+// answers "which dabberz user is this request". A second answer somewhere else
+// is how the panel and an app end up disagreeing about who somebody is.
+func (t *Translator) WithTokens(tokens Tokens) *Translator {
+	t.tokens = tokens
+	return t
 }
 
 // New returns a translator. Both collaborators are required: without an
@@ -65,6 +86,27 @@ func New(authn auth.Authenticator, users Users) (*Translator, error) {
 // refusing to record them would mean a colleague invited to an app is a
 // stranger to it until they happen to visit the panel first.
 func (t *Translator) Visitor(ctx context.Context, r *http.Request) (*domain.User, error) {
+	// A dabberz token names a user directly, so it never reaches the
+	// provider. Checked first and by prefix, so that an expired provider
+	// token and a revoked platform one produce different, accurate answers
+	// instead of each being reported as the other.
+	if t.tokens != nil {
+		if presented := auth.BearerToken(r); strings.HasPrefix(presented, store.TokenPrefix) {
+			user, err := t.tokens.UserByToken(ctx, presented)
+			switch {
+			case err == nil:
+				return user, nil
+			case errors.Is(err, store.ErrNotFound):
+				// Deliberately not a fall-through to the provider. Something
+				// presented a platform token; the honest answer is that this
+				// one is not accepted, not that no credential was offered.
+				return nil, auth.ErrUnauthenticated
+			default:
+				return nil, err
+			}
+		}
+	}
+
 	who, err := t.authn.Identify(ctx, r)
 	if err != nil {
 		return nil, err

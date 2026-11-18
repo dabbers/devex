@@ -151,6 +151,11 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	if err != nil {
 		return nil, err
 	}
+	// Tokens this deployment issued itself, for everything that is not a
+	// browser: the command line tool, a script, a cron job. A provider's
+	// session token lasts about a minute, which is right for a page that
+	// refreshes it and useless for anything else.
+	visitors = visitors.WithTokens(db)
 
 	// The owner row is created ahead of any request so a fresh installation
 	// has one, and so an existing single-user database is the row the first

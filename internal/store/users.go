@@ -34,6 +34,32 @@ func (s *Store) GetUser(ctx context.Context, userID string) (*domain.User, error
 	return scanUser(row)
 }
 
+// ListUsers returns accounts oldest first, up to a limit.
+//
+// Used to resolve "the owner" when a deployment has exactly one account, and
+// to refuse to guess when it does not.
+func (s *Store) ListUsers(ctx context.Context, limit int) ([]*domain.User, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+userColumns+" FROM users ORDER BY id LIMIT ?", limit)
+	if err != nil {
+		return nil, wrapErr("list users", err)
+	}
+	defer rows.Close()
+
+	var users []*domain.User
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, wrapErr("list users", rows.Err())
+}
+
 // GetUserByEmail looks a user up by email address.
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE email = ?", email)

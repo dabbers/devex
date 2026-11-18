@@ -45,6 +45,10 @@ func run(args []string, out io.Writer) error {
 		return nil
 	case "keygen":
 		return keygen(out)
+	case "token":
+		// Not through the client: this one reads the database directly. See
+		// token.go for why minting a credential is not an endpoint.
+		return tokens(out, rest)
 	}
 
 	client := &client{endpoint: endpoint()}
@@ -143,6 +147,12 @@ func (c *client) do(method, path string, body any) (*http.Response, error) {
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	// The control plane authenticates every request, including ones from
+	// loopback: anything in front of it only protects the path that goes
+	// through it. Mint one with `dabberzctl token create`.
+	if token := os.Getenv("DABBERZ_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

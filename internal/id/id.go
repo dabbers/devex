@@ -37,6 +37,8 @@ const (
 	// Change is a proposed change to an installation, from the sentence
 	// somebody typed to the promote that makes it live.
 	Change = "chg"
+	// Token authenticates a request that has no browser behind it.
+	Token = "tok"
 )
 
 // encoding is Crockford-style base32 in lowercase without padding, chosen so
