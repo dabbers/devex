@@ -550,6 +550,47 @@ func TestEventsListAndCursor(t *testing.T) {
 	}
 }
 
+// TestAQuietEventStreamStillSaysSomething covers the feed nobody is looking
+// at, which is most of them most of the time.
+//
+// A stream that writes only when there is news writes nothing for long
+// stretches, and anything between the browser and here that drops idle
+// connections -- a CDN, a load balancer, a NAT table -- then takes it down.
+// The symptom is not an error: the client sits on a socket nobody will write
+// to again, which is indistinguishable from a platform with nothing to report.
+func TestAQuietEventStreamStillSaysSomething(t *testing.T) {
+	f := newFixture(t, planJSON(nil, oneWorkstream()))
+	f.api.streamKeepalive = 50 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/v1/events/stream", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := f.server.Client().Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Nothing is generated on purpose. The only thing that should arrive is
+	// the stream keeping itself alive.
+	reader := bufio.NewReader(resp.Body)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading a quiet stream: %v", err)
+		}
+		if strings.HasPrefix(line, ":") {
+			return // kept alive, which is the whole point
+		}
+	}
+	t.Fatal("a quiet stream said nothing; anything that drops idle connections would have closed it")
+}
+
 func TestEventStreamDeliversNewEventsWithResumableIDs(t *testing.T) {
 	f := newFixture(t, planJSON(nil, oneWorkstream()))
 

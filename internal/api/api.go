@@ -54,6 +54,10 @@ type Server struct {
 	installer  *install.Installer
 	logger     *slog.Logger
 	streamGap  time.Duration
+	// streamKeepalive is how long a feed may say nothing before it says
+	// nothing out loud. Well under the shortest idle timeout likely to sit in
+	// front of this.
+	streamKeepalive time.Duration
 	// routes is the registered route table, recorded as it is built so the
 	// tenancy gate can be tested against the real routes rather than a copy
 	// of them that drifts.
@@ -128,7 +132,7 @@ func New(deps Deps) (*Server, error) {
 		logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
-		streamGap: time.Second,
+		streamGap: time.Second, streamKeepalive: 20 * time.Second,
 	}, nil
 }
 
@@ -712,6 +716,9 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(s.streamGap)
 	defer ticker.Stop()
 
+	// When something was last written, of any kind.
+	quiet := time.Now()
+
 	for {
 		events, err := s.store.ListEvents(r.Context(), filter)
 		if err != nil {
@@ -729,8 +736,21 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, body)
 			filter.AfterSeq = event.Seq
 		}
-		if len(events) > 0 {
+		switch {
+		case len(events) > 0:
 			flusher.Flush()
+			quiet = time.Now()
+		case time.Since(quiet) >= s.streamKeepalive:
+			// A comment line, which EventSource ignores. Without it a quiet
+			// feed writes nothing at all, and anything between the browser
+			// and here that drops idle connections -- a CDN, a load balancer,
+			// a NAT table -- takes the stream down. The client would then be
+			// waiting on a socket nobody is going to write to, which looks
+			// like the platform having nothing to say rather than a broken
+			// connection.
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+			quiet = time.Now()
 		}
 
 		select {

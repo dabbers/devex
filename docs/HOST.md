@@ -284,6 +284,13 @@ serves plain HTTP -- which is the whole reason the in-process router exists
 instead of Caddy. The control plane resolves straight to the host, so nothing
 terminates TLS for it yet.
 
+Putting the control plane behind a CDN also puts one in front of two things
+that are not request-and-response: the workspace shell is a WebSocket and the
+activity feed is server-sent events. Both are long-lived and both are the
+first casualties of anything that drops idle connections. The feed now emits a
+keepalive comment rather than going silent between events, which is what makes
+it survive a proxy; a shell with nobody typing is the other case to watch.
+
 Which is a decision rather than an oversight, and worth making deliberately.
 Putting the control plane behind the same CDN in its most permissive mode
 would leave the hop from the CDN to the origin unencrypted across the public
