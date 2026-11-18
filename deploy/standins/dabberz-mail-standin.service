@@ -1,0 +1,30 @@
+# A mail block that is honest about being fake: it accepts SMTP on loopback,
+# writes each message to the journal, and delivers nothing. It exists so an app
+# that declares mail can be installed and exercised on a host that has no
+# sending domain yet. Replace it, do not grow it: a real block owns a domain and
+# its reputation, which this cannot.
+#
+#   apt-get install python3-aiosmtpd
+#   install -m0644 deploy/standins/dabberz-mail-standin.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now dabberz-mail-standin
+#   blocks.mail_url: smtp://127.0.0.1:2525
+#   journalctl -u dabberz-mail-standin     # what would have been sent
+[Unit]
+Description=dabberz mail stand-in (logs messages, delivers nothing)
+After=network.target
+
+[Service]
+User=dabberz
+# Debugging prints every message to stdout, so the journal is the outbox --
+# but only unbuffered. Without this Python holds a pipe's output in a block
+# buffer, and a message the server accepted never appears.
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m aiosmtpd -n -l 127.0.0.1:2525 -c aiosmtpd.handlers.Debugging
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
