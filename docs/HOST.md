@@ -317,10 +317,15 @@ minute, because a browser refreshes it silently and nothing else does. So the
 deployment issues its own:
 
 ```
-dabberzctl token create -name "cli on dbz-alpha"
-export DABBERZ_TOKEN=dbz_...
+export DABBERZ_TOKEN=$(dabberzctl token create -name "cli on this host" | head -1)
 dabberzctl status
 ```
+
+Captured rather than copied, deliberately. The token is 47 characters of
+base64 with no word boundaries in it, and a hand-copy that drops one is not
+obvious: it fails as `the credential was not accepted`, which reads like the
+token being rejected rather than mistyped. `token list` showing it with no
+last-used time is the tell that nothing ever matched it.
 
 It is shown once and stored only as a hash, so losing it means issuing
 another rather than looking it up. `token list` shows what exists and when
