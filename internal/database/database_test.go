@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +29,7 @@ func testBlock(t *testing.T) *Block {
 		t.Skip("set " + clusterEnv + " to a superuser DSN to run against a real cluster")
 	}
 	block, err := Open(Config{
-		AdminDSN:    dsn,
+		AdminDSN:    unprivileged(t, dsn),
 		SnapshotDir: t.TempDir(),
 		BinDir:      os.Getenv("DABBERZ_TEST_PG_BIN"),
 		Timeout:     2 * time.Minute,
@@ -37,6 +39,54 @@ func testBlock(t *testing.T) *Block {
 	}
 	t.Cleanup(func() { block.Close() })
 	return block
+}
+
+// unprivileged returns a DSN for a fresh role shaped like the one a real host
+// runs as: CREATEROLE and CREATEDB, not superuser.
+//
+// The superuser the tests are handed is not what production has, and it
+// passes checks production fails. Every test here once passed against one
+// while the first install on dbz-alpha was refused outright, because since
+// Postgres 16 creating a role no longer makes its creator able to act as it.
+func unprivileged(t *testing.T, superDSN string) string {
+	t.Helper()
+
+	super, err := sql.Open("pgx", superDSN)
+	if err != nil {
+		t.Fatalf("open superuser: %v", err)
+	}
+	defer super.Close()
+
+	role := "platform_test_" + randomName()
+	password, err := randomSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := super.Exec(fmt.Sprintf(
+		`CREATE ROLE %s LOGIN CREATEROLE CREATEDB NOSUPERUSER PASSWORD %s`,
+		quoteID(role), quoteLiteral(password))); err != nil {
+		t.Fatalf("create unprivileged role: %v", err)
+	}
+	// Registered first, so it runs last: after every database the role made,
+	// and its block's connections, are gone.
+	t.Cleanup(func() {
+		super, err := sql.Open("pgx", superDSN)
+		if err != nil {
+			t.Errorf("reopen superuser: %v", err)
+			return
+		}
+		defer super.Close()
+		if _, err := super.Exec(fmt.Sprintf(`DROP ROLE IF EXISTS %s`, quoteID(role))); err != nil {
+			t.Errorf("drop %s: %v", role, err)
+		}
+	})
+
+	u, err := url.Parse(superDSN)
+	if err != nil {
+		t.Fatalf("%s is not a URL: %v", clusterEnv, err)
+	}
+	u.User = url.UserPassword(role, password)
+	return u.String()
 }
 
 // provision makes a database and guarantees it is cleaned up, so a failing
