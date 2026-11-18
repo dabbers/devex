@@ -621,3 +621,52 @@ confidence rather than software. Everything in `docs/PLATFORM.md` that looks
 like overhead — the check suite the agent cannot edit, promotion a human
 performs, snapshots before migrations, tested restores, export as a feature —
 is the product rather than a tax on it.
+
+### Where the line actually is
+
+The category now has company, which is worth being precise about rather than
+dismissive of. Koru ships a notes app that is open source, local-first,
+explicitly priced to work with the customer's own AI subscription rather than
+reselling tokens, and not priced per seat. Three of those were positions taken
+here first and held against the obvious objections, so a peer arriving at the
+same ones is evidence rather than threat.
+
+Which means **bring your own subscription is no longer a differentiator.**
+Good: it was never meant to be one. It was meant to be the thing that stops
+this becoming a reseller of somebody else's margin.
+
+Two things in their shape are worth borrowing the opposite of.
+
+**The pricing moved from per seat to per gigabyte, and that is not an
+improvement.** It is the resource slice this project already refused in
+`PLATFORM.md`: a bill that grows with the customer's own success, on an axis
+they cannot predict and did not choose. Per seat taxes collaboration; per
+gigabyte taxes keeping things. Both are a toll on using the product more, and
+a customer who learns to delete things to control a bill has been made worse
+at their job in a new way.
+
+**"Self-hosted" and "we host it" are different products, and the gap is the
+whole business.** Their headline offers self-hosting; the feature table says
+the self-hosted sync server is coming. So today it means running it yourself,
+which is precisely the objection this project exists to answer. Handing
+somebody software is not handing them a working system, and the distance
+between those two is where the operational confidence being sold actually
+lives.
+
+So the line is not *who builds it*, and "build your own SaaS" is the wrong
+pitch for that reason — it puts the work back on the customer, which is the
+same mistake as handing them a tarball, wearing different clothes. Four
+positions, and only one of them leaves the customer holding neither job:
+
+| | Runs it | Builds it | Owns the data |
+|---|---|---|---|
+| Incumbent SaaS | them | them | them |
+| Self-hosted open source | **customer** | them | customer |
+| Build-your-own | customer | **customer** | customer |
+| dabberz | us | the agent | customer |
+
+And it is why import without export is the tell. Six import formats and no
+export is a product that is easy to enter and quiet about leaving, which is
+the posture of the thing being escaped from. Export is not a feature here, it
+is the proof the promise is real: see `PLATFORM.md`, where an app's manifest
+declares what it can take in and must be able to give back.
