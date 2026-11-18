@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dabbers/devex/internal/auth"
+	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/proxy"
 )
 
@@ -56,7 +58,7 @@ func TestRoutesByHostAndFallsBackToTheControlPlane(t *testing.T) {
 		io.WriteString(w, "fork dev server: "+r.URL.Path)
 	}))
 
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "control plane")
 	}))
@@ -83,7 +85,7 @@ func TestRoutesByHostAndFallsBackToTheControlPlane(t *testing.T) {
 // hostname fell through, the panel would be served without authentication at
 // any name under the preview domain.
 func TestUnknownPreviewHostnameNeverReachesTheControlPlane(t *testing.T) {
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "control plane")
 	}))
@@ -116,7 +118,7 @@ func TestUnknownPreviewHostnameNeverReachesTheControlPlane(t *testing.T) {
 // TestLookalikeDomainIsNotTreatedAsThePreviewZone guards the suffix check: a
 // naive strings.HasSuffix would match a domain somebody else controls.
 func TestLookalikeDomainIsNotTreatedAsThePreviewZone(t *testing.T) {
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "control plane")
 	}))
@@ -136,7 +138,7 @@ func TestPreservesThePublicHostname(t *testing.T) {
 		io.WriteString(w, "ok")
 	}))
 
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
@@ -157,7 +159,7 @@ func TestMatchesHostRegardlessOfPortAndCase(t *testing.T) {
 		io.WriteString(w, "reached")
 	}))
 
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "fallback")
 	}))
@@ -183,7 +185,7 @@ func TestApplyReplacesTheWholeTable(t *testing.T) {
 		io.WriteString(w, "reached")
 	}))
 
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	mux.SetFallback(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "fallback")
 	}))
@@ -216,7 +218,7 @@ func TestApplyReplacesTheWholeTable(t *testing.T) {
 }
 
 func TestExplainsAnUpstreamThatIsNotListeningYet(t *testing.T) {
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	// Port 1 on loopback: a route that exists, pointing at nothing. This is
 	// the ordinary state while a VM boots and dependencies install.
 	if err := mux.Apply(context.Background(), []proxy.Route{
@@ -241,7 +243,7 @@ func TestExplainsAnUpstreamThatIsNotListeningYet(t *testing.T) {
 }
 
 func TestApplyRefusesDuplicateHostnames(t *testing.T) {
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.1", UpstreamPort: 3000},
 		{Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.2", UpstreamPort: 3000},
@@ -252,7 +254,7 @@ func TestApplyRefusesDuplicateHostnames(t *testing.T) {
 }
 
 func TestRequestBeforeTheFirstPublishIsNotAFailure(t *testing.T) {
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	// No Apply and no fallback: the window during startup. A hostname outside
 	// the preview zone must say the control plane is not ready rather than
 	// report a missing page.
@@ -278,7 +280,7 @@ func TestStreamingResponsesAreFlushedThrough(t *testing.T) {
 		flusher.Flush()
 	}))
 
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "web.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
@@ -290,7 +292,7 @@ func TestStreamingResponsesAreFlushedThrough(t *testing.T) {
 }
 
 func TestRoutesAreReportedForDiagnostics(t *testing.T) {
-	mux := New("ondabberz.link", nil)
+	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
 		{Hostname: "web.ondabberz.link", UpstreamHost: "172.30.0.2", UpstreamPort: 41000},
 	}); err != nil {
@@ -318,11 +320,17 @@ func TestAVisitorCannotClaimToBeSomeone(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	mux := New("ondabberz.link", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Signed in as somebody real, so that the forged headers are competing
+	// with an assertion rather than with silence. Getting this order wrong --
+	// asserting first and stripping after, or merging the two -- is how a
+	// forged header survives, so the test puts them in conflict.
+	who := &stubVisitors{as: &domain.User{ID: "usr_real", Email: "real@example.com"}}
+	mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := mux.Apply(context.Background(), []proxy.Route{{
 		Hostname:     "app.ondabberz.link",
 		UpstreamHost: "127.0.0.1",
 		UpstreamPort: upstreamPort(t, upstream.URL),
+		OwnerID:      "usr_real",
 	}}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -347,11 +355,183 @@ func TestAVisitorCannotClaimToBeSomeone(t *testing.T) {
 	defer resp.Body.Close()
 
 	arrived := <-seen
-	for name := range arrived {
-		if strings.HasPrefix(strings.ToLower(name), "x-dabberz-") {
-			t.Errorf("a forged identity header reached the app: %s: %q", name, arrived.Get(name))
+	if got := arrived.Get("X-Dabberz-User"); got != "usr_real" {
+		t.Errorf("the app was told the visitor is %q, want usr_real", got)
+	}
+	if got := arrived.Get("X-Dabberz-Email"); got != "real@example.com" {
+		t.Errorf("the app was told the email is %q, want real@example.com", got)
+	}
+	if got := arrived.Get("X-Dabberz-Role"); got != "" {
+		t.Errorf("a forged header the platform does not assert survived: %q", got)
+	}
+}
+
+// TestAnAnonymousVisitorIsAnnouncedAsNobody covers an app's public surface: a
+// form being filled in by somebody who has no account and never will. The
+// edge must forward the request with nothing asserted rather than refuse it,
+// and the app decides which of its own paths need a visitor.
+func TestAnAnonymousVisitorIsAnnouncedAsNobody(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	// No credential, and a credential that is refused: both are strangers,
+	// and neither may be announced as anyone.
+	for name, who := range map[string]*stubVisitors{
+		"no credential": {err: auth.ErrNoCredentials},
+		"refused":       {err: auth.ErrUnauthenticated},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err := mux.Apply(context.Background(), []proxy.Route{{
+				Hostname:     "app.ondabberz.link",
+				UpstreamHost: "127.0.0.1",
+				UpstreamPort: upstreamPort(t, upstream.URL),
+			}}); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+
+			edge := httptest.NewServer(mux)
+			defer edge.Close()
+
+			req, err := http.NewRequest(http.MethodGet, edge.URL, nil) //nolint:noctx // a loopback request in a test
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = "app.ondabberz.link"
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("GET: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("an anonymous visitor to a public surface got %d", resp.StatusCode)
+			}
+
+			arrived := <-seen
+			for header := range arrived {
+				if strings.HasPrefix(strings.ToLower(header), "x-dabberz-") {
+					t.Errorf("a stranger was announced as somebody: %s: %q", header, arrived.Get(header))
+				}
+			}
+		})
+	}
+}
+
+// TestASignedInStrangerIsNotAnnouncedOnSomebodyElsesHostname is the
+// cross-tenant case, and the reason a route carries its owner.
+//
+// Every customer of the platform has a dabberz account, so "is signed in" is
+// nearly everyone. An app behind the edge treats an asserted identity as
+// permission to administer the installation -- it has no way to check
+// ownership itself, and should not have to -- so an edge that announced any
+// signed-in visitor would make each customer an administrator of every other
+// customer's installation, with nothing looking broken.
+func TestASignedInStrangerIsNotAnnouncedOnSomebodyElsesHostname(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	who := &stubVisitors{as: &domain.User{ID: "usr_stranger", Email: "stranger@example.com"}}
+	mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Hostname:     "app.ondabberz.link",
+		UpstreamHost: "127.0.0.1",
+		UpstreamPort: upstreamPort(t, upstream.URL),
+		OwnerID:      "usr_somebody_else",
+	}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	edge := httptest.NewServer(mux)
+	defer edge.Close()
+
+	req, err := http.NewRequest(http.MethodGet, edge.URL, nil) //nolint:noctx // a loopback request in a test
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "app.ondabberz.link"
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	arrived := <-seen
+	for header := range arrived {
+		if strings.HasPrefix(strings.ToLower(header), "x-dabberz-") {
+			t.Errorf("a signed-in stranger was announced on somebody else's installation: %s: %q",
+				header, arrived.Get(header))
 		}
 	}
+}
+
+// TestARouteNobodyOwnsAnnouncesNobody covers a preview URL that outlived the
+// workspace it pointed at: the owner is unknown, so there is nobody whose
+// identity may be asserted, even for a visitor who is signed in.
+func TestARouteNobodyOwnsAnnouncesNobody(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	who := &stubVisitors{as: &domain.User{ID: "usr_real", Email: "real@example.com"}}
+	mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Hostname:     "orphan.ondabberz.link",
+		UpstreamHost: "127.0.0.1",
+		UpstreamPort: upstreamPort(t, upstream.URL),
+	}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	edge := httptest.NewServer(mux)
+	defer edge.Close()
+
+	req, err := http.NewRequest(http.MethodGet, edge.URL, nil) //nolint:noctx // a loopback request in a test
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "orphan.ondabberz.link"
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	arrived := <-seen
+	for header := range arrived {
+		if strings.HasPrefix(strings.ToLower(header), "x-dabberz-") {
+			t.Errorf("a route with no owner announced somebody: %s: %q", header, arrived.Get(header))
+		}
+	}
+}
+
+// stubVisitors is the edge's identity source under test.
+type stubVisitors struct {
+	as  *domain.User
+	err error
+}
+
+func (s *stubVisitors) Visitor(context.Context, *http.Request) (*domain.User, error) {
+	return s.as, s.err
 }
 
 // upstreamPort reads the port out of an httptest server's URL.

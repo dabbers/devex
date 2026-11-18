@@ -38,11 +38,12 @@ const (
 	forkScope         scope = "fork"
 	workspaceScope    scope = "workspace"
 	installationScope scope = "installation"
+	changeScope       scope = "change"
 )
 
 // ownedScopes is every path value that names something with an owner. Adding
 // an owned resource means adding it here; nothing else needs to change.
-var ownedScopes = []scope{repoScope, taskScope, forkScope, workspaceScope, installationScope}
+var ownedScopes = []scope{repoScope, taskScope, forkScope, workspaceScope, installationScope, changeScope}
 
 // scopeKey types the context keys so nothing else can collide with them.
 type scopeKey scope
@@ -146,6 +147,12 @@ func (s *Server) resolveScope(ctx context.Context, named scope, id string) (any,
 			return nil, "", err
 		}
 		return one, one.UserID, nil
+	case changeScope:
+		change, err := s.store.GetChange(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		return change, change.UserID, nil
 	default:
 		// Unreachable while ownedScopes and this switch agree, and a scope
 		// with no resolver must not pass unchecked.
@@ -190,6 +197,12 @@ func scopedTask(r *http.Request) *domain.Task {
 func scopedFork(r *http.Request) *domain.Fork {
 	fork, _ := r.Context().Value(scopeKey(forkScope)).(*domain.Fork)
 	return fork
+}
+
+// scopedChange returns the change the gate authorized for this request.
+func scopedChange(r *http.Request) *domain.Change {
+	change, _ := r.Context().Value(scopeKey(changeScope)).(*domain.Change)
+	return change
 }
 
 // scopedInstallation returns the installation the gate authorized for this

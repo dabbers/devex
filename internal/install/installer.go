@@ -71,6 +71,15 @@ func New(deps Deps, opts Options) (*Installer, error) {
 		return nil, fmt.Errorf("install: a catalog is required")
 	case opts.RepoDir == "":
 		return nil, fmt.Errorf("install: a directory for repositories is required")
+	// An installation's services are told their database through the
+	// workspace manager's per-workspace environment. A manager without it
+	// starts them with no connection string, which is not a startup failure
+	// here but an app exiting seconds later with a message about an unset
+	// variable -- a long way from the cause. So it is a cause-side error.
+	case deps.Databases != nil && deps.Workspaces != nil && !deps.Workspaces.HasOverrides():
+		return nil, fmt.Errorf("install: there is a data block but the workspace manager has no per-workspace environment, " +
+			"so an installation's services would start without a connection string; " +
+			"pass install.NewData(store, databases) as workspace.Deps.Overrides")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()

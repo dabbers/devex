@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/preview"
@@ -50,7 +52,7 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	installer, db, owner, edge := newInstaller(t, dsn)
+	installer, db, owner, edge, visiting := newInstaller(t, dsn)
 
 	installation, err := installer.Install(ctx, Request{
 		UserID: owner.ID,
@@ -88,39 +90,53 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 		},
 	}
 
-	// The admin surface is refused through the public edge, because nothing
-	// has established who the visitor is on this hostname. That is the
-	// correct state today rather than a gap in the test: the edge strips
-	// identity headers, so an unauthenticated request cannot claim one.
+	// The admin surface is refused through the public edge to a visitor the
+	// platform cannot name.
 	refused := post(t, client, edge, base, "/forms", url.Values{"title": {"forged"}}, nil)
 	if refused != http.StatusUnauthorized && refused != http.StatusServiceUnavailable {
 		t.Fatalf("the admin surface answered %d to a visitor with no identity", refused)
 	}
 
 	// And a forged header does not help, which is the thing that would
-	// otherwise hand somebody else's installation to anyone who tried.
+	// otherwise hand somebody else's installation to anyone who tried. Both
+	// halves of the edge's identity handling are being exercised here: it
+	// strips what the visitor sent, and asserts only what it resolved
+	// itself -- which for this request is nothing.
 	forged := post(t, client, edge, base, "/forms", url.Values{"title": {"forged"}},
-		map[string]string{"X-Dabberz-User": "usr_someone_else"})
+		map[string]string{"X-Dabberz-User": owner.ID})
 	if forged != http.StatusUnauthorized && forged != http.StatusServiceUnavailable {
 		t.Fatalf("a forged identity header reached the admin surface: %d", forged)
 	}
 
-	// With an identity the platform asserts -- which is what the edge will do
-	// once it can establish a session on an installation's own hostname --
-	// the admin surface works. Sent to the service directly, since that is
-	// the only place an assertion can come from today.
-	direct := serviceAddress(t, db, installation)
-	owned := post(t, client, direct, "", "/forms", url.Values{
+	// Signed in as the owner, through the same public hostname, the admin
+	// surface works -- because the edge resolves the visitor and states who
+	// they are. Nothing here talks to the service directly.
+	visiting.be(owner)
+	owned := post(t, client, edge, base, "/forms", url.Values{
 		"title":       {"Contact us"},
 		"description": {"We read everything."},
 		"fields":      {"Your name | text | required\nEmail | email | required"},
-	}, map[string]string{"X-Dabberz-User": owner.ID})
+	}, nil)
 	if owned != http.StatusSeeOther {
 		t.Fatalf("creating a form as the owner returned %d", owned)
 	}
 
-	// The public form is public, and goes through the edge like a visitor's
-	// would.
+	// A signed-in stranger is not the owner, and the edge asserting their
+	// real identity is exactly what lets the app tell them apart.
+	stranger, err := db.store.EnsureUserByExternalID(ctx, "test:stranger", "stranger@example.invalid")
+	if err != nil {
+		t.Fatalf("creating a stranger: %v", err)
+	}
+	visiting.be(stranger)
+	intruded := post(t, client, edge, base, "/forms", url.Values{"title": {"theirs"}}, nil)
+	if intruded != http.StatusUnauthorized && intruded != http.StatusForbidden &&
+		intruded != http.StatusNotFound {
+		t.Fatalf("a signed-in stranger reached another installation's admin surface: %d", intruded)
+	}
+
+	// The public form is filled in by somebody with no account at all.
+	visiting.be(nil)
+
 	answered := post(t, client, edge, base, "/f/contact-us", url.Values{
 		"your-name": {"Ada Lovelace"},
 		"email":     {"ada@example.com"},
@@ -155,7 +171,7 @@ func TestInstallingTheSameNameTwiceIsRefused(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	installer, _, owner, _ := newInstaller(t, dsn)
+	installer, _, owner, _, _ := newInstaller(t, dsn)
 
 	if _, err := installer.Install(ctx, Request{UserID: owner.ID, App: "forms", Name: "support"}); err != nil {
 		t.Fatalf("first install: %v", err)
@@ -241,7 +257,7 @@ func (d *tracked) QueryRow(ctx context.Context, name, query string, into *string
 	return conn.QueryRowContext(ctx, query).Scan(into)
 }
 
-func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domain.User, string) {
+func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domain.User, string, *visiting) {
 	t.Helper()
 
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -275,7 +291,10 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	// reaches the installation the way a visitor would -- by its preview
 	// hostname, through the mux that resolves it -- rather than by poking the
 	// service's port directly.
-	router := hostmux.New("test.invalid", quiet)
+	// The edge asserts identity as well as stripping it, so the test can be
+	// an anonymous visitor or a signed-in one by saying which.
+	visiting := &visiting{}
+	router := hostmux.New("test.invalid", visiting, quiet)
 	edge := httptest.NewServer(router)
 	t.Cleanup(edge.Close)
 
@@ -292,21 +311,6 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 		t.Fatalf("preview.New: %v", err)
 	}
 
-	// Set after the installer exists, since it is the thing that knows which
-	// database a workspace belongs to.
-	overrides := &lateOverrides{}
-	workspaces, err := workspace.New(workspace.Deps{
-		Store: db, Driver: driver, Preview: allocator, Vault: vault,
-		Overrides: overrides,
-	}, workspace.Options{
-		Resources: vm.Resources{VCPUs: 2, MemoryMiB: 2048, DiskGiB: 10},
-		Image:     "dabberz-golden",
-		Logger:    quiet,
-	})
-	if err != nil {
-		t.Fatalf("workspace.New: %v", err)
-	}
-
 	block, err := database.Open(database.Config{
 		AdminDSN:    clusterDSN,
 		SnapshotDir: filepath.Join(dataDir, "snapshots"),
@@ -317,6 +321,18 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	}
 	t.Cleanup(func() { block.Close() })
 	databases := &tracked{block: block, store: db, t: t}
+
+	workspaces, err := workspace.New(workspace.Deps{
+		Store: db, Driver: driver, Preview: allocator, Vault: vault,
+		Overrides: NewData(db, databases),
+	}, workspace.Options{
+		Resources: vm.Resources{VCPUs: 2, MemoryMiB: 2048, DiskGiB: 10},
+		Image:     "dabberz-golden",
+		Logger:    quiet,
+	})
+	if err != nil {
+		t.Fatalf("workspace.New: %v", err)
+	}
 
 	catalog, err := OpenCatalog("../../apps")
 	if err != nil {
@@ -343,20 +359,7 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	if err != nil {
 		t.Fatalf("install.New: %v", err)
 	}
-	overrides.to = installer
-	return installer, databases, owner, edge.URL
-}
-
-// lateOverrides breaks the circle between the workspace manager and the
-// installer: the manager needs somewhere to ask which database a workspace
-// belongs to, and the only thing that knows is built on top of the manager.
-type lateOverrides struct{ to workspace.Overrides }
-
-func (l *lateOverrides) For(ctx context.Context, w *domain.Workspace) (map[string]string, error) {
-	if l.to == nil {
-		return nil, nil
-	}
-	return l.to.For(ctx, w)
+	return installer, databases, owner, edge.URL, visiting
 }
 
 // serviceAddress is where an installation's service is actually listening, for
@@ -462,4 +465,29 @@ func freeTestPort(t *testing.T) int {
 	}
 	defer listener.Close()
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+// visiting is the edge's view of who is asking: whoever the test last said,
+// or nobody. It stands in for a session established on an installation's
+// hostname, which is the part of the identity story the platform owns.
+type visiting struct {
+	mu sync.Mutex
+	as *domain.User
+}
+
+func (v *visiting) Visitor(context.Context, *http.Request) (*domain.User, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.as == nil {
+		return nil, auth.ErrNoCredentials
+	}
+	return v.as, nil
+}
+
+// be makes the next requests through the edge come from this person, or from
+// nobody when passed nil.
+func (v *visiting) be(u *domain.User) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.as = u
 }

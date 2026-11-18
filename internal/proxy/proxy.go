@@ -25,6 +25,15 @@ type Route struct {
 	UpstreamHost string `json:"upstream_host"`
 	// UpstreamPort is the port the fork's dev server listens on.
 	UpstreamPort int `json:"upstream_port"`
+	// OwnerID is the dabberz user this hostname belongs to, and the only
+	// person whose identity the edge may assert to what is behind it.
+	//
+	// It is part of a route because the edge's decision is per hostname. An
+	// app behind the platform treats an asserted identity as permission, so a
+	// route that did not say whose it is would leave the edge announcing any
+	// signed-in visitor on anybody's installation. Empty means nobody: the
+	// route still serves whatever is public about it.
+	OwnerID string `json:"owner_id,omitempty"`
 }
 
 // Upstream renders the dial target.

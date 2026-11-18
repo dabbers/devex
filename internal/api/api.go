@@ -22,6 +22,7 @@ import (
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/identity"
 	"github.com/dabbers/devex/internal/install"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/orchestrator"
@@ -46,6 +47,7 @@ type Server struct {
 	driver     vm.Driver
 	ui         http.Handler
 	authn      auth.Authenticator
+	visitors   *identity.Translator
 	workspaces *workspace.Manager
 	agent      *agent.Runner
 	gitTokens  GitLinks
@@ -91,8 +93,12 @@ type Deps struct {
 	// Authn identifies the person behind each request. It is required: without
 	// it every request would be anonymous, and this process hands out a shell.
 	// internal/auth.Single is the explicit way to run without a provider.
-	Authn  auth.Authenticator
-	Logger *slog.Logger
+	Authn auth.Authenticator
+	// Visitors translates a credential into a dabberz user. Required
+	// alongside Authn, and the same translator the edge uses, so that the
+	// panel and an app never disagree about who somebody is.
+	Visitors *identity.Translator
+	Logger   *slog.Logger
 }
 
 // New returns an API server.
@@ -106,6 +112,9 @@ func New(deps Deps) (*Server, error) {
 	if deps.Authn == nil {
 		return nil, errors.New("api: an authenticator is required; use auth.Single to run without a provider")
 	}
+	if deps.Visitors == nil {
+		return nil, errors.New("api: a visitor translator is required; build one with identity.New")
+	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -114,7 +123,7 @@ func New(deps Deps) (*Server, error) {
 		store: deps.Store, orch: deps.Orch, sched: deps.Sched,
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
-		authn: deps.Authn, workspaces: deps.Workspaces, agent: deps.Agent,
+		authn: deps.Authn, visitors: deps.Visitors, workspaces: deps.Workspaces, agent: deps.Agent,
 		gitTokens: deps.GitTokens, installer: deps.Installer,
 		logger: logger,
 		// How often the event stream polls for new entries. The store is local,
@@ -142,6 +151,16 @@ func (s *Server) Handler() http.Handler {
 	rt.handle("GET /v1/installations", s.listInstallations)
 	rt.handle("POST /v1/installations", s.createInstallation)
 	rt.handle("GET /v1/installations/{installation}", s.getInstallation)
+	rt.handle("POST /v1/installations/{installation}/rollback", s.rollbackInstallation)
+
+	// Changing an installation. The id in the path is what the tenancy gate
+	// works from, so a change is reachable by its own id once opened.
+	rt.handle("GET /v1/installations/{installation}/changes", s.listChanges)
+	rt.handle("POST /v1/installations/{installation}/changes", s.openChange)
+	rt.handle("GET /v1/changes/{change}", s.getChange)
+	rt.handle("POST /v1/changes/{change}/check", s.checkChange)
+	rt.handle("POST /v1/changes/{change}/promote", s.promoteChange)
+	rt.handle("DELETE /v1/changes/{change}", s.abandonChange)
 
 	// The signed-in account's own GitHub connection.
 	rt.handle("GET /v1/github", s.githubLink)

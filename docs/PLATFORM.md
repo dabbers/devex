@@ -338,6 +338,36 @@ This is a property of the edge, not of the app, because an app cannot tell
 which of its headers the platform added. It wants a test that forges one and
 watches it fail to arrive.
 
+### Asserting is not unconditional either
+
+Stripping is only half of it, and the half that is easy to get right. The
+other half is deciding whose identity to assert, and the obvious answer is
+wrong.
+
+An app behind the platform takes an asserted identity as permission. It has no
+way to check whether this person is entitled to *this* installation — the
+platform owns tenancy, which is the whole reason the app does not implement
+login — so it serves its admin surface to whoever the headers name. Meanwhile
+every customer of the platform has a dabberz account, so "is signed in" is
+very nearly everyone.
+
+Put those together and an edge that asserted the identity of any signed-in
+visitor would make each customer an administrator of every other customer's
+installation. Nothing would look broken. The pages would simply work for the
+wrong person.
+
+So a published route carries whose it is, and the edge asserts an identity
+only to the installation that person is entitled to. Everyone else — signed
+in or not, including a visitor signed in to their own dabberz account — is
+announced as nobody, which is exactly what they are as far as this
+installation is concerned, and the app's public surface serves them while its
+admin surface does not.
+
+Today "entitled" means the owner, because that is the only relationship that
+exists. Sharing an app with a colleague widens that set; it does not change
+where the decision is made. It stays at the edge, in one place, derived from
+the route — never from a header, and never from the app.
+
 ### Nothing is injected that was not declared
 
 An app that never asked for storage does not receive storage credentials, even

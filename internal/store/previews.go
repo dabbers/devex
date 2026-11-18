@@ -81,6 +81,56 @@ func (s *Store) ListPreviewRoutesFor(ctx context.Context, workspaceID string) ([
 	return routes, wrapErr("list preview routes", rows.Err())
 }
 
+// OwnedRoute is a published route together with whose hostname it is.
+//
+// The edge needs this and not just the upstream. It asserts the visitor's
+// identity to the app behind the route, and an app takes that assertion as
+// permission, so announcing a signed-in visitor on a hostname that is not
+// theirs would hand them somebody else's installation. Ownership is therefore
+// part of what a route is, not something the app is asked to re-derive.
+type OwnedRoute struct {
+	PreviewRoute
+	// OwnerID is the user the route's workspace belongs to. Empty when the
+	// workspace is gone: a preview URL outlives what it pointed at, and a
+	// route nobody owns may serve a public surface but may never be told that
+	// somebody is signed in.
+	OwnerID string
+}
+
+// ListOwnedRoutes returns every published route with its owner, which is what
+// the proxy configuration is regenerated from.
+//
+// A left join, deliberately: a route whose workspace has been deleted still
+// answers -- stale preview links get a real page rather than a connection
+// error -- it just has nobody whose identity may be asserted on it.
+func (s *Store) ListOwnedRoutes(ctx context.Context) ([]*OwnedRoute, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT p.workspace_id, p.service_id, p.hostname, p.upstream_host, p.upstream_port, "+
+			"p.created_at, COALESCE(w.user_id, '') "+
+			"FROM preview_routes p LEFT JOIN workspaces w ON w.id = p.workspace_id "+
+			"ORDER BY p.hostname")
+	if err != nil {
+		return nil, wrapErr("list owned routes", err)
+	}
+	defer rows.Close()
+
+	var routes []*OwnedRoute
+	for rows.Next() {
+		var r OwnedRoute
+		var created string
+		if err := rows.Scan(&r.WorkspaceID, &r.ServiceID, &r.Hostname,
+			&r.UpstreamHost, &r.UpstreamPort, &created, &r.OwnerID); err != nil {
+			return nil, wrapErr("list owned routes", err)
+		}
+		r.CreatedAt, err = parseTime(created)
+		if err != nil {
+			return nil, wrapErr("list owned routes", err)
+		}
+		routes = append(routes, &r)
+	}
+	return routes, wrapErr("list owned routes", rows.Err())
+}
+
 // ListPreviewRoutes returns every published route, which is what the proxy
 // configuration is regenerated from.
 func (s *Store) ListPreviewRoutes(ctx context.Context) ([]*PreviewRoute, error) {

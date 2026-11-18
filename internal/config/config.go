@@ -35,7 +35,9 @@ const (
 	// provisioned on. A credential, so it belongs in the environment rather
 	// than in a file somebody might check in.
 	EnvDataAdminDSN = "DABBERZ_DATABASE_ADMIN_DSN"
-	EnvClaudeToken  = "CLAUDE_CODE_OAUTH_TOKEN"
+	// EnvStorageSecret is the object store's secret key.
+	EnvStorageSecret = "DABBERZ_STORAGE_SECRET_KEY"
+	EnvClaudeToken   = "CLAUDE_CODE_OAUTH_TOKEN"
 	// Clerk's publishable key is not a credential -- it is sent to the browser
 	// -- but it is read from the environment alongside the secret so a
 	// deployment configures both in one place.
@@ -54,6 +56,7 @@ type Config struct {
 
 	Auth      AuthConfig          `yaml:"auth"`
 	Catalog   CatalogConfig       `yaml:"catalog"`
+	Blocks    BlocksConfig        `yaml:"blocks"`
 	Data      DataConfig          `yaml:"data"`
 	Server    ServerConfig        `yaml:"server"`
 	Driver    DriverConfig        `yaml:"driver"`
@@ -73,6 +76,34 @@ type CatalogConfig struct {
 	// this deployment installs nothing, which is a working configuration for
 	// a control plane that only drives workspaces.
 	Dir string `yaml:"dir"`
+}
+
+// BlocksConfig is what this deployment offers an installed app, apart from
+// the database, which is provisioned per installation.
+//
+// An operator asserting what exists. An app whose manifest declares something
+// not listed here does not start, and says which -- because an app started
+// without the mail it declared does not fail at boot, it fails when the first
+// notification does not arrive, and by then nobody connects the two.
+type BlocksConfig struct {
+	// MailURL is an SMTP endpoint the platform owns, along with its sending
+	// domain and reputation.
+	MailURL string `yaml:"mail_url"`
+	// Storage is an S3-compatible bucket. Credentials belong in the
+	// environment rather than here.
+	Storage StorageConfig `yaml:"storage"`
+	// RealtimeURL is the shared sync fabric.
+	RealtimeURL string `yaml:"realtime_url"`
+	// SearchURL is the shared index.
+	SearchURL string `yaml:"search_url"`
+}
+
+// StorageConfig points at an object store.
+type StorageConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	Bucket    string `yaml:"bucket"`
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"-"`
 }
 
 // DataConfig is the data block: the Postgres cluster installations are
@@ -205,6 +236,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv(EnvDataAdminDSN); v != "" {
 		c.Data.AdminDSN = v
+	}
+	if v := os.Getenv(EnvStorageSecret); v != "" {
+		c.Blocks.Storage.SecretKey = v
 	}
 	if v := os.Getenv(EnvClerkSecret); v != "" {
 		c.Auth.Clerk.SecretKey = v

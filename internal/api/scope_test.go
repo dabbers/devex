@@ -41,12 +41,23 @@ func TestEveryRouteNamingSomebodysResourceRefusesEveryoneElse(t *testing.T) {
 		t.Fatalf("CreateInstallation: %v", err)
 	}
 
+	// A change against it, recorded the same way and for the same reason.
+	change := &domain.Change{
+		InstallationID: installation.ID, UserID: f.owner.ID,
+		Title: "add a company field", Branch: "change/one",
+		State: domain.ChangeOpen,
+	}
+	if err := f.store.CreateChange(f.ctx, change); err != nil {
+		t.Fatalf("CreateChange: %v", err)
+	}
+
 	ids := map[string]string{
 		"repo":         f.repo.ID,
 		"task":         task.ID,
 		"fork":         forks[0].ID,
 		"workspace":    workspace.Workspace.ID,
 		"installation": installation.ID,
+		"change":       change.ID,
 	}
 	// Stand-ins for the path values that do not name an owned resource. The
 	// gate runs before the handler, so these are never reached on a refusal.
@@ -83,13 +94,13 @@ func TestEveryRouteNamingSomebodysResourceRefusesEveryoneElse(t *testing.T) {
 		// The owner reaches it. Without this the refusal below could pass for
 		// the wrong reason -- a mistyped id refuses everybody.
 		if method == http.MethodGet && !open {
-			f.api.authn = testAuthn(f.owner)
+			f.authenticateAs(t, testAuthn(f.owner))
 			if status := f.call(t, method, target, nil, nil); status == http.StatusNotFound {
 				t.Errorf("%s: the owner was told their own resource does not exist", pattern)
 			}
 		}
 
-		f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+		f.authenticateAs(t, auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"})
 		status := f.call(t, method, target, map[string]any{}, nil)
 		if status != http.StatusNotFound {
 			t.Errorf("%s: another user got %d, want 404", pattern, status)
@@ -108,7 +119,7 @@ func TestAResourceIdInTheBodyIsCheckedToo(t *testing.T) {
 	withProject(t, f)
 	victimRepo := f.repo.ID
 
-	f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+	f.authenticateAs(t, auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"})
 
 	for _, attempt := range []struct {
 		name string
@@ -136,7 +147,7 @@ func TestRefusingSaysMissingRatherThanForbidden(t *testing.T) {
 	f := newFixture(t)
 	withProject(t, f)
 
-	f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+	f.authenticateAs(t, auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"})
 
 	var body map[string]any
 	status := f.call(t, "GET", "/v1/repos/"+f.repo.ID, nil, &body)

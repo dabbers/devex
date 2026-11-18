@@ -56,6 +56,16 @@ func (i *Installer) Check(ctx context.Context, change *domain.Change) (*domain.C
 		return nil, err
 	}
 
+	// What is about to be checked, read from the workspace rather than
+	// remembered from when the change was opened. An agent that has committed
+	// since then has moved the branch on, and checking one revision while
+	// recording another is how unchecked code reaches a customer.
+	revision, err := i.deps.Workspaces.Revision(ctx, working)
+	if err != nil {
+		return nil, err
+	}
+	change.Revision = revision
+
 	change.State = domain.ChangeChecking
 	change.Checks = nil
 	if err := i.deps.Store.UpdateChange(ctx, change); err != nil {

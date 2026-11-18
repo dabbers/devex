@@ -10,7 +10,7 @@ import (
 	"github.com/dabbers/devex/internal/store"
 )
 
-// For implements workspace.Overrides: the environment belonging to one
+// Data implements workspace.Overrides: the environment belonging to one
 // workspace rather than to its repository.
 //
 // There is exactly one thing here and it is the database. A workspace is
@@ -19,20 +19,41 @@ import (
 // and the two must never be confused, because the whole safety story is that
 // experimenting cannot touch anything real.
 //
+// It deliberately does not hang off the installer. Deciding which database a
+// workspace belongs to needs the store and the data block and nothing else, so
+// making it its own thing means it can be built before the workspace manager
+// instead of after it. That ordering is the entire point: a manager built
+// without this starts an installation's services with no connection string,
+// and the app -- correctly -- refuses to run.
+type Data struct {
+	store     *store.Store
+	databases Databases
+}
+
+// NewData returns the per-workspace environment resolver. The data block may
+// be nil, for a deployment that offers no database; a workspace that turns out
+// to need one then fails with that said plainly rather than silently starting
+// without it.
+func NewData(st *store.Store, databases Databases) *Data {
+	return &Data{store: st, databases: databases}
+}
+
+// For resolves the environment particular to this workspace.
+//
 // The connection string is minted here rather than looked up. Nothing stores a
 // DSN: not the vault, not a row, not a log. The platform owns the role, so a
 // fresh credential costs an ALTER ROLE, and a credential that is never written
 // down cannot be read out of storage.
-func (i *Installer) For(ctx context.Context, w *domain.Workspace) (map[string]string, error) {
-	name, err := i.databaseFor(ctx, w)
+func (d *Data) For(ctx context.Context, w *domain.Workspace) (map[string]string, error) {
+	name, err := d.databaseFor(ctx, w)
 	if err != nil || name == "" {
 		return nil, err
 	}
-	if i.deps.Databases == nil {
+	if d.databases == nil {
 		return nil, fmt.Errorf("install: workspace %s needs database %s and there is no data block", w.ID, name)
 	}
 
-	dsn, err := i.deps.Databases.Credentials(ctx, &database.Database{
+	dsn, err := d.databases.Credentials(ctx, &database.Database{
 		Name: name, Role: database.RoleFor(name),
 	})
 	if err != nil {
@@ -43,8 +64,8 @@ func (i *Installer) For(ctx context.Context, w *domain.Workspace) (map[string]st
 
 // databaseFor reports which database a workspace should be pointed at, or ""
 // if it is neither an installation nor a change.
-func (i *Installer) databaseFor(ctx context.Context, w *domain.Workspace) (string, error) {
-	change, err := i.deps.Store.ChangeByWorkspace(ctx, w.ID)
+func (d *Data) databaseFor(ctx context.Context, w *domain.Workspace) (string, error) {
+	change, err := d.store.ChangeByWorkspace(ctx, w.ID)
 	switch {
 	case err == nil:
 		// A change's scratch copy, always. Even if it has none yet, falling
@@ -58,7 +79,7 @@ func (i *Installer) databaseFor(ctx context.Context, w *domain.Workspace) (strin
 		return "", err
 	}
 
-	installation, err := i.deps.Store.InstallationByWorkspace(ctx, w.ID)
+	installation, err := d.store.InstallationByWorkspace(ctx, w.ID)
 	switch {
 	case err == nil:
 		return installation.Database, nil

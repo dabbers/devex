@@ -30,7 +30,7 @@ func TestAChangeGoesLiveWithoutTouchingProductionFirst(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	installer, db, owner, edge := newInstaller(t, os.Getenv(clusterEnv))
+	installer, db, owner, edge, _ := newInstaller(t, os.Getenv(clusterEnv))
 	installation := installApp(t, ctx, installer, owner.ID, "live")
 	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
 
@@ -167,7 +167,7 @@ func TestOneChangeAtATime(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	installer, _, owner, _ := newInstaller(t, os.Getenv(clusterEnv))
+	installer, _, owner, _, _ := newInstaller(t, os.Getenv(clusterEnv))
 	installation := installApp(t, ctx, installer, owner.ID, "busy")
 
 	first, err := installer.OpenChange(ctx, installation, "first")
@@ -199,7 +199,7 @@ func TestAChangeNeedsSomethingToChange(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	installer, db, owner, _ := newInstaller(t, os.Getenv(clusterEnv))
+	installer, db, owner, _, _ := newInstaller(t, os.Getenv(clusterEnv))
 	installation := installApp(t, ctx, installer, owner.ID, "stopped")
 
 	installation.State = domain.InstallationStopped
@@ -247,7 +247,7 @@ func TestChecksDecideWhetherAChangeCanGoLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	installer, db, owner, edge := newInstaller(t, os.Getenv(clusterEnv))
+	installer, db, owner, edge, _ := newInstaller(t, os.Getenv(clusterEnv))
 	installation := installApp(t, ctx, installer, owner.ID, "checked")
 	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
 
@@ -307,7 +307,7 @@ func TestAChangeThatRewritesItsOwnGateIsReported(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	installer, db, owner, edge := newInstaller(t, os.Getenv(clusterEnv))
+	installer, db, owner, edge, _ := newInstaller(t, os.Getenv(clusterEnv))
 	installation := installApp(t, ctx, installer, owner.ID, "gatekeeper")
 	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
 

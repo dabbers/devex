@@ -19,6 +19,7 @@ package hostmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,8 +29,21 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dabbers/devex/internal/auth"
+	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/proxy"
 )
+
+// Identities resolves the visitor behind a request to the dabberz user the
+// rest of the platform knows. It is identity.Translator, narrowed.
+//
+// The dabberz user and not the provider's subject, because that is the name
+// everything else is scoped by: an installation's owner, a form's author, a
+// row's user_id. Asserting a provider subject instead would make an app's idea
+// of a person differ from the control plane's.
+type Identities interface {
+	Visitor(ctx context.Context, r *http.Request) (*domain.User, error)
+}
 
 // Mux routes requests for published preview hostnames to their upstreams and
 // hands everything else to a fallback handler, which is the control plane's
@@ -42,6 +56,7 @@ type Mux struct {
 	domain   string
 	routes   map[string]*route
 	fallback http.Handler
+	who      Identities
 	logger   *slog.Logger
 }
 
@@ -60,13 +75,21 @@ type route struct {
 // through to the control plane, the panel would be reachable, unauthenticated,
 // at any name under the preview domain. So inside the zone an unknown
 // hostname is a dead end, and only hostnames outside it reach the fallback.
-func New(domain string, logger *slog.Logger) *Mux {
+// The authenticator is the other half of the identity story. An app behind
+// this edge is told to trust the identity headers, and StripIdentity makes
+// sure a visitor cannot set them -- but something has to actually set them,
+// or every app's signed-in surface is unreachable by construction. That is
+// this: the edge identifies the visitor the same way the control plane does,
+// and states the answer. It may be nil, for an edge that fronts nothing
+// needing identity; then no app ever sees a signed-in visitor.
+func New(domain string, who Identities, logger *slog.Logger) *Mux {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Mux{
 		domain: strings.ToLower(strings.TrimPrefix(strings.TrimSpace(domain), ".")),
 		routes: map[string]*route{},
+		who:    who,
 		logger: logger,
 	}
 }
@@ -99,7 +122,7 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 		if err != nil {
 			return fmt.Errorf("hostmux: route %s has an unusable upstream %q: %w", r.Hostname, upstream, err)
 		}
-		hostname := r.Hostname
+		hostname, owner := r.Hostname, r.OwnerID
 		next[hostname] = &route{
 			upstream: upstream,
 			proxy: &httputil.ReverseProxy{
@@ -110,6 +133,22 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 					// could set one would have the admin surface of somebody
 					// else's installation, with nothing appearing broken.
 					proxy.StripIdentity(pr.Out.Header)
+					// ...and then state it, for whoever is actually signed
+					// in. Order matters: strip first, assert second, so a
+					// forged header is replaced and never merged with.
+					//
+					// Only the person this hostname belongs to. An app takes
+					// the assertion as permission, so announcing any
+					// signed-in visitor here would make every customer an
+					// administrator of every other customer's installation.
+					// Anyone else is a member of the public, which is what
+					// they are as far as this installation is concerned.
+					if who, ok := visitor(pr.In.Context()); ok && who.ID == owner && owner != "" {
+						pr.Out.Header.Set(proxy.UserHeader, who.ID)
+						if who.Email != "" {
+							pr.Out.Header.Set(proxy.EmailHeader, who.Email)
+						}
+					}
 					// Keep the public hostname. A dev server derives absolute
 					// URLs and its hot-reload websocket address from the Host
 					// it was asked for, so rewriting it to the internal
@@ -143,7 +182,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.RUnlock()
 
 	if target != nil {
-		target.proxy.ServeHTTP(w, r)
+		target.proxy.ServeHTTP(w, m.withVisitor(r))
 		return
 	}
 	if m.inPreviewZone(host) {
@@ -159,6 +198,39 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fallback.ServeHTTP(w, r)
+}
+
+// visitorKey types the request-context value holding who is asking.
+type visitorKey struct{}
+
+// withVisitor resolves who is asking, once, before the proxy runs.
+//
+// Anonymous is a normal answer, not a failure: an app's public surface -- a
+// form being filled in, a published page -- is reached by people who have no
+// dabberz account and never will. So a request with no credentials, or with
+// one that is not accepted, is forwarded with nothing asserted, and the app
+// decides which of its own paths require a visitor. A rejected credential is
+// logged, because the alternative is a signed-in person being quietly treated
+// as a stranger with nothing anywhere saying why.
+func (m *Mux) withVisitor(r *http.Request) *http.Request {
+	if m.who == nil {
+		return r
+	}
+	who, err := m.who.Visitor(r.Context(), r)
+	switch {
+	case err == nil && who != nil && who.ID != "":
+		return r.WithContext(context.WithValue(r.Context(), visitorKey{}, *who))
+	case err != nil && !errors.Is(err, auth.ErrNoCredentials):
+		m.logger.Warn("a visitor to a preview presented a credential that was not accepted; "+
+			"forwarding as anonymous", "host", normalizeHost(r.Host), "error", err)
+	}
+	return r
+}
+
+// visitor reads back what withVisitor resolved.
+func visitor(ctx context.Context) (domain.User, bool) {
+	who, ok := ctx.Value(visitorKey{}).(domain.User)
+	return who, ok
 }
 
 // inPreviewZone reports whether a hostname belongs to the preview domain.

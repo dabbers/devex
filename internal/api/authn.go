@@ -8,6 +8,7 @@ import (
 
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/identity"
 )
 
 // userKey carries the resolved user through a request.
@@ -27,19 +28,17 @@ func (s *Server) requireUser(next http.Handler) http.Handler {
 			return
 		}
 
-		identity, err := s.authn.Identify(r.Context(), r)
+		// The same translation the edge does, from the same place: the
+		// provider says who this is, the store says which dabberz user that
+		// is. First sign-in creates the user.
+		user, err := s.visitors.Visitor(r.Context(), r)
 		if err != nil {
+			if errors.Is(err, identity.ErrUnresolved) {
+				s.logger.Error("could not resolve the signed-in user", "error", err)
+				writeStatus(w, http.StatusForbidden, "your account could not be resolved")
+				return
+			}
 			s.rejectUnauthenticated(w, r, err)
-			return
-		}
-
-		// First sign-in creates the dabberz user. Everything is already scoped
-		// by user id, so this is the only place identity has to be translated.
-		user, err := s.store.EnsureUserByExternalID(r.Context(), identity.Subject, identity.Email)
-		if err != nil {
-			s.logger.Error("could not resolve the signed-in user",
-				"subject", identity.Subject, "error", err)
-			writeStatus(w, http.StatusForbidden, "your account could not be resolved")
 			return
 		}
 

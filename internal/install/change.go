@@ -164,6 +164,20 @@ func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain
 		return nil, err
 	}
 
+	// The checks passed on a particular commit. If the branch has moved since
+	// -- an agent committing once more after being told it was ready, a person
+	// pushing by hand -- then what would go live is not what was checked, and
+	// "nothing goes live unchecked" has to mean this or it means nothing.
+	current, err := i.deps.Workspaces.Revision(ctx, working)
+	if err != nil {
+		return nil, err
+	}
+	if current != change.Revision {
+		return nil, fmt.Errorf("%w: this change has been worked on since its checks passed "+
+			"(checked %s, now %s); check it again before putting it live",
+			store.ErrConflict, short(change.Revision), short(current))
+	}
+
 	change.State = domain.ChangePromoting
 	if err := i.deps.Store.UpdateChange(ctx, change); err != nil {
 		return nil, err
@@ -286,4 +300,12 @@ func (i *Installer) blocked(ctx context.Context, change *domain.Change, cause er
 		i.deps.Logger.Error("could not record a blocked change", "change", change.ID, "error", err)
 	}
 	return cause
+}
+
+// short abbreviates a revision for a message a person reads.
+func short(revision string) string {
+	if len(revision) > 10 {
+		return revision[:10]
+	}
+	return revision
 }

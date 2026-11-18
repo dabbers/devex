@@ -84,7 +84,7 @@ func TestListingHidesAnotherUsersWorkspaces(t *testing.T) {
 	}
 
 	// A different person, same server.
-	f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+	f.authenticateAs(t, auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"})
 	var listed struct {
 		Workspaces []domain.Workspace `json:"workspaces"`
 	}
@@ -111,7 +111,7 @@ func TestAnotherUsersWorkspaceReadsAsMissing(t *testing.T) {
 		t.Fatalf("create: %d", status)
 	}
 
-	f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+	f.authenticateAs(t, auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"})
 	for _, call := range []struct{ method, path string }{
 		{"GET", "/v1/workspaces/" + created.Workspace.ID},
 		{"POST", "/v1/workspaces/" + created.Workspace.ID + "/start"},
@@ -339,7 +339,7 @@ func TestAnotherUsersConversationIsNotReachable(t *testing.T) {
 	withProject(t, f)
 	ws := runningWorkspace(t, f)
 
-	f.api.authn = auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"}
+	f.authenticateAs(t, auth.Single{Subject: "prov|intruder", Email: "intruder@example.com"})
 	for _, call := range []struct{ method, path string }{
 		{"GET", "/v1/workspaces/" + ws.ID + "/messages"},
 		{"POST", "/v1/workspaces/" + ws.ID + "/messages"},

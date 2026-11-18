@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dabbers/devex/internal/auth"
+	"github.com/dabbers/devex/internal/identity"
 )
 
 // rejecting is an Authenticator that refuses everything, standing in for a
@@ -20,6 +22,23 @@ func (r rejecting) Identify(context.Context, *http.Request) (*auth.Identity, err
 }
 func (rejecting) PublicConfig() map[string]any { return map[string]any{"provider": "rejecting"} }
 
+// authenticateAs points the server's whole front door at one provider.
+//
+// Both fields, deliberately. requireUser reads the translator and not the
+// authenticator, so a test that set only the authenticator would leave its
+// substitution with no effect -- and would then pass requests it meant to see
+// refused, which is the one outcome this file exists to catch.
+func (f *fixture) authenticateAs(t *testing.T, provider auth.Authenticator) {
+	t.Helper()
+
+	f.api.authn = provider
+	visitors, err := identity.New(provider, f.store)
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	f.api.visitors = visitors
+}
+
 // TestEveryDataRouteRequiresAUser walks the real route table and checks that
 // nothing under /v1 answers an unidentified request.
 //
@@ -28,7 +47,7 @@ func (rejecting) PublicConfig() map[string]any { return map[string]any{"provider
 // neighbour and assumes is covered.
 func TestEveryDataRouteRequiresAUser(t *testing.T) {
 	f := newFixture(t)
-	f.api.authn = rejecting{err: auth.ErrNoCredentials}
+	f.authenticateAs(t, rejecting{err: auth.ErrNoCredentials})
 	handler := f.api.Handler()
 
 	// Method and path for every registered data route, including the ones that
@@ -78,7 +97,14 @@ func TestEveryDataRouteRequiresAUser(t *testing.T) {
 
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
-			req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+			// A deadline on every probe. Some of these routes stream --
+			// server-sent events, a shell -- and a regression that let an
+			// unidentified request through would hang here forever instead of
+			// failing, which is a worse outcome than the bug.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}")).WithContext(ctx)
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
@@ -94,7 +120,7 @@ func TestEveryDataRouteRequiresAUser(t *testing.T) {
 // sign-in configuration is read before anyone is signed in.
 func TestOpenPathsStayOpen(t *testing.T) {
 	f := newFixture(t)
-	f.api.authn = rejecting{err: auth.ErrNoCredentials}
+	f.authenticateAs(t, rejecting{err: auth.ErrNoCredentials})
 	handler := f.api.Handler()
 
 	for _, path := range []string{"/healthz", "/v1/auth/config"} {
@@ -117,7 +143,7 @@ func TestAuthConfigLeaksNothingSecret(t *testing.T) {
 		t.Fatalf("NewClerk: %v", err)
 	}
 	f := newFixture(t)
-	f.api.authn = clerk
+	f.authenticateAs(t, clerk)
 
 	rec := httptest.NewRecorder()
 	f.api.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/auth/config", nil))
@@ -142,7 +168,7 @@ func TestWorkIsAttributedToTheRequestingUser(t *testing.T) {
 		{"prov|alice", "alice@example.com", "alice-repo"},
 		{"prov|bob", "bob@example.com", "bob-repo"},
 	} {
-		f.api.authn = auth.Single{Subject: person.subject, Email: person.email}
+		f.authenticateAs(t, auth.Single{Subject: person.subject, Email: person.email})
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/v1/repos",
 			strings.NewReader(`{"name":"`+person.repo+`","remote_url":"git@example.com:x.git"}`))
@@ -154,7 +180,7 @@ func TestWorkIsAttributedToTheRequestingUser(t *testing.T) {
 	}
 
 	// Alice must not see Bob's repository.
-	f.api.authn = auth.Single{Subject: "prov|alice", Email: "alice@example.com"}
+	f.authenticateAs(t, auth.Single{Subject: "prov|alice", Email: "alice@example.com"})
 	rec := httptest.NewRecorder()
 	f.api.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/repos", nil))
 	body := rec.Body.String()
@@ -171,14 +197,14 @@ func TestWorkIsAttributedToTheRequestingUser(t *testing.T) {
 func TestARejectedCredentialIsDistinguishedFromNone(t *testing.T) {
 	f := newFixture(t)
 
-	f.api.authn = rejecting{err: auth.ErrNoCredentials}
+	f.authenticateAs(t, rejecting{err: auth.ErrNoCredentials})
 	rec := httptest.NewRecorder()
 	f.api.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/overview", nil))
 	if !strings.Contains(rec.Body.String(), "sign in to continue") {
 		t.Fatalf("a request with no credentials was not asked to sign in: %s", rec.Body.String())
 	}
 
-	f.api.authn = rejecting{err: auth.ErrUnauthenticated}
+	f.authenticateAs(t, rejecting{err: auth.ErrUnauthenticated})
 	rec = httptest.NewRecorder()
 	f.api.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/overview", nil))
 	if !strings.Contains(rec.Body.String(), "not valid") {

@@ -23,6 +23,7 @@ import (
 	"github.com/dabbers/devex/internal/config"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/gitauth"
+	"github.com/dabbers/devex/internal/identity"
 	"github.com/dabbers/devex/internal/install"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/memory"
@@ -143,6 +144,14 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	}
 	logger.Info("authentication ready", "provider", authenticator.Name())
 
+	// One translation from a credential to a dabberz user, shared by the two
+	// front doors: the control plane's own API, and the edge that fronts
+	// installations and has to tell an app who is asking.
+	visitors, err := identity.New(authenticator, db)
+	if err != nil {
+		return nil, err
+	}
+
 	// The owner row is created ahead of any request so a fresh installation
 	// has one, and so an existing single-user database is the row the first
 	// provider sign-in adopts rather than being left orphaned beside a new
@@ -171,7 +180,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	}
 	logger.Info("vm driver ready", "driver", driver.Name())
 
-	router, hostRouter := buildRouter(cfg, logger)
+	router, hostRouter := buildRouter(cfg, visitors, logger)
 	allocator, err := preview.New(db, router, cfg.Preview)
 	if err != nil {
 		return nil, err
@@ -218,9 +227,40 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		logger.Info("per-account git credentials ready", "provider", gitauth.Provider)
 	}
 
+	// The data block: the Postgres cluster installations are provisioned on.
+	// Optional, and a deployment without one still runs workspaces -- it just
+	// cannot install an app that declares a database, and says so when asked.
+	var databases *database.Block
+	if cfg.Data.AdminDSN != "" {
+		databases, err = database.Open(database.Config{
+			AdminDSN:    cfg.Data.AdminDSN,
+			PublicHost:  cfg.Data.PublicHost,
+			SnapshotDir: snapshotDir(cfg),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := databases.Ping(ctx); err != nil {
+			logger.Warn("the data block is configured but unreachable; installs needing a database will fail",
+				"error", err)
+		} else {
+			logger.Info("data block ready", "snapshots", snapshotDir(cfg))
+		}
+	} else {
+		logger.Warn("no data block (set " + config.EnvDataAdminDSN + "); apps needing a database cannot be installed")
+	}
+
+	var provisioner install.Databases
+	if databases != nil {
+		provisioner = databases
+	}
+
 	workspaces, err := workspace.New(workspace.Deps{
 		Store: db, Driver: driver, Preview: allocator, Vault: vault,
 		GitTokens: gitTokens,
+		// Which database this particular workspace belongs to: an
+		// installation's own, or a change's copy of it.
+		Overrides: install.NewData(db, provisioner),
 	}, workspace.Options{
 		Resources: cfg.Driver.ForkResources,
 		Image:     cfg.Driver.Image,
@@ -260,29 +300,6 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Logger:             logger,
 	})
 
-	// The data block: the Postgres cluster installations are provisioned on.
-	// Optional, and a deployment without one still runs workspaces -- it just
-	// cannot install an app that declares a database, and says so when asked.
-	var databases *database.Block
-	if cfg.Data.AdminDSN != "" {
-		databases, err = database.Open(database.Config{
-			AdminDSN:    cfg.Data.AdminDSN,
-			PublicHost:  cfg.Data.PublicHost,
-			SnapshotDir: snapshotDir(cfg),
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := databases.Ping(ctx); err != nil {
-			logger.Warn("the data block is configured but unreachable; installs needing a database will fail",
-				"error", err)
-		} else {
-			logger.Info("data block ready", "snapshots", snapshotDir(cfg))
-		}
-	} else {
-		logger.Warn("no data block (set " + config.EnvDataAdminDSN + "); apps needing a database cannot be installed")
-	}
-
 	// The catalog, and the installer that turns an entry in it into something
 	// a customer is using.
 	var installer *install.Installer
@@ -291,26 +308,26 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		if err != nil {
 			return nil, err
 		}
-		var provisioner install.Databases
-		if databases != nil {
-			provisioner = databases
-		}
 		installer, err = install.New(install.Deps{
 			Store: db, Catalog: catalog, Workspaces: workspaces,
-			Vault: vault, Databases: provisioner, Logger: logger,
+			Vault: vault, Databases: provisioner, Verifier: verifier,
+			Logger: logger,
 		}, install.Options{
 			RepoDir: filepath.Join(cfg.DataDir, "repos"),
 			// What the blocks that exist offer. Identity is the platform's
 			// own, so an app behind the edge is told who is asking.
-			Provided: install.Provided{
-				Identity: install.Identity{
-					Issuer:   authenticator.Name(),
-					ClientID: "dabberz",
-				},
-			},
+			Provided: providedBlocks(cfg, authenticator.Name()),
 		})
 		if err != nil {
 			return nil, err
+		}
+		if verifier == nil {
+			// Said out loud, because the failure is silent otherwise: a
+			// change still reports passing checks, having been judged only by
+			// its own suite, which notices a broken query and not a blank
+			// page.
+			logger.Warn("no shared UI VM configured; a change's preview will not be opened in a browser, " +
+				"so its checks cannot notice a page that renders nothing")
 		}
 		apps, problems := catalog.List()
 		for _, problem := range problems {
@@ -327,7 +344,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	apiServer, err := api.New(api.Deps{
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
-		UI: ui, Authn: authenticator, Workspaces: workspaces,
+		UI: ui, Authn: authenticator, Visitors: visitors, Workspaces: workspaces,
 		Agent: agentRunner, GitTokens: gitTokens, Installer: installer, Logger: logger,
 	})
 	if err != nil {
@@ -477,14 +494,14 @@ func buildDriver(cfg config.Config, dataDir string) (vm.Driver, error) {
 // buildRouter selects how preview routes are published, returning the router
 // and, when previews are served from this process, the handler that serves
 // them.
-func buildRouter(cfg config.Config, logger *slog.Logger) (proxy.Router, *hostmux.Mux) {
+func buildRouter(cfg config.Config, who hostmux.Identities, logger *slog.Logger) (proxy.Router, *hostmux.Mux) {
 	switch cfg.PreviewRouter() {
 	case preview.RouterCaddy:
 		return caddy.New(cfg.Caddy, nil), nil
 	case preview.RouterNone:
 		return proxy.Discard{}, nil
 	default:
-		mux := hostmux.New(cfg.Preview.Domain, logger)
+		mux := hostmux.New(cfg.Preview.Domain, who, logger)
 		return mux, mux
 	}
 }
@@ -513,4 +530,28 @@ func snapshotDir(cfg config.Config) string {
 		return cfg.Data.SnapshotDir
 	}
 	return filepath.Join(cfg.DataDir, "snapshots")
+}
+
+// providedBlocks is what this deployment offers an installed app.
+//
+// Assembled from configuration rather than assumed, so an app that declares
+// something this deployment does not have is refused at install with the
+// reason, rather than started and left to fail later in a way nobody connects
+// back to a missing block.
+func providedBlocks(cfg config.Config, issuer string) install.Provided {
+	provided := install.Provided{
+		// Identity is the platform's own: an app behind the edge is told who
+		// is asking rather than implementing sign-in itself.
+		Identity: install.Identity{Issuer: issuer, ClientID: "dabberz"},
+		MailURL:  cfg.Blocks.MailURL,
+		Storage: install.Storage{
+			Endpoint:  cfg.Blocks.Storage.Endpoint,
+			Bucket:    cfg.Blocks.Storage.Bucket,
+			AccessKey: cfg.Blocks.Storage.AccessKey,
+			SecretKey: cfg.Blocks.Storage.SecretKey,
+		},
+		RealtimeURL: cfg.Blocks.RealtimeURL,
+		SearchURL:   cfg.Blocks.SearchURL,
+	}
+	return provided
 }

@@ -239,7 +239,7 @@ func (a *Allocator) URL(route *store.PreviewRoute) string {
 // It always publishes the full set rather than a delta, so the proxy converges
 // on the database's view even after a crash or a manual edit.
 func (a *Allocator) Publish(ctx context.Context) error {
-	recorded, err := a.store.ListPreviewRoutes(ctx)
+	recorded, err := a.store.ListOwnedRoutes(ctx)
 	if err != nil {
 		return err
 	}
@@ -249,6 +249,7 @@ func (a *Allocator) Publish(ctx context.Context) error {
 			Hostname:     r.Hostname,
 			UpstreamHost: r.UpstreamHost,
 			UpstreamPort: r.UpstreamPort,
+			OwnerID:      r.OwnerID,
 		})
 	}
 	if err := a.router.Apply(ctx, routes); err != nil {

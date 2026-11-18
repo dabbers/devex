@@ -379,6 +379,12 @@ func (m *Manager) workspaceEnvironment(ctx context.Context, w *domain.Workspace)
 	return env, nil
 }
 
+// HasOverrides reports whether per-workspace environment is wired.
+//
+// It exists so that whatever depends on that environment can refuse at
+// startup rather than let a service start without it.
+func (m *Manager) HasOverrides() bool { return m.overrides != nil }
+
 // environment resolves the repo's secrets.
 func (m *Manager) environment(ctx context.Context, repoID string) (map[string]string, error) {
 	if m.vault == nil {

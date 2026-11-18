@@ -18,6 +18,7 @@ import (
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/identity"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/orchestrator"
@@ -125,6 +126,7 @@ func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *f
 	srv, err := New(Deps{
 		Store: st, Orch: orch, Vault: vault, Memory: mem, UI: ui,
 		Verifier: verifier, Authn: testAuthn(owner),
+		Visitors: testVisitors(t, st, owner),
 		// A runner over a driver that cannot exec: these tests are about the
 		// conversation's bookkeeping, and a turn that cannot run still has to
 		// close its row rather than leaving the workspace busy forever.
@@ -636,7 +638,8 @@ func newFixtureWithShell(t *testing.T) *fixture {
 	srv, err := New(Deps{
 		Store: f.store, Orch: f.orch, Vault: f.vault, Memory: f.memory,
 		UI: ui, Verifier: verifier, Driver: driver,
-		Authn: testAuthn(f.owner), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Authn: testAuthn(f.owner), Visitors: testVisitors(t, f.store, f.owner),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
@@ -684,6 +687,17 @@ func newBufReader(conn net.Conn) *bufio.Reader { return bufio.NewReader(conn) }
 // handler tests are about; the boundary itself is tested in authn_test.go.
 func testAuthn(u *domain.User) auth.Authenticator {
 	return auth.Single{Subject: "test:" + u.Email, Email: u.Email}
+}
+
+// testVisitors is the real translation, over the test's own store, so these
+// tests exercise the same credential-to-user path the daemon does.
+func testVisitors(t *testing.T, st *store.Store, u *domain.User) *identity.Translator {
+	t.Helper()
+	visitors, err := identity.New(testAuthn(u), st)
+	if err != nil {
+		t.Fatalf("identity.New: %v", err)
+	}
+	return visitors
 }
 
 // unreachableDriver stands in for a machine that cannot be reached.
