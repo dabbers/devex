@@ -87,6 +87,14 @@ func TestRunInvokesClaudeCodeInPrintMode(t *testing.T) {
 	if driver.lastCmd.Env["DATABASE_URL"] != "postgres://x" {
 		t.Fatalf("repo secrets were not passed through: %v", driver.lastCmd.Env)
 	}
+	// The agent commits as it goes, and an account with a fresh home has no
+	// identity to commit as: on dbz-alpha the first real turn made its change
+	// and then could not commit it.
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		if driver.lastCmd.Env[name] == "" {
+			t.Fatalf("%s is not set, so the agent cannot commit: %v", name, driver.lastCmd.Env)
+		}
+	}
 
 	if res.Output != "done" || res.Failed {
 		t.Fatalf("result = %+v", res)

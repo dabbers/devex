@@ -32,6 +32,12 @@ const DefaultPermissionMode = "bypassPermissions"
 // injected into the fork VM alongside the repo's inherited secrets.
 const TokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
 
+// AuthorName and AuthorEmail are who the agent's commits are by.
+const (
+	AuthorName  = "dabberz agent"
+	AuthorEmail = "agent@dabberz.invalid"
+)
+
 // ConfigDirEnv points the agent at where it keeps its conversations.
 //
 // Resuming reads the conversation back from this directory, so it has to be
@@ -218,6 +224,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	if r.cfg.SessionDir != "" {
 		env[ConfigDirEnv] = r.cfg.SessionDir
+	}
+	// The agent is told to commit as it goes, and git will not commit without
+	// an identity. It used to borrow one from whatever account ran it -- root's
+	// global config -- and running it as an account with a fresh home took
+	// that away: the first real turn on dbz-alpha made its change and then
+	// reported it could not commit. Named for what it is, so the history says
+	// the agent wrote this rather than whoever owns the machine. A repo secret
+	// setting these still wins.
+	for name, value := range map[string]string{
+		"GIT_AUTHOR_NAME": AuthorName, "GIT_AUTHOR_EMAIL": AuthorEmail,
+		"GIT_COMMITTER_NAME": AuthorName, "GIT_COMMITTER_EMAIL": AuthorEmail,
+	} {
+		if _, set := env[name]; !set {
+			env[name] = value
+		}
 	}
 
 	resumeID := ""
