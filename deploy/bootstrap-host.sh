@@ -299,10 +299,11 @@ golang() {
 	# Needed on the host to build dabberzd, and inside the golden image too,
 	# because an app's own build step runs there.
 	local have
-	if command -v go >/dev/null; then
-		have=$(go version | awk '{print $3}' | sed 's/^go//')
+	if [ -x /usr/local/go/bin/go ]; then
+		have=$(/usr/local/go/bin/go version | awk '{print $3}' | sed 's/^go//')
 		if at_least "$have" "$GO_MINIMUM"; then
 			note "already present: go$have (>= $GO_MINIMUM)"
+			go_on_path
 			return
 		fi
 		note "go$have is older than $GO_MINIMUM; replacing it"
@@ -335,7 +336,17 @@ golang() {
 	tar -C /usr/local -xzf "/tmp/$archive"
 	rm -f "/tmp/$archive"
 	printf 'export PATH=$PATH:/usr/local/go/bin\n' > /etc/profile.d/golang.sh
+	go_on_path
 	note "installed $(/usr/local/go/bin/go version)"
+}
+
+# go_on_path links the toolchain into /usr/local/bin. The profile.d line covers
+# a login shell and nothing else: a systemd service never reads it, and the
+# daemon builds every app with go, so the first install on dbz-alpha failed
+# with "go: not found" on a machine where go worked in every terminal.
+go_on_path() {
+	ln -sfn /usr/local/go/bin/go /usr/local/bin/go
+	ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 }
 
 claude_code() {
