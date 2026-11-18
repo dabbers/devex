@@ -208,6 +208,59 @@ https://raw.githubusercontent.com/dabbers/devex/<commit-sha>/deploy/bootstrap-ho
 - `systemd-timesyncd` or equivalent. Clerk's tokens are time-sensitive and a
   skewed clock reads as a forged credential.
 
+## After the bootstrap
+
+The script stops at a working host. Four things remain, and the first is worth
+doing before anything else touches the database.
+
+### Move Postgres onto the pool, while it is still empty
+
+The package put the cluster on the root filesystem. It needs to be on
+`tank/postgres`, which was created with an 8k recordsize for it. Doing this
+now costs a restart. Doing it after a customer's data is in there costs a dump,
+a restore and an outage.
+
+```
+systemctl stop postgresql@17-main
+zfs set mountpoint=/srv/pgdata tank/postgres
+rsync -aXS --numeric-ids /var/lib/postgresql/17/main/ /srv/pgdata/
+chown -R postgres:postgres /srv/pgdata
+# in /etc/postgresql/17/main/postgresql.conf:
+#   data_directory = '/srv/pgdata'
+systemctl start postgresql@17-main
+```
+
+Then check it actually moved, rather than assuming:
+
+```
+sudo -u postgres psql -tAc 'show data_directory'
+```
+
+While in that file, one setting is worth changing for this storage:
+
+```
+full_page_writes = off
+```
+
+Postgres writes whole pages after a checkpoint to protect against a torn write
+-- half a page on disk because the power went out mid-write. On a
+copy-on-write pool that cannot happen, because a block is never overwritten in
+place. Leaving it on means writing every page twice for a hazard the storage
+has already removed, which on spinning disks is the expensive kind of
+redundant.
+
+### The rest
+
+- **The config.** `configs/dabberz.example.yaml` is the annotated one. The
+  master key comes from `dabberzctl keygen` and belongs in the environment,
+  never the file. The data block's DSN is already in
+  `/etc/dabberz/data.env`.
+- **A systemd unit**, with that env file and `EnvironmentFile`. The daemon
+  binds 80 and 443 and, with the local driver, runs agents as itself -- so it
+  runs as root today. The `dabberz` user the script creates is for when that is
+  no longer true.
+- **DNS and TLS**, below.
+
 ## DNS, and why it is two names
 
 The control plane and the previews must not share a registrable domain, and the
