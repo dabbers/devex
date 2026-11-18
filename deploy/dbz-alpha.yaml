@@ -8,11 +8,15 @@
 #
 #   DABBERZ_MASTER_KEY        dabberzctl keygen. Without it the vault cannot
 #                             be opened and nothing starts.
-#   DABBERZ_CLERK_SECRET      the provider's secret key.
+#   CLERK_SECRET_KEY          the provider's secret key. Used to look up a new
+#                             user's email for attribution; sign-in itself is
+#                             verified against the issuer's keys.
 #   DABBERZ_DATABASE_ADMIN_DSN  written by the bootstrap into data.env.
 #   CLAUDE_CODE_OAUTH_TOKEN   the agent's own credential. Without it a change
 #                             can be opened and nobody can work on it.
-#   DABBERZ_STORAGE_SECRET    object store secret, when storage is real.
+#   DABBERZ_STORAGE_SECRET_KEY  the object store's secret key, when storage is
+#                             real. The access key is not secret and sits in
+#                             this file; the secret key never does.
 
 owner: CHANGE-ME@example.com # the account the first sign-in adopts
 
@@ -104,6 +108,10 @@ blocks:
   storage:
     endpoint: "" # CHANGE-ME when storage is real
     bucket: dabberz
+    # The access key is not a secret and lives here. Its partner, the secret
+    # key, is read from DABBERZ_STORAGE_SECRET_KEY and has no field in this
+    # file at all -- the struct tag is `yaml:"-"`, so a secret put here would
+    # be silently ignored rather than used.
     access_key: ""
 
 agent:
