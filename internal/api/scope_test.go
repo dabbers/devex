@@ -17,7 +17,7 @@ import (
 // is a terminal on the machine holding that user's checkout.
 func TestEveryRouteNamingSomebodysResourceRefusesEveryoneElse(t *testing.T) {
 	f := newFixture(t, planJSON(nil, oneWorkstream()))
-	withProject(t, f)
+	project := withProject(t, f)
 
 	task, forks := f.startTask(t, "add ratings")
 	var workspace struct {
@@ -29,11 +29,24 @@ func TestEveryRouteNamingSomebodysResourceRefusesEveryoneElse(t *testing.T) {
 		t.Fatalf("creating a workspace: %d", status)
 	}
 
+	// An installation, recorded directly: this test is about the tenancy gate
+	// rather than the install flow, and installing for real would provision a
+	// database to prove a point about authorization.
+	installation := &domain.Installation{
+		UserID: f.owner.ID, App: "forms", AppVersion: "0.1.0", Name: "recruiting",
+		State: domain.InstallationRunning, RepoID: f.repo.ID,
+		ProjectID: project.ID, WorkspaceID: workspace.Workspace.ID,
+	}
+	if err := f.store.CreateInstallation(f.ctx, installation); err != nil {
+		t.Fatalf("CreateInstallation: %v", err)
+	}
+
 	ids := map[string]string{
-		"repo":      f.repo.ID,
-		"task":      task.ID,
-		"fork":      forks[0].ID,
-		"workspace": workspace.Workspace.ID,
+		"repo":         f.repo.ID,
+		"task":         task.ID,
+		"fork":         forks[0].ID,
+		"workspace":    workspace.Workspace.ID,
+		"installation": installation.ID,
 	}
 	// Stand-ins for the path values that do not name an owned resource. The
 	// gate runs before the handler, so these are never reached on a refusal.

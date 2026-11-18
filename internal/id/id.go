@@ -31,6 +31,9 @@ const (
 	Question  = "qst"
 	Workspace = "ws"
 	Message   = "msg"
+	// Installation is one customer's copy of one app, as distinct from the
+	// workspace a change to it is made in.
+	Installation = "ins"
 )
 
 // encoding is Crockford-style base32 in lowercase without padding, chosen so

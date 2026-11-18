@@ -30,7 +30,10 @@ func freePort(t *testing.T) int {
 func webService(projectID string, port int, extra string) *domain.Service {
 	return &domain.Service{
 		ProjectID: projectID, Name: "web", Kind: domain.ServiceWeb,
-		Command: fmt.Sprintf("python3 -u -m http.server %d --bind 127.0.0.1 %s", port, extra),
+		// $PORT, not a fixed number: the platform allocates a free port per
+		// installation and tells the service which it is, because two copies
+		// of one app on a machine cannot both bind the port in its manifest.
+		Command: fmt.Sprintf("python3 -u -m http.server ${PORT:-%d} --bind 127.0.0.1 %s", port, extra),
 		Port:    port, Exposed: true, Primary: true,
 	}
 }
@@ -49,9 +52,10 @@ func TestStartingAWorkspaceStartsItsServices(t *testing.T) {
 
 	// The thing that matters: something is actually listening, so a preview
 	// route to this port reaches a server rather than a refused connection.
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+	conn, err := net.DialTimeout("tcp",
+		fmt.Sprintf("127.0.0.1:%d", allocatedPort(t, f, ws, "web")), 2*time.Second)
 	if err != nil {
-		t.Fatalf("nothing is listening on the service's port: %v", err)
+		t.Fatalf("nothing is listening where the platform put the service: %v", err)
 	}
 	conn.Close()
 
@@ -168,10 +172,10 @@ func TestServicesStartInDependencyOrder(t *testing.T) {
 			// Refuses to start unless the database is already listening.
 			Command: fmt.Sprintf(
 				`python3 -c "import socket,sys; s=socket.create_connection(('127.0.0.1',%d),2)" || exit 1; `+
-					`python3 -u -m http.server %d --bind 127.0.0.1`, dbPort, webPort),
+					`python3 -u -m http.server ${PORT:-%d} --bind 127.0.0.1`, dbPort, webPort),
 			Port: webPort, Exposed: true, Primary: true, DependsOn: []string{"db"}},
 		{ProjectID: f.project.ID, Name: "db", Kind: domain.ServiceDatastore,
-			Command: fmt.Sprintf("python3 -u -m http.server %d --bind 127.0.0.1", dbPort),
+			Command: fmt.Sprintf("python3 -u -m http.server ${PORT:-%d} --bind 127.0.0.1", dbPort),
 			Port:    dbPort},
 	}); err != nil {
 		t.Fatalf("ReplaceServices: %v", err)
@@ -180,7 +184,8 @@ func TestServicesStartInDependencyOrder(t *testing.T) {
 	ws, _ := f.start(t, "cart", "main")
 	t.Cleanup(func() { f.manager.Stop(f.ctx, ws) }) //nolint:errcheck // best effort
 
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", webPort), 2*time.Second)
+	conn, err := net.DialTimeout("tcp",
+		fmt.Sprintf("127.0.0.1:%d", allocatedPort(t, f, ws, "web")), 2*time.Second)
 	if err != nil {
 		t.Fatalf("the web service did not come up, so it started before its database: %v", err)
 	}
@@ -208,7 +213,8 @@ func TestARestartReplacesTheRunningService(t *testing.T) {
 		t.Fatalf("Start (again): %v", err)
 	}
 
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+	conn, err := net.DialTimeout("tcp",
+		fmt.Sprintf("127.0.0.1:%d", allocatedPort(t, f, ws, "web")), 2*time.Second)
 	if err != nil {
 		t.Fatalf("the service did not come back after a restart: %v", err)
 	}
@@ -230,7 +236,7 @@ func TestACommandCarryingQuotesSurvives(t *testing.T) {
 		ProjectID: f.project.ID, Name: "web", Kind: domain.ServiceWeb,
 		Command: fmt.Sprintf(
 			`python3 -c "import sys; print(' '.join(sys.argv[1:]))" "two words"; `+
-				`python3 -u -m http.server %d --bind 127.0.0.1`, port),
+				`python3 -u -m http.server ${PORT:-%d} --bind 127.0.0.1`, port),
 		Port: port, Exposed: true, Primary: true,
 	}}); err != nil {
 		t.Fatalf("ReplaceServices: %v", err)
@@ -261,7 +267,7 @@ func TestAVariableInACommandStillExpands(t *testing.T) {
 	// variable without needing a vault in this fixture.
 	if err := f.store.ReplaceServices(f.ctx, f.project.ID, []*domain.Service{{
 		ProjectID: f.project.ID, Name: "web", Kind: domain.ServiceWeb,
-		Command: fmt.Sprintf(`echo "home is [$HOME]"; python3 -u -m http.server %d --bind 127.0.0.1`, port),
+		Command: fmt.Sprintf(`echo "home is [$HOME]"; python3 -u -m http.server ${PORT:-%d} --bind 127.0.0.1`, port),
 		Port:    port, Exposed: true, Primary: true,
 	}}); err != nil {
 		t.Fatalf("ReplaceServices: %v", err)
@@ -280,4 +286,33 @@ func TestAVariableInACommandStillExpands(t *testing.T) {
 	if !strings.Contains(logs, "home is [/") {
 		t.Fatalf("the variable did not expand to a path: %q", logs)
 	}
+}
+
+// allocatedPort reports where the platform actually put a service, which is
+// not the port its manifest declares: two installations of one app on a
+// machine cannot both bind that, so the platform picks and tells the service.
+func allocatedPort(t *testing.T, f *checkoutFixture, w *domain.Workspace, serviceName string) int {
+	t.Helper()
+
+	services, err := f.store.ListServices(f.ctx, f.project.ID)
+	if err != nil {
+		t.Fatalf("ListServices: %v", err)
+	}
+	routes, err := f.store.ListPreviewRoutesFor(f.ctx, w.ID)
+	if err != nil {
+		t.Fatalf("ListPreviewRoutesFor: %v", err)
+	}
+	for _, service := range services {
+		if service.Name != serviceName {
+			continue
+		}
+		for _, route := range routes {
+			if route.ServiceID == service.ID {
+				return route.UpstreamPort
+			}
+		}
+		return service.Port
+	}
+	t.Fatalf("no service called %q", serviceName)
+	return 0
 }

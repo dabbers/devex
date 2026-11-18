@@ -38,8 +38,11 @@ type stubDriver struct {
 	verifyReplies []string
 	verifyCalls   int
 	gitResults    map[string]*vm.ExecResult
-	commands      []string
-	capacity      vm.Capacity
+	// listeners stand in for the dev servers the stub claims to have
+	// started, bound to the ports the platform allocated.
+	listeners map[string]net.Listener
+	commands  []string
+	capacity  vm.Capacity
 	// created remembers what Create returned, so Get behaves like a real
 	// driver. A stub whose Get always fails hides the reuse path entirely:
 	// every start would look like a fresh boot and a test could not tell the
@@ -105,6 +108,16 @@ func (d *stubDriver) Exec(_ context.Context, _ string, cmd vm.Command) (*vm.Exec
 	d.commands = append(d.commands, line)
 
 	switch {
+	case strings.Contains(line, "setsid sh -c"):
+		// Starting a service. A real one binds $PORT, because the platform
+		// allocates a free port per installation rather than letting two
+		// copies of an app fight over the one in its manifest. The stub does
+		// the same, so the health probe has something to find.
+		if port := cmd.Env["PORT"]; port != "" {
+			d.listenOn(port)
+		}
+		return &vm.ExecResult{}, nil
+
 	case strings.HasPrefix(line, "claude"):
 		reply := "VERDICT: APPROVED"
 		if len(d.claudeReplies) > 0 {
@@ -769,6 +782,35 @@ func claudeResultJSON(result string, in, out int64, cost float64, sessionID stri
 		},
 	})
 	return string(body)
+}
+
+// listenOn stands in for a dev server binding the port it was told to.
+//
+// Held open for the driver's lifetime, since nothing stops a service once the
+// stub has "started" it.
+func (d *stubDriver) listenOn(port string) {
+	if d.listeners == nil {
+		d.listeners = map[string]net.Listener{}
+	}
+	if _, already := d.listeners[port]; already {
+		return
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		// The port may legitimately be taken by an earlier start of the same
+		// service, which is what a restart looks like.
+		return
+	}
+	d.listeners[port] = listener
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
 }
 
 // listeningPort opens a socket for the test's lifetime and returns its port,

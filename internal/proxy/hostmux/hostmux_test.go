@@ -3,6 +3,7 @@ package hostmux
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -299,4 +300,71 @@ func TestRoutesAreReportedForDiagnostics(t *testing.T) {
 	if routes["web.ondabberz.link"] != "172.30.0.2:41000" {
 		t.Fatalf("Routes() = %v", routes)
 	}
+}
+
+// TestAVisitorCannotClaimToBeSomeone is the one that matters most here.
+//
+// An app behind the platform is told to trust the identity headers it
+// receives, which is only safe because nothing else can set them. A visitor
+// who could would have the admin surface of somebody else's installation, and
+// nothing about it would look broken.
+func TestAVisitorCannotClaimToBeSomeone(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	mux := New("ondabberz.link", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Hostname:     "app.ondabberz.link",
+		UpstreamHost: "127.0.0.1",
+		UpstreamPort: upstreamPort(t, upstream.URL),
+	}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	edge := httptest.NewServer(mux)
+	defer edge.Close()
+
+	req, err := http.NewRequest(http.MethodGet, edge.URL, nil) //nolint:noctx // a loopback request in a test
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "app.ondabberz.link"
+	// Everything a forger would try.
+	req.Header.Set("X-Dabberz-User", "usr_someone_else")
+	req.Header.Set("x-dabberz-email", "victim@example.com")
+	req.Header.Set("X-DABBERZ-ROLE", "owner")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	arrived := <-seen
+	for name := range arrived {
+		if strings.HasPrefix(strings.ToLower(name), "x-dabberz-") {
+			t.Errorf("a forged identity header reached the app: %s: %q", name, arrived.Get(name))
+		}
+	}
+}
+
+// upstreamPort reads the port out of an httptest server's URL.
+func upstreamPort(t *testing.T, raw string) int {
+	t.Helper()
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
 }

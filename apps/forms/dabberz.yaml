@@ -11,6 +11,10 @@ platform: 1
 license: AGPL-3.0
 upstream: https://github.com/dabbers/app-forms
 
+# A checkout is not yet something that can run.
+build:
+  command: go build -o forms .
+
 services:
   - name: web
     kind: web

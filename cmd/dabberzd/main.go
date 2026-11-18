@@ -21,7 +21,9 @@ import (
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/api"
 	"github.com/dabbers/devex/internal/config"
+	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/gitauth"
+	"github.com/dabbers/devex/internal/install"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/merge"
@@ -258,6 +260,65 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Logger:             logger,
 	})
 
+	// The data block: the Postgres cluster installations are provisioned on.
+	// Optional, and a deployment without one still runs workspaces -- it just
+	// cannot install an app that declares a database, and says so when asked.
+	var databases *database.Block
+	if cfg.Data.AdminDSN != "" {
+		databases, err = database.Open(database.Config{
+			AdminDSN:    cfg.Data.AdminDSN,
+			PublicHost:  cfg.Data.PublicHost,
+			SnapshotDir: snapshotDir(cfg),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := databases.Ping(ctx); err != nil {
+			logger.Warn("the data block is configured but unreachable; installs needing a database will fail",
+				"error", err)
+		} else {
+			logger.Info("data block ready", "snapshots", snapshotDir(cfg))
+		}
+	} else {
+		logger.Warn("no data block (set " + config.EnvDataAdminDSN + "); apps needing a database cannot be installed")
+	}
+
+	// The catalog, and the installer that turns an entry in it into something
+	// a customer is using.
+	var installer *install.Installer
+	if cfg.Catalog.Dir != "" {
+		catalog, err := install.OpenCatalog(cfg.Catalog.Dir)
+		if err != nil {
+			return nil, err
+		}
+		var provisioner install.Databases
+		if databases != nil {
+			provisioner = databases
+		}
+		installer, err = install.New(install.Deps{
+			Store: db, Catalog: catalog, Workspaces: workspaces,
+			Vault: vault, Databases: provisioner, Logger: logger,
+		}, install.Options{
+			RepoDir: filepath.Join(cfg.DataDir, "repos"),
+			// What the blocks that exist offer. Identity is the platform's
+			// own, so an app behind the edge is told who is asking.
+			Provided: install.Provided{
+				Identity: install.Identity{
+					Issuer:   authenticator.Name(),
+					ClientID: "dabberz",
+				},
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		apps, problems := catalog.List()
+		for _, problem := range problems {
+			logger.Warn("an app in the catalog does not satisfy the contract", "error", problem)
+		}
+		logger.Info("catalog ready", "dir", cfg.Catalog.Dir, "apps", len(apps))
+	}
+
 	ui, err := web.Handler()
 	if err != nil {
 		return nil, err
@@ -267,7 +328,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
 		UI: ui, Authn: authenticator, Workspaces: workspaces,
-		Agent: agentRunner, GitTokens: gitTokens, Logger: logger,
+		Agent: agentRunner, GitTokens: gitTokens, Installer: installer, Logger: logger,
 	})
 	if err != nil {
 		return nil, err
@@ -439,4 +500,17 @@ func newLogger(level string) *slog.Logger {
 		parsed = slog.LevelInfo
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parsed}))
+}
+
+// snapshotDir is where database snapshots are written.
+//
+// Under the data directory by default, which is correct for getting started
+// and wrong for keeping: a snapshot on the same disk as the database it
+// protects survives a mistake and not a failure. Point it at mounted storage
+// before anything real is on here.
+func snapshotDir(cfg config.Config) string {
+	if cfg.Data.SnapshotDir != "" {
+		return cfg.Data.SnapshotDir
+	}
+	return filepath.Join(cfg.DataDir, "snapshots")
 }

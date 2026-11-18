@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/dabbers/devex/internal/appspec"
+	"github.com/dabbers/devex/internal/proxy"
 )
 
 // The platform-to-app interface that is not a provisioned URL.
@@ -27,8 +28,8 @@ import (
 // real.
 const (
 	TrustedProxyEnv = "DABBERZ_TRUSTED_PROXY"
-	UserHeader      = "X-Dabberz-User"
-	EmailHeader     = "X-Dabberz-Email"
+	UserHeader      = proxy.UserHeader
+	EmailHeader     = proxy.EmailHeader
 )
 
 // Provided is what the platform's blocks have made available for one

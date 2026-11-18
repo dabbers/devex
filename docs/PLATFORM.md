@@ -271,6 +271,43 @@ started without it by accident and fall open. That is the failure that matters
 most and it is silent: nothing is broken, the admin pages simply serve anyone
 who asks.
 
+### Where forwarded identity stops working
+
+Forwarding is enough while an app answers on a hostname the platform owns and
+can set a cookie for. It is not enough on a customer's own domain, and that is
+not a detail — `forms.acme.com` is the whole point of bringing your own domain.
+
+A browser on `forms.acme.com` carries no dabberz cookie and cannot be made to:
+different registrable domain, different cookie jar. The platform's edge can
+still route the request, but it has nothing to authenticate it with, so it
+forwards no identity and the app correctly refuses its admin surface.
+
+Which is where OIDC earns its place after all. Establishing a session on an
+app's own hostname means a redirect out to the platform and back with
+something the app's domain can hold — exactly the flow the protocol exists
+for. So the position is narrower than "apps never speak OIDC":
+
+- **On a platform hostname**, the edge authenticates and forwards headers.
+  Simple, and enough for everything today.
+- **On a customer's domain**, a session has to be established on that domain,
+  and that is a redirect flow whether or not it is called OIDC.
+
+Until that exists, an installation on a custom domain can serve its public
+pages and not its admin surface. That is the safe failure rather than the
+convenient one, and it is better than the alternative of trusting a header on
+a hostname the platform does not control.
+
+### Stripping is not optional
+
+Every proxy in front of an app removes the identity headers from the inbound
+request before forwarding. An app behind the platform is told to trust them,
+so a visitor who could set one would hold the admin surface of somebody else's
+installation — and nothing about it would look broken.
+
+This is a property of the edge, not of the app, because an app cannot tell
+which of its headers the platform added. It wants a test that forges one and
+watches it fail to arrive.
+
 ### Nothing is injected that was not declared
 
 An app that never asked for storage does not receive storage credentials, even

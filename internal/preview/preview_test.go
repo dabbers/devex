@@ -2,6 +2,7 @@ package preview
 
 import (
 	"context"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -191,8 +192,12 @@ func TestAllocateRequiresAnUpstreamAddress(t *testing.T) {
 }
 
 func TestAllocateReportsPortExhaustion(t *testing.T) {
-	// A range with exactly one port.
-	f := newFixture(t, Config{Domain: "dab.im", PortStart: 41000, PortEnd: 41000})
+	// A range with exactly one port, and one that is genuinely free: the
+	// allocator skips a port nothing has recorded but something else is
+	// holding, so a hard-coded number would make this test depend on what
+	// else is running on the machine.
+	only := freeTestPort(t)
+	f := newFixture(t, Config{Domain: "dab.im", PortStart: only, PortEnd: only})
 
 	if _, err := f.alloc.Allocate(f.ctx, target(f.fork(t, "first")), f.project, f.service, "172.30.0.2"); err != nil {
 		t.Fatalf("Allocate: %v", err)
@@ -486,4 +491,16 @@ func TestWithdrawRemovesEveryServiceRouteForAFork(t *testing.T) {
 // workspace; in these tests the fork's own id stands in for one.
 func target(f *domain.Fork) Target {
 	return Target{ID: f.ID, Name: f.Name}
+}
+
+// freeTestPort returns a port nothing is listening on.
+func freeTestPort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }

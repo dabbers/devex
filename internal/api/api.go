@@ -22,6 +22,7 @@ import (
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/install"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/preview"
@@ -48,6 +49,7 @@ type Server struct {
 	workspaces *workspace.Manager
 	agent      *agent.Runner
 	gitTokens  GitLinks
+	installer  *install.Installer
 	logger     *slog.Logger
 	streamGap  time.Duration
 	// routes is the registered route table, recorded as it is built so the
@@ -79,6 +81,10 @@ type Deps struct {
 	// without it a workspace is somewhere to work but not somewhere to ask
 	// for work.
 	Agent *agent.Runner
+	// Installer turns a catalog entry into a running installation. Optional:
+	// without it the control plane still shows what is installed, it just
+	// cannot install anything new.
+	Installer *install.Installer
 	// GitLinks reports and resolves each account's GitHub connection.
 	// Optional: without it the UI says the deployment does not link accounts.
 	GitTokens GitLinks
@@ -109,8 +115,8 @@ func New(deps Deps) (*Server, error) {
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
 		authn: deps.Authn, workspaces: deps.Workspaces, agent: deps.Agent,
-		gitTokens: deps.GitTokens,
-		logger:    logger,
+		gitTokens: deps.GitTokens, installer: deps.Installer,
+		logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second,
@@ -130,6 +136,12 @@ func (s *Server) Handler() http.Handler {
 	// unified audit trail behind it.
 	rt.handle("GET /v1/overview", s.overview)
 	rt.handle("GET /v1/audit", s.auditFeed)
+
+	// The catalog, and what this account has installed from it.
+	rt.handle("GET /v1/apps", s.listApps)
+	rt.handle("GET /v1/installations", s.listInstallations)
+	rt.handle("POST /v1/installations", s.createInstallation)
+	rt.handle("GET /v1/installations/{installation}", s.getInstallation)
 
 	// The signed-in account's own GitHub connection.
 	rt.handle("GET /v1/github", s.githubLink)

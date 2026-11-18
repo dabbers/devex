@@ -436,3 +436,16 @@ func trim(output []byte) string {
 	}
 	return text
 }
+
+// Connect opens a connection to one provisioned database using the
+// administrative credentials.
+//
+// For the platform's own work -- a snapshot, an inspection, a restore -- never
+// for serving an app: an app connects with the role it was given, which is
+// what keeps one installation out of another's data.
+func (b *Block) Connect(name string) (*sql.DB, error) {
+	if !identifierPattern.MatchString(name) {
+		return nil, fmt.Errorf("database: %q is not a database this package created", name)
+	}
+	return sql.Open("pgx", b.adminDSNFor(name))
+}

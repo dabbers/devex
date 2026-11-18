@@ -9,7 +9,7 @@ import (
 	"github.com/dabbers/devex/internal/id"
 )
 
-const projectColumns = "id, repo_id, name, path, toolchain, confirmed, created_at, updated_at"
+const projectColumns = "id, repo_id, name, path, toolchain, build_command, confirmed, created_at, updated_at"
 
 // CreateProject inserts a project.
 func (s *Store) CreateProject(ctx context.Context, p *domain.Project) error {
@@ -25,8 +25,8 @@ func (s *Store) CreateProject(ctx context.Context, p *domain.Project) error {
 		p.Path = "."
 	}
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO projects ("+projectColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		p.ID, p.RepoID, p.Name, p.Path, p.Toolchain,
+		"INSERT INTO projects ("+projectColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		p.ID, p.RepoID, p.Name, p.Path, p.Toolchain, p.BuildCommand,
 		boolToInt(p.Confirmed), formatTime(p.CreatedAt), formatTime(p.UpdatedAt),
 	)
 	return wrapErr("create project", err)
@@ -92,9 +92,9 @@ func (s *Store) UpsertProject(ctx context.Context, p *domain.Project) error {
 func (s *Store) UpdateProject(ctx context.Context, p *domain.Project) error {
 	p.UpdatedAt = time.Now().UTC()
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE projects SET name = ?, path = ?, toolchain = ?, confirmed = ?, updated_at = ?
+		`UPDATE projects SET name = ?, path = ?, toolchain = ?, build_command = ?, confirmed = ?, updated_at = ?
 		 WHERE id = ?`,
-		p.Name, p.Path, p.Toolchain,
+		p.Name, p.Path, p.Toolchain, p.BuildCommand,
 		boolToInt(p.Confirmed), formatTime(p.UpdatedAt), p.ID,
 	)
 	if err != nil {
@@ -109,7 +109,7 @@ func scanProject(row rowScanner) (*domain.Project, error) {
 		confirmed        int
 		created, updated string
 	)
-	if err := row.Scan(&p.ID, &p.RepoID, &p.Name, &p.Path, &p.Toolchain,
+	if err := row.Scan(&p.ID, &p.RepoID, &p.Name, &p.Path, &p.Toolchain, &p.BuildCommand,
 		&confirmed, &created, &updated); err != nil {
 		return nil, wrapErr("get project", err)
 	}

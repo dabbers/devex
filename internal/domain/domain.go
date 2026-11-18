@@ -59,10 +59,16 @@ type Project struct {
 	// Toolchain is the primary toolchain inferred during discovery ("go",
 	// "node", "rust", ...). It selects build and preview commands, not the VM
 	// image: every VM boots the same generic golden image.
-	Toolchain string    `json:"toolchain"`
-	Confirmed bool      `json:"confirmed"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Toolchain string `json:"toolchain"`
+	// BuildCommand turns a checkout into something runnable. It runs on the
+	// machine, from the project root, after the code is there and before any
+	// service starts. Empty means the checkout is already runnable, which is
+	// true of an interpreted project with its dependencies vendored and of
+	// very little else.
+	BuildCommand string    `json:"build_command,omitempty"`
+	Confirmed    bool      `json:"confirmed"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ServiceKind says what a service is. It is not a label: it decides how the
@@ -708,3 +714,94 @@ type Event struct {
 	Data      map[string]any `json:"data,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 }
+
+// InstallationState is where an installation is in its life.
+type InstallationState string
+
+// The states an installation moves through. Deliberately fewer than a
+// workspace has: an installation is a product someone is using, so the
+// interesting distinctions are "is it serving" and "did something go wrong",
+// not the stages of bringing it up.
+const (
+	// InstallationProvisioning is being created: a database, a repository, a
+	// machine. Nothing answers yet.
+	InstallationProvisioning InstallationState = "provisioning"
+	// InstallationRunning is serving.
+	InstallationRunning InstallationState = "running"
+	// InstallationStopped was deliberately stopped. Its data is intact.
+	InstallationStopped InstallationState = "stopped"
+	// InstallationFailed could not be brought up, and says why.
+	InstallationFailed InstallationState = "failed"
+	// InstallationArchived is finished with. The database is dropped only
+	// after an export has been taken, never as part of archiving.
+	InstallationArchived InstallationState = "archived"
+)
+
+// Installation is one customer's copy of one app.
+//
+// The distinction from a workspace is the one the platform contract draws: an
+// installation is the product somebody is using, and a workspace is where a
+// change to it is made. A change is worked on in a workspace, previewed,
+// checked and promoted; the installation is what the promote deploys to. They
+// are different lifetimes and different audiences, which is why they are
+// different records even though both end up as services on a machine.
+type Installation struct {
+	ID     string `json:"id"`
+	UserID string `json:"user_id"`
+
+	// App is the catalog slug, matching the manifest's `app`.
+	App string `json:"app"`
+	// AppVersion is the release this installation is pinned to. It moves only
+	// when someone upgrades, never on its own: an app that changed underneath
+	// a customer because upstream shipped is the thing hosting is supposed to
+	// protect them from.
+	AppVersion string `json:"app_version"`
+	// Name is what the customer calls it. One account can install an app more
+	// than once -- a form for recruiting and a form for support are two
+	// installations of Forms, not one.
+	Name string `json:"name"`
+
+	State       InstallationState `json:"state"`
+	StateReason string            `json:"state_reason,omitempty"`
+
+	// RepoID is the platform-hosted repository holding this installation's
+	// copy of the app, including whatever its agent has changed.
+	RepoID string `json:"repo_id"`
+	// ProjectID is the services the manifest declared.
+	ProjectID string `json:"project_id"`
+	// WorkspaceID is the environment currently serving it.
+	WorkspaceID string `json:"workspace_id,omitempty"`
+
+	// Database is the name of the provisioned Postgres database. The
+	// connection string is not here and never is: it is sealed in the vault
+	// and injected, so this record can be read, logged and returned over the
+	// API without carrying a credential.
+	Database string `json:"database,omitempty"`
+
+	// URL is where it answers.
+	URL string `json:"url,omitempty"`
+	// Domain is the customer's own hostname, once attached.
+	Domain string `json:"domain,omitempty"`
+
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
+// Validate checks an installation before it is stored.
+func (i *Installation) Validate() error {
+	switch {
+	case i.UserID == "":
+		return errors.New("domain: an installation belongs to someone")
+	case strings.TrimSpace(i.App) == "":
+		return errors.New("domain: an installation is an installation of something")
+	case strings.TrimSpace(i.AppVersion) == "":
+		return errors.New("domain: an installation pins a version, so an upgrade is a decision")
+	case strings.TrimSpace(i.Name) == "":
+		return errors.New("domain: an installation needs a name; one account can install an app twice")
+	}
+	return nil
+}
+
+// Serving reports whether this installation is answering requests.
+func (i *Installation) Serving() bool { return i.State == InstallationRunning }

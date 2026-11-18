@@ -16,6 +16,8 @@ version: 1.0.0
 platform: 1
 license: AGPL-3.0
 upstream: https://github.com/dabbers/app-forms
+build:
+  command: go build -o forms .
 services:
   - name: web
     kind: web
@@ -156,6 +158,10 @@ func TestTheContractIsEnforced(t *testing.T) {
 				"    command: forms work\n",
 				"    command: forms work\n    exposed: true\n", 1),
 			says: "listens on nothing",
+		},
+		"no build step": {
+			manifest: strings.Replace(valid, "  command: go build -o forms .\n", "", 1),
+			says:     "build.command is required",
 		},
 		"a service with no command starts nothing": {
 			manifest: strings.Replace(valid, "    command: forms serve\n", "", 1),

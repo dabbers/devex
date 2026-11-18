@@ -31,6 +31,10 @@ import (
 const (
 	EnvMasterKey    = "DABBERZ_MASTER_KEY"
 	EnvOrchestrator = "DABBERZ_ORCHESTRATOR_API_KEY"
+	// EnvDataAdminDSN reaches the Postgres cluster installations are
+	// provisioned on. A credential, so it belongs in the environment rather
+	// than in a file somebody might check in.
+	EnvDataAdminDSN = "DABBERZ_DATABASE_ADMIN_DSN"
 	EnvClaudeToken  = "CLAUDE_CODE_OAUTH_TOKEN"
 	// Clerk's publishable key is not a credential -- it is sent to the browser
 	// -- but it is read from the environment alongside the secret so a
@@ -49,6 +53,8 @@ type Config struct {
 	MasterKey string `yaml:"master_key"`
 
 	Auth      AuthConfig          `yaml:"auth"`
+	Catalog   CatalogConfig       `yaml:"catalog"`
+	Data      DataConfig          `yaml:"data"`
 	Server    ServerConfig        `yaml:"server"`
 	Driver    DriverConfig        `yaml:"driver"`
 	Scheduler SchedulerConfig     `yaml:"scheduler"`
@@ -59,6 +65,32 @@ type Config struct {
 	Verify    verify.Config       `yaml:"verify"`
 	Merge     merge.Config        `yaml:"merge"`
 	Tripwire  tripwire.Thresholds `yaml:"tripwire"`
+}
+
+// CatalogConfig is where installable apps come from.
+type CatalogConfig struct {
+	// Dir holds one directory per app, each with a dabberz.yaml. Empty means
+	// this deployment installs nothing, which is a working configuration for
+	// a control plane that only drives workspaces.
+	Dir string `yaml:"dir"`
+}
+
+// DataConfig is the data block: the Postgres cluster installations are
+// provisioned on.
+//
+// Separate from the control plane's own store, which is SQLite. One process on
+// one machine can run on SQLite; somebody's live business cannot.
+type DataConfig struct {
+	// AdminDSN reaches the cluster as a role that may create databases and
+	// roles. Prefer the environment: DABBERZ_DATABASE_ADMIN_DSN.
+	AdminDSN string `yaml:"admin_dsn"`
+	// PublicHost is what apps are told to connect to, when that differs from
+	// the address the control plane administers through.
+	PublicHost string `yaml:"public_host"`
+	// SnapshotDir holds database snapshots. It must be on storage that
+	// outlives the machine: a snapshot on the same disk as the database it
+	// protects is a copy, not a backup.
+	SnapshotDir string `yaml:"snapshot_dir"`
 }
 
 // ServerConfig configures the HTTP control plane.
@@ -170,6 +202,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv(EnvClerkPublishable); v != "" {
 		c.Auth.Clerk.PublishableKey = v
+	}
+	if v := os.Getenv(EnvDataAdminDSN); v != "" {
+		c.Data.AdminDSN = v
 	}
 	if v := os.Getenv(EnvClerkSecret); v != "" {
 		c.Auth.Clerk.SecretKey = v

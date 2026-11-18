@@ -105,6 +105,11 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 			proxy: &httputil.ReverseProxy{
 				Rewrite: func(pr *httputil.ProxyRequest) {
 					pr.SetURL(target)
+					// Identity is the platform's to assert. An app behind
+					// this is told to trust these headers, so a visitor who
+					// could set one would have the admin surface of somebody
+					// else's installation, with nothing appearing broken.
+					proxy.StripIdentity(pr.Out.Header)
 					// Keep the public hostname. A dev server derives absolute
 					// URLs and its hot-reload websocket address from the Host
 					// it was asked for, so rewriting it to the internal

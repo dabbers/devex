@@ -175,19 +175,40 @@ func (m *Manager) bringUp(ctx context.Context, w *domain.Workspace) (*Started, e
 		return nil, err
 	}
 
-	// Services before previews: a route published to a port nothing serves is
-	// a link that goes nowhere, and the whole point of the preview is that it
-	// is the running thing.
-	if err := m.startServices(ctx, w, instance, services, env); err != nil {
+	// Build before services, because a service command that runs a binary
+	// needs the binary to exist, and the source only arrived a moment ago.
+	if err := m.build(ctx, w, instance, project, env); err != nil {
 		return nil, err
 	}
 
+	// Routes are allocated before anything starts, because allocation is what
+	// decides which port each service listens on: two installations of the
+	// same app on one machine would otherwise both bind the port their
+	// manifest declares. Allocating is not publishing -- nothing is routed to
+	// until the services behind it answer.
 	previews := agent.Previews{URLs: map[string]string{}}
+	routes := map[string]*store.PreviewRoute{}
+	ports := map[string]int{}
+	var primary string
 	if m.preview != nil {
-		routes, primary, err := m.preview.AllocateAll(ctx, preview.Target{ID: w.ID, Name: w.Name}, project, services, instance.Address)
+		var err error
+		routes, primary, err = m.preview.AllocateAll(ctx, preview.Target{ID: w.ID, Name: w.Name}, project, services, instance.Address)
 		if err != nil {
 			return nil, err
 		}
+		for serviceID, route := range routes {
+			ports[serviceID] = route.UpstreamPort
+		}
+	}
+
+	if err := m.startServices(ctx, w, instance, services, env, ports); err != nil {
+		return nil, err
+	}
+
+	if m.preview != nil {
+		// Published only now: a route to a port nothing serves is a link that
+		// goes nowhere, and the whole point of a preview is that it is the
+		// running thing.
 		if err := m.preview.Publish(ctx); err != nil {
 			return nil, err
 		}

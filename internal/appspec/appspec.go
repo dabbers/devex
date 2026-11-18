@@ -44,6 +44,7 @@ type Spec struct {
 	License  string `yaml:"license"`
 	Upstream string `yaml:"upstream"`
 
+	Build    Build     `yaml:"build"`
 	Services []Service `yaml:"services"`
 	Requires Requires  `yaml:"requires"`
 	Secrets  []Secret  `yaml:"secrets"`
@@ -51,6 +52,16 @@ type Spec struct {
 	Jobs     []Job     `yaml:"jobs"`
 	Extends  Extends   `yaml:"extends"`
 	Checks   Checks    `yaml:"checks"`
+}
+
+// Build turns a checkout into something runnable, before any service starts.
+//
+// Every app has one -- compiling, installing dependencies, bundling assets --
+// and leaving it out meant the first app had to pretend its service command
+// was also its build. It runs on the machine, from the app root, after the
+// code is there and before anything is started.
+type Build struct {
+	Command string `yaml:"command"`
 }
 
 // Service is one long-running process the app needs.
@@ -179,6 +190,9 @@ func (s *Spec) Validate() error {
 		fail("platform %d is newer than this deployment understands (%d)", s.Platform, Version)
 	}
 
+	if strings.TrimSpace(s.Build.Command) == "" {
+		fail("build.command is required: a checkout is not yet something that can run")
+	}
 	s.validateServices(fail)
 	s.validateRequires(fail)
 	s.validateSecrets(fail)

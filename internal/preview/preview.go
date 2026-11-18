@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -188,6 +190,20 @@ func (a *Allocator) Allocate(ctx context.Context, target Target, project *domain
 	return route, nil
 }
 
+// bindable reports whether a port can actually be listened on right now.
+//
+// A race in principle -- something could take it between this check and the
+// service starting -- but one that turns a silent misconfiguration into a
+// rare retry, which is the right trade.
+func bindable(port int) bool {
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
 // AllocateAll assigns routes for every exposed service in the set and returns
 // them keyed by service id, together with the front door's URL.
 //
@@ -310,9 +326,17 @@ func (a *Allocator) freePort(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	for port := a.cfg.PortStart; port <= a.cfg.PortEnd; port++ {
-		if !used[port] {
-			return port, nil
+		if used[port] {
+			continue
 		}
+		// Recorded as free is not the same as free. Something outside this
+		// platform may hold the port, and handing a service a port it cannot
+		// bind produces a route to nothing and a start failure that blames
+		// the app.
+		if !bindable(port) {
+			continue
+		}
+		return port, nil
 	}
 	// Ports are never reclaimed automatically, so exhaustion is a real
 	// possibility the operator has to clear by hand.

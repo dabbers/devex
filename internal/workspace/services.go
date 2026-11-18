@@ -35,23 +35,55 @@ const (
 // each service in its own process group, which is what makes stopping it
 // actually stop it -- a dev server is usually a wrapper that spawns the real
 // process, and killing only the wrapper leaves the port held by an orphan.
-func (m *Manager) startServices(ctx context.Context, w *domain.Workspace, instance *vm.Instance, services []*domain.Service, env map[string]string) error {
+// startServices brings a project's services up in dependency order.
+//
+// ports maps a service id to the port the platform has allocated for it. A
+// service's declared port is its default, not its address: two installations
+// of the same app on one machine would both bind it, so the platform picks a
+// free one per installation and tells the service which it is. That is why
+// allocation happens before anything starts.
+func (m *Manager) startServices(ctx context.Context, w *domain.Workspace, instance *vm.Instance, services []*domain.Service, env map[string]string, ports map[string]int) error {
 	for _, service := range services {
 		if strings.TrimSpace(service.Command) == "" {
 			// Nothing to run. A service can legitimately be documentation of
 			// something that runs elsewhere.
 			continue
 		}
-		if err := m.startService(ctx, instance, service, env); err != nil {
+		port := listenPort(service, ports)
+		if err := m.startService(ctx, instance, service, withPort(env, port)); err != nil {
 			return err
 		}
-		if err := m.awaitHealthy(ctx, instance, service); err != nil {
+		if err := m.awaitHealthy(ctx, instance, service, port); err != nil {
 			return fmt.Errorf("workspace: %s: %w", service.Name, err)
 		}
 		m.opts.Logger.Info("service is up",
-			"workspace", w.ID, "service", service.Name, "port", service.Port)
+			"workspace", w.ID, "service", service.Name, "port", port)
 	}
 	return nil
+}
+
+// listenPort is the port a service should actually bind.
+func listenPort(service *domain.Service, ports map[string]int) int {
+	if allocated, ok := ports[service.ID]; ok && allocated > 0 {
+		return allocated
+	}
+	// No allocation: a worker with no port, or a caller that did not allocate.
+	return service.Port
+}
+
+// withPort copies the environment with PORT set, so the service binds where
+// the platform expects to find it. A copy because the same map is handed to
+// every service and each one listens somewhere different.
+func withPort(env map[string]string, port int) map[string]string {
+	if port == 0 {
+		return env
+	}
+	scoped := make(map[string]string, len(env)+1)
+	for name, value := range env {
+		scoped[name] = value
+	}
+	scoped["PORT"] = fmt.Sprint(port)
+	return scoped
 }
 
 // startService launches one service, replacing it if it is already running.
@@ -132,14 +164,14 @@ func (m *Manager) stopServices(ctx context.Context, instance *vm.Instance, servi
 // The probe runs from the control plane against the same address the proxy
 // will use, so what is checked is what a visitor would reach, rather than
 // something only true from inside the machine.
-func (m *Manager) awaitHealthy(ctx context.Context, instance *vm.Instance, service *domain.Service) error {
-	if service.Port == 0 {
+func (m *Manager) awaitHealthy(ctx context.Context, instance *vm.Instance, service *domain.Service, port int) error {
+	if port == 0 {
 		// Nothing listens, so there is nothing to wait for. A worker is
 		// up when it has been started.
 		return nil
 	}
 
-	address := net.JoinHostPort(instance.Address, fmt.Sprint(service.Port))
+	address := net.JoinHostPort(instance.Address, fmt.Sprint(port))
 	deadline := time.Now().Add(healthTimeout)
 	var last error
 
@@ -234,6 +266,15 @@ func (m *Manager) Status(ctx context.Context, w *domain.Workspace, services []*d
 		return nil, err
 	}
 
+	// Where each service actually listens, which is the allocated port rather
+	// than the one its manifest declares.
+	ports := map[string]int{}
+	if routes, err := m.store.ListPreviewRoutesFor(ctx, w.ID); err == nil {
+		for _, route := range routes {
+			ports[route.ServiceID] = route.UpstreamPort
+		}
+	}
+
 	out := make([]ServiceStatus, 0, len(services))
 	for _, service := range services {
 		status := ServiceStatus{Name: service.Name}
@@ -249,8 +290,8 @@ func (m *Manager) Status(ctx context.Context, w *domain.Workspace, services []*d
 			continue
 		}
 		status.Running = alive
-		if alive && service.Port > 0 {
-			address := net.JoinHostPort(instance.Address, fmt.Sprint(service.Port))
+		if port := listenPort(service, ports); alive && port > 0 {
+			address := net.JoinHostPort(instance.Address, fmt.Sprint(port))
 			if err := m.probe(ctx, address, service.HealthPath); err != nil {
 				status.Detail = firstLine(err.Error())
 			} else {
@@ -288,4 +329,62 @@ func (m *Manager) Logs(ctx context.Context, w *domain.Workspace, serviceName str
 // reopened, which is the only way to represent one.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// buildTimeout bounds a build. Generous: a first build downloads a toolchain's
+// worth of dependencies, and a timeout that trips on it would leave a
+// workspace that can never start.
+const buildTimeout = 20 * time.Minute
+
+// build turns the checkout into something runnable, before any service starts.
+//
+// Between the code arriving and the services launching, because that is the
+// only moment it can be: the source has to be there, and a service command
+// that runs a binary needs the binary to exist. A build that fails is a fatal
+// start error rather than something to log past -- the alternative is a
+// workspace that comes up running the previous build, which is the most
+// confusing possible outcome.
+func (m *Manager) build(ctx context.Context, w *domain.Workspace, instance *vm.Instance, project *domain.Project, env map[string]string) error {
+	command := strings.TrimSpace(project.BuildCommand)
+	if command == "" {
+		// Legitimate for an interpreted project with its dependencies
+		// vendored, and for very little else.
+		return nil
+	}
+
+	started := time.Now()
+	res, err := m.driver.Exec(ctx, instance.ID, vm.Command{
+		// Shell-quoted for the same reason a service command is: Go's %q is
+		// Go syntax, and a build command carrying its own quotes would lose
+		// them when the outer shell re-parsed it.
+		Argv:    []string{"sh", "-c", "set -e; " + command},
+		Env:     env,
+		Timeout: buildTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("workspace: build %s: %w", project.Name, err)
+	}
+	if res.TimedOut {
+		return fmt.Errorf("workspace: build %s did not finish within %s", project.Name, buildTimeout)
+	}
+	if res.ExitCode != 0 {
+		// The output is the whole diagnosis, and it is the one thing a person
+		// needs to see. Trimmed, because a failing build can print a lot.
+		return fmt.Errorf("workspace: build %s failed (exit %d):\n%s",
+			project.Name, res.ExitCode, tail(res.Stdout+res.Stderr, 4000))
+	}
+
+	m.opts.Logger.Info("build finished",
+		"workspace", w.ID, "project", project.Name, "seconds", int(time.Since(started).Seconds()))
+	return nil
+}
+
+// tail keeps the end of a long output, which is where a build says what went
+// wrong.
+func tail(output string, limit int) string {
+	output = strings.TrimSpace(output)
+	if len(output) <= limit {
+		return output
+	}
+	return "…" + output[len(output)-limit:]
 }

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 )
@@ -92,3 +93,31 @@ func (Discard) Name() string { return "discard" }
 func (Discard) Apply(context.Context, []Route) error { return nil }
 
 var _ Router = Discard{}
+
+// Identity headers.
+//
+// The platform terminates identity and tells an app who is asking. An app
+// behind the platform is told to trust these, which is only safe because
+// nothing else can set them: every proxy in front of an app strips them from
+// the inbound request before forwarding, so the only way one arrives is if the
+// platform put it there.
+//
+// Getting this wrong is not a subtle bug. An app that trusts a header a
+// visitor can set has no authentication at all, and nothing about it looks
+// broken.
+const (
+	IdentityHeaderPrefix = "X-Dabberz-"
+	UserHeader           = IdentityHeaderPrefix + "User"
+	EmailHeader          = IdentityHeaderPrefix + "Email"
+)
+
+// StripIdentity removes every identity header from a request that arrived
+// from outside, so a client cannot claim to be anyone.
+func StripIdentity(header http.Header) {
+	for name := range header {
+		if len(name) >= len(IdentityHeaderPrefix) &&
+			strings.EqualFold(name[:len(IdentityHeaderPrefix)], IdentityHeaderPrefix) {
+			header.Del(name)
+		}
+	}
+}
