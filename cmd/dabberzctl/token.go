@@ -60,7 +60,7 @@ func tokenFlags(args []string) (*flag.FlagSet, *string, *string) {
 	fs := flag.NewFlagSet("token", flag.ContinueOnError)
 	// Read from the config rather than defaulted to a path, which would be
 	// one deployment's layout baked into a tool every deployment uses.
-	cfgPath := fs.String("config", "/etc/dabberz/dabberz.yaml",
+	cfgPath := fs.String("config", defaultConfigPath,
 		"the daemon's config, read for data_dir")
 	owner := fs.String("owner", "", "the owner's email; defaults to the only account")
 	return fs, cfgPath, owner

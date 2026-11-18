@@ -10,9 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/dabbers/devex/internal/secrets"
 )
@@ -21,6 +24,11 @@ import (
 var version = "dev"
 
 const defaultEndpoint = "http://127.0.0.1:8080"
+
+// defaultConfigPath is where a host keeps the daemon's configuration. Read
+// only to find out where it listens, so that running this on the machine
+// needs no environment at all.
+const defaultConfigPath = "/etc/dabberz/dabberz.yaml"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -105,7 +113,8 @@ Secrets (scoped to a repo, inherited by every fork under it):
   secrets set <repo-id> <NAME> <value>
   secrets rm <repo-id> <NAME>
 
-The control plane endpoint comes from DABBERZ_ENDPOINT (default `+defaultEndpoint+`).
+The control plane endpoint comes from DABBERZ_ENDPOINT, or from server.addr in
+`+defaultConfigPath+` when run on the host, or `+defaultEndpoint+`.
 `)
 }
 
@@ -113,7 +122,46 @@ func endpoint() string {
 	if v := os.Getenv("DABBERZ_ENDPOINT"); v != "" {
 		return strings.TrimSuffix(v, "/")
 	}
+	// On the host, ask the daemon's own configuration where it listens. The
+	// alternative is a default port that is right until somebody changes
+	// server.addr, after which every command fails with connection refused
+	// and nothing says the two disagree.
+	if addr := listenAddrFrom(defaultConfigPath); addr != "" {
+		return addr
+	}
 	return defaultEndpoint
+}
+
+// listenAddrFrom reads server.addr and turns it into something dialable, or
+// returns empty when there is no readable config here.
+func listenAddrFrom(cfgPath string) string {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return ""
+	}
+	var partial struct {
+		Server struct {
+			Addr string `yaml:"addr"`
+		} `yaml:"server"`
+	}
+	if err := yaml.Unmarshal(raw, &partial); err != nil || partial.Server.Addr == "" {
+		return ""
+	}
+
+	host, port, err := net.SplitHostPort(partial.Server.Addr)
+	if err != nil {
+		return ""
+	}
+	// Every interface is not an address to dial. The daemon answering on all
+	// of them is reachable here on the loopback one.
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	if port == "80" {
+		return "http://" + host
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // keygen prints a fresh master key for the secrets store.
