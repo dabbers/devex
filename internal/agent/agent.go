@@ -21,6 +21,13 @@ import (
 // DefaultTimeout bounds a single agent run.
 const DefaultTimeout = 45 * time.Minute
 
+// DefaultPermissionMode lets the agent act without asking.
+//
+// Chosen rather than inherited: the agent's own default is to ask, and there
+// is nobody to ask. See Config.PermissionMode for what makes it safe, which is
+// the isolation and the promote gate rather than anything about the flag.
+const DefaultPermissionMode = "bypassPermissions"
+
 // TokenEnv is the environment variable Claude Code authenticates with. It is
 // injected into the fork VM alongside the repo's inherited secrets.
 const TokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -51,6 +58,21 @@ type Config struct {
 	MCPConfig string `yaml:"mcp_config" json:"mcp_config"`
 	// Timeout bounds one run.
 	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+	// PermissionMode is how the agent asks before acting.
+	//
+	// It has a default, and the default is permissive, because the alternative
+	// is a product that does not work: a run with nothing set plans the change
+	// correctly, reports that its commands were not approved, and changes
+	// nothing -- there is no human at a terminal to approve them, and if there
+	// were, approving each edit is not the thing being sold.
+	//
+	// What makes that safe is not the flag, it is where the run happens. The
+	// agent works on its own machine, on a branch, against a copy of the data
+	// forked a moment earlier, behind a preview nobody depends on, and a
+	// person promotes. Those are the controls. A deployment whose driver does
+	// not actually isolate -- the local one -- is giving the agent its host,
+	// and says so at startup.
+	PermissionMode string `yaml:"permission_mode" json:"permission_mode"`
 	// ExtraArgs are appended to every invocation.
 	ExtraArgs []string `yaml:"extra_args" json:"extra_args"`
 	// SessionDir is where the agent keeps its conversations inside the VM. It
@@ -68,6 +90,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = DefaultTimeout
+	}
+	if c.PermissionMode == "" {
+		c.PermissionMode = DefaultPermissionMode
 	}
 	return c
 }
@@ -343,6 +368,11 @@ func (r *Runner) argv(resumeID string, streaming bool) []string {
 	}
 	if r.cfg.MCPConfig != "" {
 		argv = append(argv, "--mcp-config", r.cfg.MCPConfig)
+	}
+	if r.cfg.PermissionMode != "" {
+		// Nothing is watching this run, so a prompt is a hang that reports
+		// itself as a refusal. See Config.PermissionMode.
+		argv = append(argv, "--permission-mode", r.cfg.PermissionMode)
 	}
 	return append(argv, r.cfg.ExtraArgs...)
 }

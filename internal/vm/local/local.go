@@ -122,7 +122,11 @@ func (d *Driver) record(inst *vm.Instance) error {
 }
 
 // Name implements vm.Driver.
-func (d *Driver) Name() string { return "local" }
+// Name identifies this driver. Exported as a constant too, so a caller can
+// recognise it without comparing a string literal.
+const Name = "local"
+
+func (d *Driver) Name() string { return Name }
 
 // Capacity implements vm.Driver.
 func (d *Driver) Capacity(context.Context) (vm.Capacity, error) {

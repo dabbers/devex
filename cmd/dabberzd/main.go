@@ -179,6 +179,15 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		return nil, err
 	}
 	logger.Info("vm driver ready", "driver", driver.Name())
+	if driver.Name() == local.Name {
+		// The agent acts without asking, which is safe because it is confined
+		// to a machine of its own. This driver does not confine it to
+		// anything: it runs on the host, as this process, with this process's
+		// access. Correct for development and wrong for anything else, so it
+		// is said rather than left to be inferred from a config file.
+		logger.Warn("the local driver provides no isolation; the agent runs on this host " +
+			"with this process's access, and acts without asking -- development only")
+	}
 
 	router, hostRouter := buildRouter(cfg, visitors, logger)
 	allocator, err := preview.New(db, router, cfg.Preview)

@@ -70,6 +70,12 @@ func TestRunInvokesClaudeCodeInPrintMode(t *testing.T) {
 	if !strings.Contains(argv, "--mcp-config /etc/dabberz/mcp.json") {
 		t.Fatalf("argv = %q, want the dabberz MCP toolset attached", argv)
 	}
+	// Nothing is watching the run, so an agent that stops to ask has not
+	// failed loudly -- it reports that its commands were not approved and
+	// changes nothing, which reads as the agent declining the work.
+	if !strings.Contains(argv, "--permission-mode "+DefaultPermissionMode) {
+		t.Fatalf("argv = %q, want the agent allowed to act without asking", argv)
+	}
 	// Long prompts go over stdin, not argv.
 	if string(driver.lastCmd.Stdin) != "add star ratings" {
 		t.Fatalf("prompt was not sent over stdin: %q", driver.lastCmd.Stdin)

@@ -498,6 +498,16 @@ is the opposite, because nobody edits it by hand and "whatever is on the disk"
 must not decide what customers see. A serving installation is the promoted
 revision or it is wrong.
 
+The agent acts without asking, and that is not a shortcut. There is nobody at
+a terminal to approve a tool call, so an agent left to ask does not fail
+loudly: it plans the change correctly, reports that its commands were not
+approved, changes nothing, and reads as an agent that declined the work. What
+makes acting freely safe is not a flag, it is step 3 -- its own machine, its
+own branch, its own copy of the data, a preview nobody depends on -- and step
+5. Those are the controls. A deployment whose driver does not actually isolate
+is giving the agent its host instead, and says so at startup rather than
+leaving it to be inferred from a config file.
+
 Which makes "nobody edits it by hand" something the platform has to enforce
 rather than assume. An agent is addressed by workspace, and a serving
 installation has one, so without a rule the whole flow above could be
