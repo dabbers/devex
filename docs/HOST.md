@@ -168,6 +168,21 @@ Note the branch in that URL, and in the clone the script makes. The default
 branch is a long way behind; cloning it would produce a tree with none of this
 in it.
 
+And check what arrived, because a branch URL on raw.githubusercontent.com is
+served from a cache that lags a push by minutes and ignores query strings:
+
+```
+grep -c REPO_BRANCH bootstrap-host.sh   # 3; zero means a stale copy
+```
+
+A stale copy is not obviously broken, which is what makes it worth checking --
+it would run, and clone the wrong branch. If the count is zero, either wait and
+fetch again or use a URL pinned to a commit, which is never served stale:
+
+```
+https://raw.githubusercontent.com/dabbers/devex/<commit-sha>/deploy/bootstrap-host.sh
+```
+
 ## Packages
 
 - `qemu-kvm` is not needed; `/dev/kvm` is. On bare metal it is there.
