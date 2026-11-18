@@ -43,6 +43,12 @@ readonly CHECKOUT=/opt/dabberz/src
 readonly GO_MINIMUM=1.25.0
 # Printed by `gpg --show-keys` for Anthropic's signing key. Checked rather than
 # trusted, so a substituted key fails here instead of installing quietly.
+# What `sgdisk --typecode=0:bf01` writes: "Solaris /usr & Mac ZFS", which is
+# what ZFS on Linux uses. Read off a real partition rather than copied from
+# memory. Compared lowercase, which is how lsblk reports it.
+readonly ZFS_PARTTYPE=6a898cc3-1dd2-11b2-99a6-080020736631
+# Printed by `gpg --show-keys` for Anthropic's signing key. Checked rather than
+# trusted, so a substituted key fails here instead of installing quietly.
 readonly CLAUDE_KEY_FPR=31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
 
 DO_STORAGE=0
@@ -125,7 +131,22 @@ packages() {
 		zfsutils-linux \
 		>/dev/null
 
-	note "installed: git, chromium, postgres, zfs, debootstrap, gdisk, nftables"
+	note "installed: git, chromium, postgres, debootstrap, gdisk, nftables"
+
+	# zfsutils-linux is the userspace half. Without the module it installs
+	# perfectly and then every zpool command fails, which is how the disks got
+	# partitioned for a pool that could not be created.
+	if ! modinfo zfs >/dev/null 2>&1; then
+		note "building the zfs kernel module (dkms, a few minutes)"
+		apt-get install -y -qq "linux-headers-$(uname -r)" >/dev/null 2>&1 ||
+			apt-get install -y -qq linux-headers-amd64 >/dev/null
+		apt-get install -y zfs-dkms >/dev/null
+	fi
+	if modprobe zfs 2>/dev/null && modinfo zfs >/dev/null 2>&1; then
+		note "zfs module $(modinfo -F version zfs 2>/dev/null || echo loaded)"
+	else
+		warn "the zfs module is still unavailable; the pool cannot be built"
+	fi
 
 	# Guests reach the internet through the host once the Firecracker driver
 	# lands. Harmless until then, and awkward to debug when forgotten.
@@ -151,63 +172,104 @@ storage() {
 		return
 	fi
 
-	# Only disks that already carry a partition table with partitions on them,
-	# which on this machine means the two the installer laid out. A blank or
-	# foreign disk is deliberately left alone: initialising something
-	# unrecognised is how a script eats the wrong device.
-	local -a targets=()
-	local disk free
-	while read -r disk; do
-		case "$disk" in zram*|loop*|ram*|sr*) continue ;; esac
-		sfdisk -l "/dev/$disk" 2>/dev/null | grep -q '^Disklabel type' || continue
-		[ "$(lsblk -ln -o NAME "/dev/$disk" | tail -n +2 | wc -l)" -gt 0 ] || continue
-
-		# Rows matched by shape rather than indentation. sfdisk indents the
-		# header and starts the data rows at column zero, which is the
-		# opposite way round from what it looks like, and a leading-space
-		# pattern silently sums nothing and reports a full disk as empty.
-		free=$(sfdisk --list-free "/dev/$disk" 2>/dev/null |
-			awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {s+=$3} END{print s+0}')
-		[ "${free:-0}" -gt 0 ] || continue
-
-		targets+=("/dev/$disk")
-		note "$(printf '/dev/%s has %s unpartitioned' "$disk" \
-			"$(numfmt --to=iec --suffix=B $((free * 512)))")"
-	done < <(lsblk -dn -o NAME,TYPE | awk '$2=="disk" {print $1}')
-
-	if [ "${#targets[@]}" -eq 0 ]; then
-		warn "no partitioned disk has free space; nothing to build a pool from"
+	# Before any disk is touched, not after. Partitioning for a pool that
+	# cannot then be created leaves the disks changed and the job undone, and
+	# the next run finds no free space because the partitions are already
+	# sitting in it.
+	if ! modprobe zfs 2>/dev/null || ! zpool list >/dev/null 2>&1; then
+		warn "zfs is not usable on this kernel, so no disk will be touched"
+		note "the module is built by dkms against $(uname -r):"
+		note "  apt-get install -y linux-headers-$(uname -r) zfs-dkms"
+		note "  modprobe zfs"
 		return
+	fi
+
+	# Partitions already typed for ZFS and not yet claimed by anything. This
+	# is what a resumed run finds: the partitions exist from last time, so
+	# there is no free space left to look for.
+	# Parsed rather than eval'd. lsblk -P emits shell-looking key="value"
+	# pairs and it is tempting to just eval the line, which is a device
+	# listing being executed as code the first time a name contains a quote.
+	local -a parts=()
+	local line name parttype fstype
+	while IFS= read -r line; do
+		name=$(sed -n 's/.*\bNAME="\([^"]*\)".*/\1/p' <<<"$line")
+		parttype=$(sed -n 's/.*\bPARTTYPE="\([^"]*\)".*/\1/p' <<<"$line")
+		fstype=$(sed -n 's/.*\bFSTYPE="\([^"]*\)".*/\1/p' <<<"$line")
+
+		[ -n "$name" ] || continue
+		# Claimed by a pool or anything else: not ours to take.
+		[ -z "$fstype" ] || continue
+		[ "${parttype,,}" = "$ZFS_PARTTYPE" ] || continue
+		parts+=("/dev/$name")
+	done < <(lsblk -P -o NAME,PARTTYPE,FSTYPE)
+
+	if [ "${#parts[@]}" -gt 0 ]; then
+		note "found unused zfs partitions from an earlier run: ${parts[*]}"
+	else
+		# Only disks that already carry a partition table with partitions on
+		# them, which on this machine means the two the installer laid out. A
+		# blank or foreign disk is deliberately left alone: initialising
+		# something unrecognised is how a script eats the wrong device.
+		local -a targets=()
+		local disk free
+		while read -r disk; do
+			case "$disk" in zram*|loop*|ram*|sr*) continue ;; esac
+			sfdisk -l "/dev/$disk" 2>/dev/null | grep -q '^Disklabel type' || continue
+			[ "$(lsblk -ln -o NAME "/dev/$disk" | tail -n +2 | wc -l)" -gt 0 ] || continue
+
+			# Rows matched by shape rather than indentation. sfdisk indents the
+			# header and starts the data rows at column zero, which is the
+			# opposite way round from what it looks like, and a leading-space
+			# pattern silently sums nothing and reports a full disk as empty.
+			free=$(sfdisk --list-free "/dev/$disk" 2>/dev/null |
+				awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {s+=$3} END{print s+0}')
+			[ "${free:-0}" -gt 0 ] || continue
+
+			targets+=("/dev/$disk")
+			note "$(printf '/dev/%s has %s unpartitioned' "$disk" \
+				"$(numfmt --to=iec --suffix=B $((free * 512)))")"
+		done < <(lsblk -dn -o NAME,TYPE | awk '$2=="disk" {print $1}')
+
+		if [ "${#targets[@]}" -eq 0 ]; then
+			warn "no partitioned disk has free space; nothing to build a pool from"
+			return
+		fi
+
+		if [ "$DO_STORAGE" -ne 1 ]; then
+			warn "not touching disks -- re-run with --storage to do it"
+			note "it would add one partition to each of: ${targets[*]}"
+			note "then: zpool create -o ashift=12 -O compression=lz4 -O atime=off $POOL [mirror] <new partitions>"
+			return
+		fi
+
+		# The new partitions are discovered rather than predicted. Working out
+		# the name in advance means assuming sgdisk picks the next number and
+		# that the existing ones have no gaps -- this machine produced sda5 and
+		# sdb6 -- and being wrong points zpool at a device somebody is using.
+		local before after
+		before=$(lsblk -ln -o NAME | sort)
+		for disk in "${targets[@]}"; do
+			sgdisk --new=0:0:0 --typecode=0:bf01 "$disk" >/dev/null
+		done
+		partprobe "${targets[@]}" 2>/dev/null || true
+		udevadm settle || true
+		after=$(lsblk -ln -o NAME | sort)
+
+		while read -r name; do
+			[ -n "$name" ] && parts+=("/dev/$name")
+		done < <(comm -13 <(echo "$before") <(echo "$after"))
+
+		[ "${#parts[@]}" -eq "${#targets[@]}" ] ||
+			die "expected ${#targets[@]} new partitions, found ${#parts[@]}: ${parts[*]:-none}"
+		note "created: ${parts[*]}"
 	fi
 
 	if [ "$DO_STORAGE" -ne 1 ]; then
-		warn "not touching disks -- re-run with --storage to do it"
-		note "it would add one partition to each of: ${targets[*]}"
-		note "then: zpool create -o ashift=12 -O compression=lz4 -O atime=off $POOL [mirror] <new partitions>"
+		warn "not creating the pool -- re-run with --storage to do it"
+		note "it would run: zpool create ... $POOL [mirror] ${parts[*]}"
 		return
 	fi
-
-	# The new partitions are discovered rather than predicted. Working out the
-	# name in advance means assuming sgdisk picks the next number and that the
-	# existing ones have no gaps, and being wrong points zpool at a device
-	# somebody is using.
-	local before after
-	before=$(lsblk -ln -o NAME | sort)
-	for disk in "${targets[@]}"; do
-		sgdisk --new=0:0:0 --typecode=0:bf01 "$disk" >/dev/null
-	done
-	partprobe "${targets[@]}" 2>/dev/null || true
-	udevadm settle || true
-	after=$(lsblk -ln -o NAME | sort)
-
-	local -a parts=()
-	while read -r disk; do
-		[ -n "$disk" ] && parts+=("/dev/$disk")
-	done < <(comm -13 <(echo "$before") <(echo "$after"))
-
-	[ "${#parts[@]}" -eq "${#targets[@]}" ] ||
-		die "expected ${#targets[@]} new partitions, found ${#parts[@]}: ${parts[*]:-none}"
-	note "created: ${parts[*]}"
 
 	local vdev="${parts[*]}"
 	[ "${#parts[@]}" -ge 2 ] && vdev="mirror ${parts[*]}"
