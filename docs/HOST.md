@@ -260,9 +260,12 @@ redundant.
   cd /opt/dabberz/src && make build
   install -d /opt/dabberz/bin
   install -m0755 bin/dabberzd       /opt/dabberz/bin/dabberzd.new
-  install -m0755 bin/dabberzctl     /opt/dabberz/bin/
-  install -m0755 bin/dabberz-verify /usr/local/bin/
   mv /opt/dabberz/bin/dabberzd.new  /opt/dabberz/bin/dabberzd
+  # On PATH, both of them: one is typed by a person, the other is run by the
+  # daemon by name. Only the daemon itself needs to live somewhere fixed,
+  # because a unit file names its path.
+  install -m0755 bin/dabberzctl     /usr/local/bin/
+  install -m0755 bin/dabberz-verify /usr/local/bin/
   ```
 
   The build-then-rename is not ceremony. Writing over the binary of a running
