@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dabbers/devex/internal/agentauth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/vm"
 )
@@ -33,16 +34,21 @@ const DefaultPermissionMode = "bypassPermissions"
 // from the account the run belongs to -- see Credentials.
 const TokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
 
-// Credentials resolves the Claude token a run is paid with.
+// Credentials resolves the subscription credential a run is driven by.
 //
 // Per account, because the customer brings the subscription: a run in one
 // customer's workspace must authenticate as that customer and nobody else.
-// internal/claudeauth is the implementation; an error -- including an account
-// that has stored no token -- refuses the run rather than letting it start
+// internal/agentauth is the implementation; an error -- including an account
+// that has stored nothing -- refuses the run rather than letting it start
 // unauthenticated or on somebody else's credential.
 type Credentials interface {
-	ClaudeToken(ctx context.Context, userID string) (string, error)
+	AgentCredential(ctx context.Context, userID string) (agentauth.Credential, error)
 }
+
+// Provider is the subscription this runner drives. Claude Code is the
+// execution layer for v1; a credential for any other provider is refused
+// here rather than handed to a binary that cannot use it.
+const Provider = domain.ProviderClaude
 
 // AuthorName and AuthorEmail are who the agent's commits are by.
 const (
@@ -362,12 +368,19 @@ func (r *Runner) token(ctx context.Context, userID string) (string, error) {
 		return "", fmt.Errorf("agent: a run must name the account it belongs to")
 	}
 	if r.creds == nil {
-		return "", fmt.Errorf("agent: this deployment has no source of Claude credentials, so no agent can run")
+		return "", fmt.Errorf("agent: this deployment has no source of agent credentials, so no agent can run")
 	}
-	token, err := r.creds.ClaudeToken(ctx, userID)
+	credential, err := r.creds.AgentCredential(ctx, userID)
 	if err != nil {
 		return "", fmt.Errorf("agent: %w", err)
 	}
+	// A Codex or Grok credential is the customer's real choice and is kept,
+	// but this runner is Claude Code: passing it as a Claude token would fail
+	// confusingly at best, and is not what they asked for.
+	if credential.Provider != Provider {
+		return "", fmt.Errorf("agent: %w", agentauth.Unsupported(credential.Provider))
+	}
+	token := credential.Secret
 	if strings.TrimSpace(token) == "" {
 		return "", fmt.Errorf("agent: the Claude token for this account is empty, so the agent cannot run")
 	}

@@ -303,39 +303,61 @@ func TestEmptyValuesAreSupported(t *testing.T) {
 	}
 }
 
-// TestACredentialIsBoundToItsAccount: a sealed credential copied onto another
-// account's row -- by a bad migration, a restored backup, or someone with the
-// database and not the key -- must fail to open rather than authenticate the
-// second account as the first.
-func TestACredentialIsBoundToItsAccount(t *testing.T) {
+// TestACredentialIsBoundToItsAccountAndProvider: a sealed credential copied
+// onto another account's row, or relabelled as another provider's -- by a bad
+// migration, a restored backup, or someone with the database and not the key
+// -- must fail to open rather than authenticate the wrong account or reach
+// the wrong runner.
+func TestACredentialIsBoundToItsAccountAndProvider(t *testing.T) {
 	v, st, repo, ctx := newVault(t)
 	other, err := st.EnsureUser(ctx, "other@example.com")
 	if err != nil {
 		t.Fatalf("EnsureUser: %v", err)
 	}
-	if err := v.SetCredential(ctx, repo.UserID, "claude_oauth_token", "tok-owner"); err != nil {
+	if err := v.SetCredential(ctx, repo.UserID, "agent", "claude", "tok-owner"); err != nil {
 		t.Fatalf("SetCredential: %v", err)
 	}
-	if got, err := v.Credential(ctx, repo.UserID, "claude_oauth_token"); err != nil || got != "tok-owner" {
-		t.Fatalf("Credential = %q, %v", got, err)
+	if provider, got, err := v.Credential(ctx, repo.UserID, "agent"); err != nil || got != "tok-owner" || provider != "claude" {
+		t.Fatalf("Credential = %q, %q, %v", provider, got, err)
 	}
-	if _, err := v.Credential(ctx, other.ID, "claude_oauth_token"); !errors.Is(err, ErrNotFound) {
+	if info, err := v.CredentialSet(ctx, repo.UserID, "agent"); err != nil || info == nil || info.Provider != "claude" {
+		t.Fatalf("CredentialSet = %+v, %v", info, err)
+	}
+	if _, _, err := v.Credential(ctx, other.ID, "agent"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another account read a credential it never set: %v", err)
 	}
 
-	row, err := st.GetCredential(ctx, repo.UserID, "claude_oauth_token")
+	row, err := st.GetCredential(ctx, repo.UserID, "agent")
 	if err != nil {
 		t.Fatalf("GetCredential: %v", err)
 	}
 	if strings.Contains(string(row.Ciphertext), "tok-owner") {
 		t.Fatal("the credential is stored in plaintext")
 	}
+
 	moved := *row
 	moved.ID, moved.UserID = "", other.ID
 	if err := st.PutCredential(ctx, &moved); err != nil {
 		t.Fatalf("PutCredential: %v", err)
 	}
-	if got, err := v.Credential(ctx, other.ID, "claude_oauth_token"); err == nil {
+	if _, got, err := v.Credential(ctx, other.ID, "agent"); err == nil {
 		t.Fatalf("a credential moved to another account opened as %q", got)
+	}
+
+	relabelled := *row
+	relabelled.Provider = "codex"
+	if err := st.PutCredential(ctx, &relabelled); err != nil {
+		t.Fatalf("PutCredential: %v", err)
+	}
+	if _, got, err := v.Credential(ctx, repo.UserID, "agent"); err == nil {
+		t.Fatalf("a credential relabelled to another provider opened as %q", got)
+	}
+
+	// Setting another provider replaces the one active credential.
+	if err := v.SetCredential(ctx, repo.UserID, "agent", "grok", "tok-grok"); err != nil {
+		t.Fatalf("SetCredential: %v", err)
+	}
+	if provider, got, err := v.Credential(ctx, repo.UserID, "agent"); err != nil || provider != "grok" || got != "tok-grok" {
+		t.Fatalf("after switching provider = %q, %q, %v", provider, got, err)
 	}
 }

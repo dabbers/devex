@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/dabbers/devex/internal/agent"
+	"github.com/dabbers/devex/internal/agentauth"
 	"github.com/dabbers/devex/internal/api"
-	"github.com/dabbers/devex/internal/claudeauth"
 	"github.com/dabbers/devex/internal/config"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/gitauth"
@@ -239,18 +239,19 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		}
 	}), orchestrator.Options{Tripwire: cfg.Tripwire, Logger: logger})
 
-	// Each account's agent runs are paid for with that account's own Claude
-	// token, stored sealed in the vault. The daemon's token is consulted only
-	// for the owner, and only when the configuration asks for that.
-	claudeOpts := claudeauth.Options{Vault: vault}
+	// Each account's agent runs are driven by that account's own
+	// subscription credential, stored sealed in the vault. The daemon's
+	// Claude token is consulted only for the owner, and only when the
+	// configuration asks for that.
+	agentOpts := agentauth.Options{Vault: vault}
 	if cfg.Claude.OwnerFallback {
-		claudeOpts.FallbackToken, claudeOpts.FallbackUserID = cfg.Claude.Token, owner.ID
+		agentOpts.FallbackToken, agentOpts.FallbackUserID = cfg.Claude.Token, owner.ID
 	}
-	claudeTokens, err := claudeauth.New(claudeOpts)
+	agentCreds, err := agentauth.New(agentOpts)
 	if err != nil {
 		return nil, err
 	}
-	agentRunner := agent.New(driver, claudeTokens, cfg.Agent)
+	agentRunner := agent.New(driver, agentCreds, cfg.Agent)
 
 	verifier, err := buildVerifier(ctx, driver, &cfg, logger)
 	if err != nil {
@@ -409,7 +410,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
 		UI: ui, Authn: authenticator, Visitors: visitors, Workspaces: workspaces,
-		Agent: agentRunner, GitTokens: gitTokens, ClaudeTokens: claudeTokens,
+		Agent: agentRunner, GitTokens: gitTokens, AgentCreds: agentCreds,
 		Installer: installer, Logger: logger,
 	})
 	if err != nil {

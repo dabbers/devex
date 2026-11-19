@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dabbers/devex/internal/agent"
+	"github.com/dabbers/devex/internal/agentauth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/vm"
 )
@@ -99,8 +100,8 @@ func agentSaying(driver *scriptDriver, text string) *agent.Runner {
 // a run carrying the wrong one is visible in what the driver received.
 type ownTokens struct{}
 
-func (ownTokens) ClaudeToken(_ context.Context, userID string) (string, error) {
-	return "tok-" + userID, nil
+func (ownTokens) AgentCredential(_ context.Context, userID string) (agentauth.Credential, error) {
+	return agentauth.Credential{Provider: domain.ProviderClaude, Secret: "tok-" + userID}, nil
 }
 
 func testFork() *domain.Fork {

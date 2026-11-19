@@ -75,10 +75,11 @@ type Config struct {
 	Tripwire  tripwire.Thresholds `yaml:"tripwire"`
 }
 
-// ClaudeConfig is where agent runs get their Claude credential.
+// ClaudeConfig is the daemon's own Claude token and when it may be used.
 //
-// Each account stores its own token (PUT /v1/claude) and its runs use that and
-// nothing else; an account without one has its runs refused. The daemon's
+// Each account stores its own subscription credential (PUT
+// /v1/account/agent) and its runs use that and nothing else; an account
+// without one has its runs refused. The daemon's
 // own token is only ever a fallback for the owner, and only when asked for.
 type ClaudeConfig struct {
 	// OwnerFallback lets the owner's runs use the daemon's
@@ -371,7 +372,7 @@ func (c *Config) Warnings() []string {
 				" until they store a Claude token of their own. No other account ever uses it")
 	case c.Claude.Token != "":
 		warnings = append(warnings,
-			EnvClaudeToken+" is set but unused: agent runs use each account's own stored Claude token. "+
+			EnvClaudeToken+" is set but unused: agent runs use each account's own stored subscription credential. "+
 				"Set claude.owner_fallback: true to let the owner's runs use it, or remove it")
 	}
 	if c.Verify.UIInstanceID == "" && !c.Verify.VM.AutoProvision {

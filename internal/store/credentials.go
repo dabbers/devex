@@ -13,6 +13,7 @@ type CredentialRow struct {
 	ID         string
 	UserID     string
 	Kind       string
+	Provider   string
 	Nonce      []byte
 	Ciphertext []byte
 	CreatedAt  time.Time
@@ -20,7 +21,8 @@ type CredentialRow struct {
 }
 
 // PutCredential writes a sealed credential, replacing any existing one of the
-// same kind for the same user.
+// same kind for the same user -- whatever its provider, since only one is
+// active.
 func (s *Store) PutCredential(ctx context.Context, row *CredentialRow) error {
 	if row.ID == "" {
 		row.ID = id.New(id.Secret)
@@ -31,13 +33,14 @@ func (s *Store) PutCredential(ctx context.Context, row *CredentialRow) error {
 	}
 	row.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO user_credentials (id, user_id, kind, nonce, ciphertext, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO user_credentials (id, user_id, kind, provider, nonce, ciphertext, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (user_id, kind) DO UPDATE SET
+		     provider = excluded.provider,
 		     nonce = excluded.nonce,
 		     ciphertext = excluded.ciphertext,
 		     updated_at = excluded.updated_at`,
-		row.ID, row.UserID, row.Kind, row.Nonce, row.Ciphertext,
+		row.ID, row.UserID, row.Kind, row.Provider, row.Nonce, row.Ciphertext,
 		formatTime(row.CreatedAt), formatTime(row.UpdatedAt),
 	)
 	return wrapErr("put credential", err)
@@ -46,14 +49,14 @@ func (s *Store) PutCredential(ctx context.Context, row *CredentialRow) error {
 // GetCredential returns one sealed credential by user and kind.
 func (s *Store) GetCredential(ctx context.Context, userID, kind string) (*CredentialRow, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, kind, nonce, ciphertext, created_at, updated_at
+		`SELECT id, user_id, kind, provider, nonce, ciphertext, created_at, updated_at
 		 FROM user_credentials WHERE user_id = ? AND kind = ?`, userID, kind)
 
 	var (
 		r                CredentialRow
 		created, updated string
 	)
-	if err := row.Scan(&r.ID, &r.UserID, &r.Kind, &r.Nonce, &r.Ciphertext, &created, &updated); err != nil {
+	if err := row.Scan(&r.ID, &r.UserID, &r.Kind, &r.Provider, &r.Nonce, &r.Ciphertext, &created, &updated); err != nil {
 		return nil, wrapErr("get credential", err)
 	}
 	var err error

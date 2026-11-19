@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dabbers/devex/internal/agentauth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/vm"
 )
@@ -41,16 +42,25 @@ func (d *fakeDriver) Exec(_ context.Context, instanceID string, cmd vm.Command) 
 // testUser is the account the ordinary tests run as.
 const testUser = "usr_test"
 
-// fakeCreds is a per-account token table. It returns each account's own token
-// and refuses one with none, which is the contract claudeauth implements.
+// fakeCreds is a per-account Claude token table. It returns each account's
+// own token and refuses one with none, which is the contract agentauth
+// implements.
 type fakeCreds map[string]string
 
-func (c fakeCreds) ClaudeToken(_ context.Context, userID string) (string, error) {
+func (c fakeCreds) AgentCredential(_ context.Context, userID string) (agentauth.Credential, error) {
 	token, ok := c[userID]
 	if !ok {
-		return "", errors.New("no token for " + userID)
+		return agentauth.Credential{}, errors.New("no token for " + userID)
 	}
-	return token, nil
+	return agentauth.Credential{Provider: domain.ProviderClaude, Secret: token}, nil
+}
+
+// fixedCredential returns one credential for every account, for tests about
+// what the runner does with a credential rather than whose it is.
+type fixedCredential agentauth.Credential
+
+func (c fixedCredential) AgentCredential(context.Context, string) (agentauth.Credential, error) {
+	return agentauth.Credential(c), nil
 }
 
 var testCreds = fakeCreds{testUser: "tok-" + testUser}
@@ -639,6 +649,31 @@ func TestARunWithNoTokenIsRefusedRatherThanFunded(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "tok-") {
 				t.Fatalf("the refusal repeats a token: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnotherProvidersCredentialIsRefusedNotPassedAsClaudes: a customer whose
+// subscription is Codex or Grok has made a real choice this runner cannot
+// honour yet. The run is refused, plainly, and their credential is never
+// handed to Claude Code under Claude's variable.
+func TestAnotherProvidersCredentialIsRefusedNotPassedAsClaudes(t *testing.T) {
+	for _, provider := range []domain.AgentProvider{domain.ProviderCodex, domain.ProviderGrok, "something-else"} {
+		t.Run(string(provider), func(t *testing.T) {
+			driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("ok", false, 1, 1, 0)}}
+			creds := fixedCredential{Provider: provider, Secret: "tok-" + string(provider)}
+			_, err := New(driver, creds, Config{}).Run(context.Background(), Request{
+				UserID: testUser, InstanceID: "vm_1", Prompt: "go",
+			})
+			if err == nil || !strings.Contains(err.Error(), "yet") {
+				t.Fatalf("a %s credential was not refused as unsupported: %v", provider, err)
+			}
+			if driver.lastVM != "" {
+				t.Fatalf("the agent was started with a %s credential: %v", provider, driver.lastCmd.Env)
+			}
+			if strings.Contains(err.Error(), "tok-") {
+				t.Fatalf("the refusal repeats the credential: %v", err)
 			}
 		})
 	}
