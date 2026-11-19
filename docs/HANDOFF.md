@@ -70,32 +70,25 @@ workspace (`POST /v1/workspaces/{id}/stop`, then `/start`).
    its workspace by hand. The fix wants a pass at startup that brings up every
    workspace recorded as running; changing `KillMode` alone would survive a
    deploy but not a reboot.
-2. **The browser check cannot pass for an app whose front page needs sign-in,
-   so no Forms change can be promoted.** `dabberz-verify` begins with an
-   anonymous GET of the preview root and stops there; Forms answers `/` with
-   401, correctly. Either the verifier sees the preview as the change's owner
-   (a short-lived identity assertion scoped to that one preview host), or the
-   manifest names a public entry point to check. That is a design decision,
-   not a bug fix, and it is where the milestone loop stopped.
-3. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
+2. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
    expects 443, which nothing serves, so HTTPS is a 521 and only plain HTTP
    works. Do not sign in over it. The daemon does not terminate TLS itself, so
    this needs a Cloudflare origin certificate plus something on 443 (a TLS
    listener in the daemon, or a terminator in front), then Full (strict).
-4. **The Clerk secret should be rotated** — it appeared in a chat transcript.
+3. **The Clerk secret should be rotated** — it appeared in a chat transcript.
    Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
    is now right; that it is read was not confirmed end to end, because only a
    new user's first sign-in exercises it.
-5. **Failed installations cannot be deleted or retried**, and keep their name.
+4. **Failed installations cannot be deleted or retried**, and keep their name.
    `recruiting` and `hiring` are two such, from this session; `hiring` also
    still holds a provisioned database. Its machine was moved aside to
    `/tank/dabberz/data/vms-released/` before the release fix existed.
-6. **The install tests leak the services they start.** A run of
+5. **The install tests leak the services they start.** A run of
    `./internal/install` left ~50 `forms serve` processes behind as the test
    user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
-7. **A `scratch` platform token** created on 2026-11-18 is live and was not
+6. **A `scratch` platform token** created on 2026-11-18 is live and was not
    made by this session. Leave it unless its owner says otherwise.
-8. **golangci-lint is not installed on the host**, so nothing this session
+7. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
 
 ## What this session fixed, all running on the host
@@ -117,30 +110,53 @@ with the fix removed.
 - The control plane's database was world-readable; the unit sets a umask.
 - With a fresh home the agent had no git identity; it commits as
   `dabberz agent <agent@dabberz.invalid>`.
+- The browser check saw an app's signed-in surface as a stranger, so a page
+  behind sign-in could never pass. It now looks as the change's owner, with a
+  **preview pass** (`internal/previewpass`): an HMAC over one preview host, one
+  user and a 15-minute expiry, keyed per daemon process, set by the harness as
+  a host-only HttpOnly cookie, accepted by the edge only on that host and
+  stripped before the app sees it. The owner's platform token was the
+  obvious alternative and the wrong one: it is the whole account, handed to a
+  page an agent just wrote.
+- The repositories directory was handed to `dabberz` but left 0700, so the
+  first promote could not reach the repository it was pushing to.
 
-## The next milestone
+## The loop, on hardware
 
-The loop has now run on hardware as far as step 4:
+Run end to end on dbz-alpha, against a real agent, real Postgres, a real
+Chromium and Cloudflare in front:
 
 ```
 export DABBERZ_TOKEN=$(cat ~/.dabberz-token)   # the `milestone` token, on the host
 
-# 1. install                         ok   POST /v1/installations          -> "intake", running
-# 2. open a change                   ok   POST /v1/installations/{id}/changes   (3s)
-# 3. drive the agent                 ok   POST /v1/workspaces/{ws}/messages     (15s, committed)
-# 4. check                           blocked: suite passed, browser check 401 (item 2)
-# 5. promote                         not reached
-# 6. roll back                       not reached
+# 1. install         POST /v1/installations                  "intake", running
+# 2. open a change   POST /v1/installations/{id}/changes     3s, own preview and data fork
+# 3. drive agent     POST /v1/workspaces/{ws}/messages       15s; committed 8aad53b
+# 4. check           POST /v1/changes/{id}/check             suite + browser as owner, ready
+# 5. promote         POST /v1/changes/{id}/promote           live on 8aad53b, machine released
+# 6. roll back       POST /v1/installations/{id}/rollback    back on e7dd585
 ```
 
-The live pieces: installation `ins_06gz2241nb4349s4v42ej8bpx0` (`intake`), change
-`chg_06gz23m4fnnpd006dfbe7jadtg` with the agent's commit `8aad53b`, whose
-preview is `https://web-forms-intake-06gz23m4fnnpd006dfbe7jadtg.ondabberz.link`.
-Once item 2 is decided, re-run the check on that change and carry on from 5.
+What was checked rather than assumed: production held a form and a real
+response before the change; after the promote its thank-you page carried the
+agent's new link and every response was still there; after the rollback the
+link was gone and the responses still were. `intake` is left running on
+`e7dd585`, with its `Job application` form and three responses.
 
-The agent's reply on step 3 said 7 of Forms' own tests skip in its workspace
-for want of `FORMS_TEST_DATABASE_URL`; the check's suite, which has the
-database, passed.
+To exercise an app's signed-in surface from the host without a browser, the
+edge accepts the platform token as a visitor. Send it to `127.0.0.1` with the
+preview's `Host` header, never through Cloudflare: Flexible means the hop
+from Cloudflare to this machine is plain HTTP.
+
+The agent said 7 of Forms' own tests skip in its workspace for want of
+`FORMS_TEST_DATABASE_URL`; the check's suite, which has the database, passed.
+
+## The next milestone
+
+The first of the known-wrong items. A loop that works until the next deploy is a demo, not
+operational confidence: bring every workspace recorded as running back up when
+the daemon starts, and prove it by restarting the daemon and watching
+`intake` answer without anybody touching it.
 
 ## Two structural gaps, both blocking a second account
 
