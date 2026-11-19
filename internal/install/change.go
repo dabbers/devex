@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -482,7 +483,43 @@ func (i *Installer) Rollback(ctx context.Context, installation *domain.Installat
 	}
 
 	target := installation.PreviousRevision
+	current := installation.Revision
+
+	// The branch moves with what is live. Every change starts from it, so
+	// leaving it at the commit just rolled back would put that commit into
+	// the next change, and approving that change would put it live again
+	// without anyone having asked: on dbz-alpha a restyle opened after a
+	// rollback carried the rolled-back work along with it. The commit stays
+	// under a ref of its own, so rolling forward still has it.
+	repo, err := i.deps.Store.GetRepo(ctx, installation.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	bare := filepath.Join(i.opts.RepoDir, repo.ID+".git")
+	branch := "refs/heads/" + repo.DefaultBranch
+	if current != "" {
+		if err := git(ctx, "-c", "safe.directory=*", "-C", bare,
+			"update-ref", "refs/dabberz/rolled-back/"+current, current); err != nil {
+			return nil, err
+		}
+	}
+	if err := git(ctx, "-c", "safe.directory=*", "-C", bare, "update-ref", branch, target); err != nil {
+		return nil, err
+	}
+	if i.opts.RepoOwner != nil {
+		if err := chownTree(bare, i.opts.RepoOwner); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := i.deps.Workspaces.Deploy(ctx, serving, target); err != nil {
+		// Put the branch back, so it still says what is actually live.
+		if current != "" {
+			if undo := git(ctx, "-c", "safe.directory=*", "-C", bare, "update-ref", branch, current); undo != nil {
+				i.deps.Logger.Error("could not put the branch back after a failed rollback",
+					"installation", installation.ID, "error", undo)
+			}
+		}
 		return nil, err
 	}
 

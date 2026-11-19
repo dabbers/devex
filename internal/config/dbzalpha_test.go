@@ -13,6 +13,9 @@ func TestDbzAlphaConfigLoads(t *testing.T) {
 	// test passed while the bootstrap wrote a name nothing reads: the config
 	// simply had no DSN, and a config with no data block still validates.
 	t.Setenv(EnvDataAdminDSN, "postgres://dabberz:x@127.0.0.1:5432/postgres?sslmode=disable")
+	// dbz-alpha runs with the owner's fallback on, which refuses to load
+	// without a token to fall back to; the host's env file has one.
+	t.Setenv(EnvClaudeToken, "test-placeholder")
 
 	raw, err := os.ReadFile("../../deploy/dbz-alpha.yaml")
 	if err != nil {
