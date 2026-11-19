@@ -96,12 +96,20 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    made by this session. Leave it unless its owner says otherwise.
 6. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
-8. **A rollback leaves the serving branch ahead of what is live.** Rollback
-   redeploys the previous revision but leaves `main` on the rolled-back
-   commit, and new changes branch from `main`, so the next promote ships the
-   rolled-back commit again. Older than concurrent changes, but they make it
-   likelier to bite. Rollback should move the branch, or changes should start
-   from the installation's `revision`.
+7. **App access: members are the owner, and only the in-process edge
+   enforces it.** Each installation has a policy (public, internal, or hybrid
+   with public path prefixes), the edge keeps it on every route including
+   change previews, and members sign in by bouncing through the panel
+   (`/_dabberz/signin` → `panel/#/open` → `POST /v1/edge/signin` →
+   `/_dabberz/callback`). Still to do, in order: organisations and roles
+   (Clerk Organizations, which also brings SAML/OIDC SSO), guest links
+   (signed, path-scoped, expiring, revocable), and separate end-user accounts
+   for public apps. The Caddy router does not enforce policies at all; it
+   would serve an internal app openly. Sessions are signed with a key that
+   lives only in the process, so a restart signs everyone out of every app;
+   the next members-only page bounces them back in without a prompt while
+   their panel sign-in holds. `intake` predates policies and is public until
+   its owner sets it on the service page.
 
 ## What this session fixed, all running on the host
 
