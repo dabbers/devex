@@ -148,6 +148,16 @@ the host, checked on the host.
   machine moved aside by hand; only `intake` is left. Deleting releases every
   workspace on the repository, not only the installation's own, since all
   their records go with it.
+- An agent restyling a change killed its service to restart it and could not
+  start it again: services run with credentials only the platform has. The
+  agent is now told never to touch them, and the platform rebuilds and
+  restarts a workspace's services after every agent turn.
+- Rolling back left the branch at the rolled-back commit, so the next change
+  carried it and approving that change would have put it live again. Rollback
+  now moves the branch with the deploy and keeps the old commit under
+  `refs/dabberz/rolled-back/`. `intake`'s branch was moved by hand to match;
+  its open GeoCities change was opened before this and still contains the
+  rolled-back thank-you link (`8aad53b`).
 - Any installation could set a cookie for every other one, since all
   previews are siblings under one domain. The edge now strips `Domain` from
   every `Set-Cookie` an app sends, so each cookie stays on its own hostname
