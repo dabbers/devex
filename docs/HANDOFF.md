@@ -272,27 +272,27 @@ except promote, whose API was already proven on `intake`. To do that again:
 leave `data.public_host` out of the throwaway config, or the app is pointed at
 the production cluster on 5432 and fails to log in.
 
-What the owner asked for and is not built yet, and where it is being built:
-the agent running on the customer's own Claude, Codex or Grok subscription;
-several changes open at once on one service, going live in the customer's
-order, with the later agent taking any conflict; a "connect your agent"
-screen once the first exists. A failed install releases its machine and with
-it the service log that says why, so the reason is only what the record says.
+Account has **Your agent**: pick Claude, Codex or Grok, paste the token, see
+whether runs would work; Services nudges there when none is connected. A
+change that conflicts with what went live meanwhile says so, lists the files,
+and has one button that hands them to its own agent. Neither the conflict path
+nor several changes at once has been run on the host yet; the tests cover
+them. A failed install releases its machine and with it the service log that
+says why, so the reason is only what the record says.
 
 ## The next milestone
 
 The first of the known-wrong items, TLS at the origin, deferred by the owner.
 Until it exists signing in to the panel sends its cookie over a plain-HTTP hop,
 and the panel is where a person rather than a curl command drives the loop
-above. After that,
-the two gaps below, which are what stand between this and a second account.
+above. After that, the isolation below, which is what stands between this and
+a second account.
 
-## Two structural gaps, both blocking a second account
+## What still blocks a second account
 
-Neither matters while the owner is the only user. Both are written up as
-tasks and neither is cosmetic.
+The agent credential is solved; isolation between machines is not.
 
-- **The Firecracker driver boots guests but is not deployed.** Merged into this branch: `Create`, `Exec`, `ExecStream`, `Destroy`
+- **The Firecracker driver boots guests but is not in use.** Deployed, but dbz-alpha still runs `local`: `Create`, `Exec`, `ExecStream`, `Destroy`
   and `OpenSession` work on dbz-alpha against real guests, about 2.2 s from
   `Create` to the first command. The disk is a ZFS clone of the golden
   snapshot, never a copy (the hard constraint: a 40 GiB copy per fork on these
@@ -304,7 +304,7 @@ tasks and neither is cosmetic.
   deployment ships none of the pieces. [FIRECRACKER.md](FIRECRACKER.md) says
   exactly what works, what was measured and what is left.
 - **The agent's credential was process-wide; it is now per account, and the
-  customer's own subscription (not yet deployed).** Each account stores one
+  customer's own subscription (deployed).** Each account stores one
   credential, tagged with its provider -- `claude`, `codex` or `grok` -- with
   `PUT /v1/account/agent` (`{"provider": "claude", "credential": "..."}`; for
   Claude, the token `claude setup-token` prints). `GET` says which provider is
@@ -318,7 +318,9 @@ tasks and neither is cosmetic.
   adding one is a runner, not a schema change. An account with nothing stored
   has its runs **refused** with a message saying how to add one -- never run
   on someone else's. No response, log line or audit entry carries the value.
-  **What the owner must set before deploying this:** either store a Claude
+  dbz-alpha runs with `claude.owner_fallback: true` (set at deploy, backup
+  beside the file) so `intake`'s agent kept working; once the owner stores
+  their own token under Account, turn it off. The rule in general: either store a Claude
   token for the owner's account with `PUT /v1/account/agent`, or set
   `claude.owner_fallback: true` in `/etc/dabberz/dabberz.yaml`, which lets the
   *owner's* runs (and only the owner's) use `CLAUDE_CODE_OAUTH_TOKEN` until

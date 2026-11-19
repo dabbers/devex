@@ -118,6 +118,7 @@ const STATE_TONE = {
   blocked: "warn",
   promoting: "busy",
   promoted: "good",
+  conflicted: "warn",
   stopped: "idle",
 };
 
@@ -148,6 +149,7 @@ const STATE_WORDS = {
   blocked: "checks failed",
   promoting: "going live",
   promoted: "live",
+  conflicted: "overlaps what went live",
   stopped: "stopped",
 };
 
@@ -2068,6 +2070,29 @@ async function renderChange(id) {
     aside: tag(change.state),
     row: controls,
   }));
+
+  if (change.state === "conflicted") {
+    const resolve = el("button", { class: "btn btn-primary", text: "Have your agent fix it" });
+    resolve.addEventListener("click", () => act(async () => {
+      busy(resolve, "Handing it over…");
+      await api.send("POST", `/v1/changes/${change.id}/resolve`, {});
+      toast("Your agent is on it. Check the change again when it is done.");
+      route();
+    }));
+    root.append(el("div", { class: "callout" },
+      el("p", {}, el("strong", { text: "Another change went live while this one was being made, and they touch the same files. " }),
+        "Nothing went live. Your agent can combine the two, keeping both, and then you check it again."),
+      (change.conflicts || []).length
+        ? el("p", { class: "mono muted", text: change.conflicts.join("  ·  ") })
+        : null,
+      el("div", { class: "row-actions" }, resolve)));
+  } else if (!finished && change.base_revision && one.revision && change.base_revision !== one.revision) {
+    // Said before the customer presses approve, so the extra minutes it
+    // takes to catch up and check again are not a surprise.
+    root.append(el("p", { class: "muted", text:
+      "Something else went live since this change started. Going live will first bring it up to date " +
+      "and check it again, which takes a few minutes." }));
+  }
 
   if (change.state === "ready") {
     root.append(el("div", { class: "callout" },
