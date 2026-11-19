@@ -103,6 +103,9 @@ type application struct {
 	store  *store.Store
 	sched  *scheduler.Scheduler
 	server *http.Server
+	// workspaces is resumed once the server is listening, so whatever was
+	// running before a restart is running again without anybody asking.
+	workspaces *workspace.Manager
 }
 
 // build wires every component together.
@@ -413,10 +416,11 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	wired = true
 	return &application{
-		cfg:    cfg,
-		logger: logger,
-		store:  db,
-		sched:  sched,
+		cfg:        cfg,
+		logger:     logger,
+		store:      db,
+		sched:      sched,
+		workspaces: workspaces,
 		server: &http.Server{
 			Addr:        cfg.Server.Addr,
 			Handler:     handler,
@@ -443,6 +447,16 @@ func (a *application) serve(ctx context.Context) error {
 		a.logger.Info("control plane listening", "addr", a.cfg.Server.Addr, "owner", a.cfg.Owner)
 		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
+		}
+	}()
+
+	// After the listener, not before: rebuilding every installation takes a
+	// while, and the panel being unreachable for that long would be a second
+	// outage on top of the one this repairs. A preview asked for in the
+	// meantime gets the edge's "not answering yet" page, which is true.
+	go func() {
+		if err := a.workspaces.Resume(ctx); err != nil {
+			a.logger.Error("not everything came back after the restart", "error", err)
 		}
 	}()
 

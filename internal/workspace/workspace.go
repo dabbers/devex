@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/domain"
@@ -314,6 +315,63 @@ func (m *Manager) Stop(ctx context.Context, w *domain.Workspace) error {
 	}
 	*w = *stopped
 	return nil
+}
+
+// Resume brings back up every workspace recorded as running, after the
+// control plane itself restarted.
+//
+// The services a workspace runs are children of this process as far as the
+// service manager is concerned, so stopping the daemon stops them, and the
+// record still says running. Until this existed every deploy and every
+// reboot left each installation answering 502, and on dbz-alpha each deploy
+// was followed by somebody restarting every workspace by hand -- which is the
+// opposite of what is being sold.
+//
+// Each is stopped and started again, the same way that person did it. That
+// rebuilds what is on the disk and leaves the checkout where it stands:
+// Start switches branch only when it is on the wrong one, and never fetches
+// over or resets a checkout, so an installation that was rolled back comes
+// back on the revision it was rolled back to, and a change keeps its
+// uncommitted work. One at a time, because they share the machine's ports
+// and CPU; and one that fails does not stop the rest.
+func (m *Manager) Resume(ctx context.Context) error {
+	recorded, err := m.store.ListWorkspaces(ctx, store.WorkspaceFilter{
+		// Starting too: a restart in the middle of bringing one up leaves it
+		// there, and nothing else would ever finish the job.
+		States:           []domain.WorkspaceState{domain.WorkspaceRunning, domain.WorkspaceStarting},
+		IncludeEphemeral: true,
+	})
+	if err != nil {
+		return fmt.Errorf("workspace: list what was running: %w", err)
+	}
+
+	var failed []string
+	for _, w := range recorded {
+		if err := m.resume(ctx, w); err != nil {
+			m.opts.Logger.Error("a workspace did not come back after the restart",
+				"workspace", w.ID, "name", w.Name, "error", err)
+			failed = append(failed, w.Name)
+			continue
+		}
+		m.opts.Logger.Info("workspace resumed", "workspace", w.ID, "name", w.Name)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("workspace: %d of %d did not come back: %s",
+			len(failed), len(recorded), strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+func (m *Manager) resume(ctx context.Context, w *domain.Workspace) error {
+	if w.State == domain.WorkspaceRunning {
+		// Its services are gone but the record does not know it. Stopping
+		// first settles the record, and tolerates there being nothing to stop.
+		if err := m.Stop(ctx, w); err != nil {
+			return err
+		}
+	}
+	_, err := m.Start(ctx, w)
+	return err
 }
 
 // Release stops a workspace and destroys its machine, giving back what the
