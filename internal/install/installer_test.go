@@ -334,6 +334,9 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 		t.Fatalf("workspace.New: %v", err)
 	}
 
+	// Registered after the store and databases, so it runs before they close.
+	t.Cleanup(func() { releaseEverything(t, db, workspaces, dataDir) })
+
 	catalog, err := OpenCatalog("../../apps")
 	if err != nil {
 		t.Fatalf("OpenCatalog: %v", err)
