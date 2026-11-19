@@ -165,6 +165,7 @@ func (s *Server) Handler() http.Handler {
 	rt.handle("GET /v1/changes/{change}", s.getChange)
 	rt.handle("POST /v1/changes/{change}/check", s.checkChange)
 	rt.handle("POST /v1/changes/{change}/promote", s.promoteChange)
+	rt.handle("POST /v1/changes/{change}/resolve", s.resolveChange)
 	rt.handle("DELETE /v1/changes/{change}", s.abandonChange)
 
 	// The signed-in account's own GitHub connection.
@@ -806,6 +807,10 @@ func writeError(w http.ResponseWriter, err error) {
 		writeStatus(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, store.ErrConflict):
 		writeStatus(w, http.StatusConflict, err.Error())
+	case errors.Is(err, vm.ErrNoCapacity):
+		// The host is full, not the request wrong: the same request succeeds
+		// once something is finished with.
+		writeStatus(w, http.StatusServiceUnavailable, err.Error())
 	case isStateError(err):
 		// Asking for something the lifecycle does not allow is a client
 		// mistake, not a server failure.

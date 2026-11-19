@@ -482,15 +482,23 @@ requests.
    pending.
 
 A change is one record, because it is one thing from the customer's side: the
-branch, the preview, the checks and the promote are not four features. At most
-one is open against an installation at a time — two means two previews, two
-copies of the data, and a promote that has to reason about what the other one
-did, which is a merge conflict presented to somebody who does not know what git
-is.
+branch, the preview, the checks and the promote are not four features. Several
+can be open against one installation at once ("add a checkout page", "add
+analytics"), each with its own branch, machine, preview and copy of the data,
+as many as the host has room for; one more than that is refused before anything
+is spent on it.
 
-Promoting is a fast-forward of the installation's branch onto the change's.
-Anything else means something moved while the change was open, and resolving
-that is a decision rather than a deploy.
+They go live in the order the customer promotes them. Promoting is a
+fast-forward of the installation's branch onto the change's. When another change
+went live first, the later one is brought up to date by merging production into
+its branch; a clean merge is checked again, against a fresh copy of production's
+data, before it goes live. When the two edit the same lines nothing goes live:
+the change is `conflicted`, the files are recorded, and the customer hands the
+conflict to that change's own agent, which knows what its change was for. The
+customer never sees a merge conflict, only a change that needs another turn.
+
+The change's copy of the data is never copied back. Migrations run when
+production restarts on the new revision, against production's own data.
 
 A serving workspace is the one place a checkout is disposable. Everywhere else
 in this platform the disk is somebody's work and nothing resets it; production

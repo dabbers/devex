@@ -159,40 +159,6 @@ func TestAChangeGoesLiveWithoutTouchingProductionFirst(t *testing.T) {
 	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
 }
 
-// TestOneChangeAtATime: two changes in flight against one installation means
-// two previews, two scratch databases, and a promote that has to reason about
-// what the other one did -- a merge conflict presented to somebody who does
-// not know what git is.
-func TestOneChangeAtATime(t *testing.T) {
-	if testing.Short() || os.Getenv(clusterEnv) == "" {
-		t.Skip("set " + clusterEnv)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	installer, _, owner, _, _ := newInstaller(t, os.Getenv(clusterEnv))
-	installation := installApp(t, ctx, installer, owner.ID, "busy")
-
-	first, err := installer.OpenChange(ctx, installation, "first")
-	if err != nil {
-		t.Fatalf("OpenChange: %v (%s)", err, first.StateReason)
-	}
-	if _, err := installer.OpenChange(ctx, installation, "second"); err == nil {
-		t.Fatal("two changes were opened against one installation")
-	} else if !strings.Contains(err.Error(), "already has a change open") {
-		t.Fatalf("unhelpful refusal: %v", err)
-	}
-
-	// Abandoning the first lets another start.
-	if err := installer.Abandon(ctx, first); err != nil {
-		t.Fatalf("Abandon: %v", err)
-	}
-	second, err := installer.OpenChange(ctx, installation, "second")
-	if err != nil {
-		t.Fatalf("OpenChange after abandoning: %v (%s)", err, second.StateReason)
-	}
-}
-
 // TestAFinishedChangeGivesBackItsMachine: the harness has room for four
 // machines and the installation takes one, so a change that kept its machine
 // after being abandoned leaves the fourth unable to start at all. On

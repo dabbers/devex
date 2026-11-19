@@ -80,6 +80,11 @@ type Owner struct {
 type Installer struct {
 	deps Deps
 	opts Options
+
+	// promotions puts one installation's promotes in a line. Two changes
+	// going live at once would both start from the same production, and the
+	// second would then overwrite the first instead of following it.
+	promotions perKey
 }
 
 // New returns an installer.

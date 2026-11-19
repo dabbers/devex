@@ -1,10 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/store"
 )
 
 // Changing an installation without being able to break it.
@@ -111,8 +113,18 @@ func (s *Server) promoteChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	installation, err := s.installer.Promote(r.Context(), scopedChange(r))
+	change := scopedChange(r)
+	installation, err := s.installer.Promote(r.Context(), change)
 	if err != nil {
+		// The change comes back with the refusal. When promoting found a
+		// conflict, or brought the change up to date and its checks then
+		// failed, the change's new state and its recorded files are the
+		// answer; an error string alone would send the caller off to fetch
+		// them.
+		if errors.Is(err, store.ErrConflict) {
+			writeJSON(w, http.StatusConflict, map[string]any{"change": change, "error": err.Error()})
+			return
+		}
 		writeError(w, err)
 		return
 	}
@@ -123,6 +135,30 @@ func (s *Server) promoteChange(w http.ResponseWriter, r *http.Request) {
 		Message: "promoted change " + scopedChange(r).ID + " to " + installation.Revision,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"installation": installation})
+}
+
+// resolveChange hands a conflicted change to its own agent, in its own
+// workspace, with a message saying what went live in the meantime and which
+// files conflict. The reply arrives as any other agent turn does; once the
+// agent has committed the resolution, the change is checked and promoted as
+// usual.
+func (s *Server) resolveChange(w http.ResponseWriter, r *http.Request) {
+	if s.installer == nil {
+		writeStatus(w, http.StatusNotImplemented, "this deployment has no app catalog")
+		return
+	}
+	change := scopedChange(r)
+	brief, err := s.installer.ConflictBrief(r.Context(), change)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	ws, err := s.store.GetWorkspace(r.Context(), change.WorkspaceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.askAgent(w, r, ws, brief, map[string]any{"change": change})
 }
 
 // abandonChange throws a change away, with its workspace and its copy of the

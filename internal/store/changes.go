@@ -14,7 +14,7 @@ import (
 
 const changeColumns = `id, installation_id, user_id, title, branch, workspace_id,
 	database, state, state_reason, preview_url, checks, revision,
-	created_at, updated_at, promoted_at`
+	created_at, updated_at, promoted_at, base_revision, conflicts`
 
 // CreateChange records a proposed change.
 func (s *Store) CreateChange(ctx context.Context, c *domain.Change) error {
@@ -37,12 +37,17 @@ func (s *Store) CreateChange(ctx context.Context, c *domain.Change) error {
 	if err != nil {
 		return err
 	}
+	conflicts, err := json.Marshal(nonNilStrings(c.Conflicts))
+	if err != nil {
+		return err
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO changes (`+changeColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID, c.InstallationID, c.UserID, c.Title, c.Branch, nullableString(c.WorkspaceID),
 		c.Database, string(c.State), c.StateReason, c.PreviewURL, string(checks), c.Revision,
-		formatTime(c.CreatedAt), formatTime(c.UpdatedAt), nullTime(c.PromotedAt))
+		formatTime(c.CreatedAt), formatTime(c.UpdatedAt), nullTime(c.PromotedAt),
+		c.BaseRevision, string(conflicts))
 	if err != nil {
 		return wrapErr("create change", err)
 	}
@@ -80,28 +85,6 @@ func (s *Store) ListChanges(ctx context.Context, installationID string, limit in
 	return changes, rows.Err()
 }
 
-// OpenChangeFor returns the installation's change still being worked on, if
-// there is one.
-//
-// At most one at a time, deliberately. Two changes in flight against one
-// installation means two previews, two scratch databases, and a promote that
-// has to reason about what the other one did -- which is a merge conflict
-// presented to somebody who does not know what git is.
-func (s *Store) OpenChangeFor(ctx context.Context, installationID string) (*domain.Change, error) {
-	row := s.db.QueryRowContext(ctx,
-		"SELECT "+changeColumns+` FROM changes
-		 WHERE installation_id = ? AND state IN (?, ?, ?, ?)
-		 ORDER BY created_at DESC LIMIT 1`,
-		installationID,
-		string(domain.ChangeOpen), string(domain.ChangeChecking),
-		string(domain.ChangeReady), string(domain.ChangeBlocked))
-	change, err := scanChange(row)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	return change, err
-}
-
 // UpdateChange writes a change back.
 func (s *Store) UpdateChange(ctx context.Context, c *domain.Change) error {
 	if err := c.Validate(); err != nil {
@@ -113,14 +96,18 @@ func (s *Store) UpdateChange(ctx context.Context, c *domain.Change) error {
 	if err != nil {
 		return err
 	}
+	conflicts, err := json.Marshal(nonNilStrings(c.Conflicts))
+	if err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE changes SET title = ?, branch = ?, workspace_id = ?, database = ?,
 			state = ?, state_reason = ?, preview_url = ?, checks = ?, revision = ?,
-			updated_at = ?, promoted_at = ?
+			updated_at = ?, promoted_at = ?, base_revision = ?, conflicts = ?
 		WHERE id = ?`,
 		c.Title, c.Branch, nullableString(c.WorkspaceID), c.Database,
 		string(c.State), c.StateReason, c.PreviewURL, string(checks), c.Revision,
-		formatTime(c.UpdatedAt), nullTime(c.PromotedAt), c.ID)
+		formatTime(c.UpdatedAt), nullTime(c.PromotedAt), c.BaseRevision, string(conflicts), c.ID)
 	if err != nil {
 		return wrapErr("update change", err)
 	}
@@ -143,19 +130,29 @@ func nonNilChecks(checks []domain.CheckResult) []domain.CheckResult {
 	return checks
 }
 
+// nonNilStrings does the same for a list of names.
+func nonNilStrings(names []string) []string {
+	if names == nil {
+		return []string{}
+	}
+	return names
+}
+
 func scanChange(row scannable) (*domain.Change, error) {
 	var (
 		one         domain.Change
 		state       string
 		workspaceID sql.NullString
 		checks      string
+		conflicts   string
 		promotedAt  sql.NullString
 		createdAt   string
 		updatedAt   string
 	)
 	err := row.Scan(&one.ID, &one.InstallationID, &one.UserID, &one.Title, &one.Branch,
 		&workspaceID, &one.Database, &state, &one.StateReason, &one.PreviewURL,
-		&checks, &one.Revision, &createdAt, &updatedAt, &promotedAt)
+		&checks, &one.Revision, &createdAt, &updatedAt, &promotedAt,
+		&one.BaseRevision, &conflicts)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, fmt.Errorf("%w: change", ErrNotFound)
@@ -167,6 +164,12 @@ func scanChange(row scannable) (*domain.Change, error) {
 	one.WorkspaceID = workspaceID.String
 	if err := json.Unmarshal([]byte(checks), &one.Checks); err != nil {
 		return nil, fmt.Errorf("store: unreadable checks on change %s: %w", one.ID, err)
+	}
+	if err := json.Unmarshal([]byte(conflicts), &one.Conflicts); err != nil {
+		return nil, fmt.Errorf("store: unreadable conflicts on change %s: %w", one.ID, err)
+	}
+	if len(one.Conflicts) == 0 {
+		one.Conflicts = nil
 	}
 	if one.CreatedAt, err = parseTime(createdAt); err != nil {
 		return nil, err

@@ -831,6 +831,11 @@ const (
 	ChangeReady ChangeState = "ready"
 	// ChangeBlocked failed its checks and says which.
 	ChangeBlocked ChangeState = "blocked"
+	// ChangeConflicted could not be brought up to date with production
+	// because another change went live first and the two edit the same
+	// lines. Its Conflicts say where; its own agent resolves them, and it is
+	// checked again before it can go live.
+	ChangeConflicted ChangeState = "conflicted"
 	// ChangePromoting is being deployed to the installation.
 	ChangePromoting ChangeState = "promoting"
 	// ChangePromoted is live.
@@ -877,6 +882,13 @@ type Change struct {
 	Checks     []CheckResult `json:"checks,omitempty"`
 	// Revision is the commit promotion would deploy.
 	Revision string `json:"revision,omitempty"`
+	// BaseRevision is the commit the change started from. When production
+	// is no longer there, another change went live in the meantime and this
+	// one has to be brought up to date before it can follow.
+	BaseRevision string `json:"base_revision,omitempty"`
+	// Conflicts are the files that could not be merged with production the
+	// last time it was tried. Empty unless the change is, or was, conflicted.
+	Conflicts []string `json:"conflicts,omitempty"`
 
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
@@ -904,6 +916,16 @@ func (c *Change) Validate() error {
 // not been checked is not promotable even if somebody asks twice: the gate is
 // the product, not a formality in front of it.
 func (c *Change) Promotable() bool { return c.State == ChangeReady }
+
+// Open reports whether a change is still in flight: holding a machine and a
+// copy of the data, and not yet live or thrown away.
+func (c *Change) Open() bool {
+	switch c.State {
+	case ChangeOpen, ChangeChecking, ChangeReady, ChangeBlocked, ChangeConflicted, ChangePromoting:
+		return true
+	}
+	return false
+}
 
 // Passed reports whether every check succeeded.
 func (c *Change) Passed() bool {
