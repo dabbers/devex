@@ -84,12 +84,20 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
    is now right; that it is read was not confirmed end to end, because only a
    new user's first sign-in exercises it.
-4. **The install tests leak the services they start.** A run of
+4. **`ondabberz.link` is not a public suffix.** Until it is, a browser treats
+   every customer's preview as the same site: `SameSite` does nothing
+   between them, and a page's script can write a cookie for all of them.
+   The edge already keeps cookies an app's *server* sets to their own
+   hostname; script it cannot reach. Listing needs a PR to
+   `publicsuffix/list` (private section), a `_psl` TXT record pointing at
+   it, and the domain registered well ahead; browsers pick it up over
+   weeks to months. The owner's to do.
+5. **The install tests leak the services they start.** A run of
    `./internal/install` left ~50 `forms serve` processes behind as the test
    user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
-5. **A `scratch` platform token** created on 2026-11-18 is live and was not
+6. **A `scratch` platform token** created on 2026-11-18 is live and was not
    made by this session. Leave it unless its owner says otherwise.
-6. **golangci-lint is not installed on the host**, so nothing this session
+7. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
 
 ## What this session fixed, all running on the host
@@ -135,6 +143,11 @@ the host, checked on the host.
   first. Deleting frees the name, so installing again is the retry.
   `hiring` and `recruiting` were deleted with it on the host, along with the
   machine moved aside by hand; only `intake` is left.
+- Any installation could set a cookie for every other one, since all
+  previews are siblings under one domain. The edge now strips `Domain` from
+  every `Set-Cookie` an app sends, so each cookie stays on its own hostname
+  and keeps every other attribute. The test runs a real cookie jar across
+  two installations and fails with the rewrite removed.
 
 ## The loop, on hardware
 
