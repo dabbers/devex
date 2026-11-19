@@ -292,14 +292,17 @@ the two gaps below, which are what stand between this and a second account.
 Neither matters while the owner is the only user. Both are written up as
 tasks and neither is cosmetic.
 
-- **The Firecracker driver does not boot guests.** `Create`, `Exec`, `Destroy`
-  and `OpenSession` return `vm.ErrNotSupported`, so the only working driver is
-  `local`, which runs agents and customers' services on the host -- now as
-  one shared unprivileged account rather than as root, but with nothing
-  between one instance and another. The address layout, slot accounting and
-  machine config already exist. **Hard constraint: the guest rootfs must be a copy-on-write
-  overlay of the golden image, never a copy** — a 40 GiB copy per fork on these
-  spinning disks is minutes before an agent can start.
+- **The Firecracker driver boots guests but is not deployed.** Merged into this branch: `Create`, `Exec`, `ExecStream`, `Destroy`
+  and `OpenSession` work on dbz-alpha against real guests, about 2.2 s from
+  `Create` to the first command. The disk is a ZFS clone of the golden
+  snapshot, never a copy (the hard constraint: a 40 GiB copy per fork on these
+  spinning disks is minutes); the jailer gives each guest its own uid and
+  chroot; commands go over vsock to `cmd/dabberz-guest`. dabberzd still runs
+  `local`, which runs every instance on the host as one shared account. What
+  still blocks a second account: **guests can reach each other and the host's
+  listening ports** (measured), there is no restart reconciliation, and the
+  deployment ships none of the pieces. [FIRECRACKER.md](FIRECRACKER.md) says
+  exactly what works, what was measured and what is left.
 - **The agent's credential was process-wide; it is now per account, and the
   customer's own subscription (not yet deployed).** Each account stores one
   credential, tagged with its provider -- `claude`, `codex` or `grok` -- with

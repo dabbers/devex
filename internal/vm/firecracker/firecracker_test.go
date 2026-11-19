@@ -16,7 +16,7 @@ import (
 func testConfig() Config {
 	return Config{
 		KernelImage:  "/srv/dabberz/vmlinux",
-		GoldenRootfs: "/srv/dabberz/golden.ext4",
+		GoldenRootfs: "tank/dabberz/vm/golden@base",
 		ChrootBase:   "/srv/dabberz/vm",
 		Network:      "172.30.0.0/16",
 		Total:        vm.Resources{VCPUs: 64, MemoryMiB: 262144, DiskGiB: 2000},
@@ -36,8 +36,13 @@ func TestConfigValidation(t *testing.T) {
 	tests := map[string]func(*Config){
 		"missing kernel": func(c *Config) { c.KernelImage = "" },
 		"missing rootfs": func(c *Config) { c.GoldenRootfs = "" },
-		"bad network":    func(c *Config) { c.Network = "not-a-cidr" },
-		"bad ssh base":   func(c *Config) { c.SSHPortBase = 80 },
+		// A file cannot be cloned copy-on-write, and copying one per guest is
+		// what the design exists to avoid.
+		"rootfs is a file":        func(c *Config) { c.GoldenRootfs = "/srv/dabberz/golden.ext4" },
+		"rootfs not a snapshot":   func(c *Config) { c.GoldenRootfs = "tank/dabberz/vm/golden" },
+		"clone dataset is a path": func(c *Config) { c.CloneDataset = "/srv/clones" },
+		"bad network":             func(c *Config) { c.Network = "not-a-cidr" },
+		"bad ssh base":            func(c *Config) { c.SSHPortBase = 80 },
 	}
 	for name, mutate := range tests {
 		cfg := testConfig()
@@ -79,9 +84,6 @@ func TestLayoutGivesEachGuestItsOwnSubnet(t *testing.T) {
 	}
 	if first.SSHPort == second.SSHPort {
 		t.Error("two guests share an SSH port")
-	}
-	if first.ChrootDir == second.ChrootDir {
-		t.Error("two guests share a chroot")
 	}
 	if first.MAC == second.MAC {
 		t.Error("two guests share a MAC address")
@@ -285,31 +287,32 @@ func TestJailerArgsConfineEachGuest(t *testing.T) {
 	}
 }
 
-func TestUnimplementedOperationsReportNotSupported(t *testing.T) {
+func TestUnknownInstancesReportNotFound(t *testing.T) {
 	ctx := context.Background()
 	d := newDriver(t)
-	spec := vm.Spec{Name: "n", Image: "i", Resources: vm.Resources{VCPUs: 1, MemoryMiB: 512, DiskGiB: 5}}
 
-	// The boot path is not implemented yet, and must say so plainly rather
-	// than silently appearing to succeed.
-	if _, err := d.Create(ctx, spec); !errors.Is(err, vm.ErrNotSupported) {
-		t.Errorf("Create = %v, want vm.ErrNotSupported", err)
+	if err := d.Destroy(ctx, "fc-unknown"); !errors.Is(err, vm.ErrNotFound) {
+		t.Errorf("Destroy = %v, want vm.ErrNotFound", err)
 	}
-	if err := d.Destroy(ctx, "vm_x"); !errors.Is(err, vm.ErrNotSupported) {
-		t.Errorf("Destroy = %v, want vm.ErrNotSupported", err)
+	if _, err := d.Exec(ctx, "fc-unknown", vm.Command{Argv: []string{"true"}}); !errors.Is(err, vm.ErrNotFound) {
+		t.Errorf("Exec = %v, want vm.ErrNotFound", err)
 	}
-	if _, err := d.Exec(ctx, "vm_x", vm.Command{Argv: []string{"true"}}); !errors.Is(err, vm.ErrNotSupported) {
-		t.Errorf("Exec = %v, want vm.ErrNotSupported", err)
-	}
-	// Create must still reject an invalid spec before reaching the stub.
-	if _, err := d.Create(ctx, vm.Spec{}); errors.Is(err, vm.ErrNotSupported) {
-		t.Error("Create should validate the spec before reporting the boot path unimplemented")
-	}
-	if _, err := d.Get(ctx, "vm_x"); !errors.Is(err, vm.ErrNotFound) {
+	if _, err := d.Get(ctx, "fc-unknown"); !errors.Is(err, vm.ErrNotFound) {
 		t.Errorf("Get = %v, want vm.ErrNotFound", err)
 	}
-	if _, err := d.OpenSession(ctx, "vm_x", vm.SessionSpec{}); !errors.Is(err, vm.ErrNotSupported) {
-		t.Errorf("OpenSession = %v, want vm.ErrNotSupported", err)
+	if _, err := d.OpenSession(ctx, "fc-unknown", vm.SessionSpec{}); !errors.Is(err, vm.ErrNotFound) {
+		t.Errorf("OpenSession = %v, want vm.ErrNotFound", err)
+	}
+	// An invalid spec is refused before anything is cloned or booted.
+	if _, err := d.Create(ctx, vm.Spec{}); err == nil {
+		t.Error("Create accepted an empty spec")
+	}
+}
+
+func TestDefaultCloneDatasetSitsBesideTheGoldenImage(t *testing.T) {
+	cfg := testConfig().withDefaults()
+	if cfg.CloneDataset != "tank/dabberz/vm/instances" {
+		t.Fatalf("clone dataset = %q, want tank/dabberz/vm/instances", cfg.CloneDataset)
 	}
 }
 

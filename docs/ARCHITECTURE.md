@@ -265,11 +265,12 @@ trailing zeros, which breaks lexicographic ordering (`.1Z` sorts after
 
 ## What is not implemented
 
-- **Booting Firecracker guests.** The driver's layout, networking, slot
-  allocation, jailer invocation and machine-configuration generation are
-  implemented and tested. `Create`, `Destroy` and `Exec` return
-  `vm.ErrNotSupported`. Until that lands, the control plane runs on the local
-  driver.
+- **Firecracker in production.** The driver boots jailed guests from ZFS
+  clones of the golden image and runs commands and terminals in them over
+  vsock, tested against real guests. It is not deployed, does not yet isolate
+  guests' networks from each other and from the host, and forgets its guests
+  across a restart. [FIRECRACKER.md](FIRECRACKER.md) has the list. Until then
+  the control plane runs on the local driver.
 - **The embedded editor**, and SSH from outside the browser. The web shell is
   built: `vm.Interactive` opens a real pseudo-terminal inside a machine, and a
   sub-task's workspace carries a terminal beside its preview. An editor needs

@@ -67,8 +67,10 @@ driver:
     kernel_image: /srv/dabberz/vmlinux
     # One generic golden image with the whole toolchain (Go, Rust, Node, the
     # common databases, the browser stack), rather than one image per
-    # toolchain. Each VM boots a copy-on-write overlay of it.
-    golden_rootfs: /srv/dabberz/golden.ext4
+    # toolchain: a snapshot of an ext4 zvol, built by
+    # deploy/firecracker/build-golden.sh. Each VM boots a ZFS clone of it,
+    # under clone_dataset (default: "instances" beside the golden volume).
+    golden_rootfs: tank/dabberz/vm/golden@base
     chroot_base: /srv/dabberz/vm
     bridge_name: fcbr0
     network: 172.30.0.0/16

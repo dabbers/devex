@@ -32,9 +32,9 @@ scheduling with fork-time serialization, preview allocation, coding, browser
 verification, the merge gate, and completion — with spend accounted against
 each workstream's tripwire budget.
 
-Booting real Firecracker guests is **not** implemented yet — the driver's
-networking, layout and machine configuration are, but the boot path reports
-`ErrNotSupported`. See [Architecture](docs/ARCHITECTURE.md#what-is-not-implemented)
+Firecracker guests boot and run commands in development, but the driver is
+not deployed and does not yet isolate guests' networks
+([docs/FIRECRACKER.md](docs/FIRECRACKER.md)). See [Architecture](docs/ARCHITECTURE.md#what-is-not-implemented)
 for the full list.
 
 ## Quick start
