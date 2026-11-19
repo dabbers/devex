@@ -627,3 +627,6 @@ details.data pre {
   max-height: 600px;
   overflow-y: auto;
 }
+
+/* The app picked in the catalog, so the form below it has an obvious owner. */
+.service-row.chosen { box-shadow: inset 3px 0 0 var(--color-accent); }

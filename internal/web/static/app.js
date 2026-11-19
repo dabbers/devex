@@ -111,6 +111,14 @@ const STATE_TONE = {
   running: "busy",
   completed: "good",
   cancelled: "idle",
+  // Changes to a service.
+  open: "busy",
+  checking: "busy",
+  ready: "wait",
+  blocked: "warn",
+  promoting: "busy",
+  promoted: "good",
+  stopped: "idle",
 };
 
 // What each state means in the interface's own words, rather than the
@@ -134,6 +142,13 @@ const STATE_WORDS = {
   running: "running",
   completed: "complete",
   cancelled: "cancelled",
+  open: "being worked on",
+  checking: "checking",
+  ready: "ready to go live",
+  blocked: "checks failed",
+  promoting: "going live",
+  promoted: "live",
+  stopped: "stopped",
 };
 
 const stateLabel = (state) => STATE_WORDS[state] || String(state || "").replace(/_/g, " ");
@@ -379,12 +394,12 @@ async function renderRepos() {
 
   if (!data.repos?.length) {
     root.append(empty("No repositories yet. Add one with: dabberzctl repos add <name> <remote-url>"));
-    return live.subscribe(throttle(() => { if (currentPath() === "#/") renderRepos(); }, 2500));
+    return live.subscribe(throttle(() => { if (currentPath() === "#/repos") renderRepos(); }, 2500));
   }
 
   for (const summary of data.repos) root.append(repoBlock(summary));
 
-  return live.subscribe(throttle(() => { if (currentPath() === "#/") renderRepos(); }, 2500));
+  return live.subscribe(throttle(() => { if (currentPath() === "#/repos") renderRepos(); }, 2500));
 }
 
 function repoBlock(summary) {
@@ -453,7 +468,7 @@ async function renderNew(params) {
 
   const { repos } = await api.get("/v1/repos").catch(() => ({ repos: [] }));
   root.append(pageHead("New project", {
-    crumbs: [{ label: "Repositories", href: "#/" }],
+    crumbs: [{ label: "Repositories", href: "#/repos" }],
     lede: "One prompt, as many sub-tasks as it takes. Scope it to a repository first.",
   }));
 
@@ -507,7 +522,7 @@ async function renderNew(params) {
       el("div", { class: "field" }, el("label", { text: "Finished sub-tasks merge to" }), target),
       el("div", { class: "field" }, el("label", { text: "Merge them" }), timing),
       el("div", { class: "row-actions" }, submit,
-        el("a", { class: "btn btn-secondary", href: "#/", text: "Cancel" }))),
+        el("a", { class: "btn btn-secondary", href: "#/repos", text: "Cancel" }))),
     section("How a project runs",
       el("p", { class: "muted", style: "max-width:620px" },
         "Your prompt is split into sub-tasks you approve. Each one gets its own machine, " +
@@ -530,7 +545,7 @@ async function renderTask(taskID) {
     : task.state === "awaiting_plan" ? "Awaiting your approval" : stateLabel(task.state);
 
   root.append(pageHead(task.title, {
-    crumbs: [{ label: "Repositories", href: "#/" }, { label: "Project" }],
+    crumbs: [{ label: "Repositories", href: "#/repos" }, { label: "Project" }],
     lede,
     aside: tag(task.state),
   }));
@@ -676,7 +691,7 @@ async function renderFork(forkID) {
 
   root.append(pageHead(fork.name, {
     crumbs: [
-      { label: "Repositories", href: "#/" },
+      { label: "Repositories", href: "#/repos" },
       { label: "Project", href: `#/task/${fork.task_id}` },
       { label: "Sub-task" },
     ],
@@ -1385,7 +1400,7 @@ async function renderRepo(repoID) {
   clear(root);
 
   root.append(pageHead(repo.name, {
-    crumbs: [{ label: "Repositories", href: "#/" }],
+    crumbs: [{ label: "Repositories", href: "#/repos" }],
     lede: repo.remote_url,
     aside: el("a", { class: "btn btn-secondary", href: `#/new?repo=${repoID}`, text: "New project" }),
     row: [
@@ -1629,8 +1644,377 @@ function renderGithubLink(host, github) {
   host.append(row);
 }
 
+// ---------------------------------------------------------------- services
+//
+// The customer's side of the product: install an app, ask for a change to it
+// in English, look at the change running beside the live one, and decide
+// whether it goes live. "Service" is the interface's word for what the API
+// calls an installation, and "change" is the same word on both sides.
+
+// shortRevision is enough of a commit to tell two apart, and no more: a full
+// hash is noise to somebody who does not know what git is.
+const shortRevision = (rev) => (rev ? String(rev).slice(0, 7) : "none");
+
+// changeTitle turns a prompt into the line the history shows. The whole
+// prompt still goes to the agent; this is only the label.
+function changeTitle(prompt) {
+  const line = String(prompt).split("\n").map((s) => s.trim()).find(Boolean) || "";
+  return truncate(line, 80);
+}
+
+const external = (href, text, cls = "btn btn-secondary") =>
+  el("a", { class: cls, href, target: "_blank", rel: "noopener noreferrer", text });
+
+async function renderServices() {
+  const { installations = [] } = await api.get("/v1/installations");
+
+  const root = view();
+  clear(root);
+  root.append(pageHead("Your services", {
+    lede: "Apps that are yours, run for you. Ask for a change in plain words; nothing goes live until you say so.",
+    aside: el("a", { class: "btn btn-primary", href: "#/services/new", text: "New service" }),
+  }));
+
+  const refresh = throttle(() => { if (currentPath() === "#/") renderServices(); }, 2500);
+
+  if (!installations.length) {
+    root.append(empty("Nothing running yet. Pick an app from the catalog and it will be live in about a minute."));
+    return live.subscribe(refresh);
+  }
+
+  const list = el("div", { class: "services" });
+  for (const one of installations) {
+    list.append(el("div", { class: "service-row" },
+      el("div", {}, el("a", { class: "service-name", href: `#/service/${one.id}`, text: one.name })),
+      el("div", {}, tag(one.state), el("span", { class: "muted", text: `  ${one.app} ${one.app_version}` })),
+      el("div", {},
+        one.url && one.state === "running"
+          ? el("a", {
+              class: "mono", href: one.url, target: "_blank", rel: "noopener noreferrer",
+              text: one.url.replace(/^https?:\/\//, ""),
+            })
+          : el("span", { class: "muted", text: one.state === "failed" ? "did not come up" : "not live" }))));
+  }
+  root.append(section("Services", list));
+  return live.subscribe(refresh);
+}
+
+async function renderNewService() {
+  const { apps = [] } = await api.get("/v1/apps");
+
+  const root = view();
+  clear(root);
+  root.append(pageHead("New service", {
+    crumbs: [{ label: "Services", href: "#/" }],
+    lede: "Pick an app. It gets its own database, its own address and its own history of changes.",
+  }));
+
+  if (!apps.length) {
+    root.append(empty("The catalog is empty on this deployment."));
+    return null;
+  }
+
+  const form = el("div", { style: "max-width:620px" });
+  const catalog = el("div", { class: "services" });
+  let chosen = null;
+
+  const drawForm = () => {
+    clear(form);
+    if (!chosen) {
+      form.append(el("p", { class: "muted", text: "Choose an app above to set it up." }));
+      return;
+    }
+    const label = chosen.name || chosen.app;
+    const name = el("input", {
+      class: "input", placeholder: "e.g. support, hiring, intake",
+      autocomplete: "off", spellcheck: "false",
+    });
+    const domain = el("input", { class: "input", disabled: true, placeholder: "Custom domains are coming" });
+    const submit = el("button", { class: "btn btn-primary", text: `Deploy ${label}` });
+    const status = el("p", { class: "muted" });
+
+    submit.addEventListener("click", async () => {
+      if (!name.value.trim()) { toast("Give it a name; it is part of its address.", true); return; }
+      submit.disabled = true;
+      name.disabled = true;
+      // Installing builds the app and starts it, which is a minute rather
+      // than a moment; a button that just greys out looks like one that hung.
+      status.textContent = "Setting up its database, building it and starting it. This takes about a minute…";
+      try {
+        const created = await api.send("POST", "/v1/installations", { app: chosen.app, name: name.value.trim() });
+        location.hash = `#/service/${created.installation.id}`;
+      } catch (err) {
+        status.textContent = "";
+        toast(err.message, true);
+        submit.disabled = false;
+        name.disabled = false;
+      }
+    });
+
+    form.append(
+      el("h6", { text: `Set up ${label}` }),
+      el("div", { class: "field" }, el("label", { text: "Name" }), name,
+        el("p", { class: "muted", text: "What you call it. It becomes part of its address on ondabberz.link." })),
+      el("div", { class: "field" }, el("label", { text: "Domain" }), domain),
+      el("div", { class: "row-actions" }, submit, el("a", { class: "btn btn-secondary", href: "#/", text: "Cancel" })),
+      status);
+    name.focus();
+  };
+
+  const pick = (app) => {
+    chosen = app;
+    for (const row of catalog.children) row.classList.toggle("chosen", row.dataset.app === app.app);
+    drawForm();
+  };
+
+  for (const app of apps) {
+    const row = el("div", { class: "service-row" },
+      el("div", {}, el("strong", { text: app.name || app.app })),
+      el("div", { class: "muted", text: `${app.version}${app.license ? " · " + app.license : ""}` }),
+      el("div", {}, el("button", { class: "btn btn-secondary btn-sm", text: "Choose", onclick: () => pick(app) })));
+    row.dataset.app = app.app;
+    catalog.append(row);
+  }
+  // Said rather than hidden: it is the obvious next question, and a missing
+  // option reads as an oversight where a labelled one reads as a plan.
+  catalog.append(el("div", { class: "service-row" },
+    el("div", {}, el("strong", { text: "Your own app" })),
+    el("div", { class: "muted", text: "Bring a repository and describe it to the agent" }),
+    el("div", {}, el("span", { class: "tag tag-idle", text: "coming" }))));
+
+  root.append(section("Catalog", catalog), form);
+  if (apps.length === 1) pick(apps[0]);
+  else drawForm();
+  return null;
+}
+
+async function renderService(id) {
+  const [{ installation: one }, { changes = [] }] = await Promise.all([
+    api.get(`/v1/installations/${id}`),
+    api.get(`/v1/installations/${id}/changes`).catch(() => ({ changes: [] })),
+  ]);
+
+  const act = async (fn) => {
+    try { await fn(); } catch (err) { toast(err.message, true); }
+  };
+
+  const controls = [];
+  if (one.url && one.state === "running") controls.push(external(one.url, "Open ↗"));
+  if (one.previous_revision && one.state === "running") {
+    controls.push(el("button", {
+      class: "btn btn-secondary",
+      text: `Roll back to ${shortRevision(one.previous_revision)}`,
+      onclick: () => act(async () => {
+        if (!confirm(`Put ${one.name} back to the version before the last change? Its data is kept.`)) return;
+        await api.send("POST", `/v1/installations/${one.id}/rollback`, {});
+        toast("Rolled back.");
+        route();
+      }),
+    }));
+  }
+  if (one.state === "failed") {
+    controls.push(el("button", {
+      class: "btn btn-secondary", text: "Delete",
+      onclick: () => act(async () => {
+        if (!confirm(`Delete ${one.name}? It never came up, so there is no data to lose, and the name becomes free again.`)) return;
+        await api.send("DELETE", `/v1/installations/${one.id}`);
+        location.hash = "#/";
+      }),
+    }));
+  }
+
+  const root = view();
+  clear(root);
+  root.append(pageHead(one.name, {
+    crumbs: [{ label: "Services", href: "#/" }],
+    lede: `${one.app} ${one.app_version}`,
+    aside: tag(one.state),
+    row: controls,
+  }));
+
+  if (one.state === "failed") {
+    root.append(el("div", { class: "callout" },
+      el("p", {}, el("strong", { text: "This did not come up. " }), one.state_reason || ""),
+      el("p", { class: "muted", text: "Delete it and deploy it again under the same name to retry." })));
+    return null;
+  }
+
+  root.append(section("Live",
+    el("dl", { class: "kv" },
+      el("dt", { text: "Address" }),
+      el("dd", {}, one.url
+        ? el("a", { href: one.url, target: "_blank", rel: "noopener noreferrer", text: one.url })
+        : "not yet"),
+      el("dt", { text: "Version" }), el("dd", { class: "mono", text: shortRevision(one.revision) }),
+      el("dt", { text: "Before that" }), el("dd", { class: "mono", text: shortRevision(one.previous_revision) }),
+      el("dt", { text: "Up since" }), el("dd", { text: one.started_at ? relativeTime(one.started_at) : "—" }))));
+
+  // Asking for a change. One box: the prompt is both the change's label and
+  // the agent's first instruction, because to the customer they are the same
+  // sentence.
+  const prompt = el("textarea", {
+    class: "input", rows: "4",
+    placeholder: "What should change? e.g. “Add a thank-you page that links to our site”",
+  });
+  const start = el("button", { class: "btn btn-primary", text: "Start" });
+  const status = el("p", { class: "muted" });
+  start.addEventListener("click", async () => {
+    const text = prompt.value.trim();
+    if (!text) { toast("Say what should change first.", true); return; }
+    start.disabled = true;
+    prompt.disabled = true;
+    status.textContent = "Copying the app and its data to somewhere safe to work…";
+    try {
+      const { change } = await api.send("POST", `/v1/installations/${one.id}/changes`, { title: changeTitle(text) });
+      status.textContent = "Handing it to your agent…";
+      try {
+        await api.send("POST", `/v1/workspaces/${change.workspace_id}/messages`, { content: text });
+      } catch (err) {
+        // The change exists and is worth going to; the agent can be asked
+        // again from there.
+        toast(`The change is open, but the agent did not take the request: ${err.message}`, true);
+      }
+      location.hash = `#/change/${change.id}`;
+    } catch (err) {
+      status.textContent = "";
+      toast(err.message, true);
+      start.disabled = false;
+      prompt.disabled = false;
+    }
+  });
+  root.append(section("Ask for a change",
+    el("div", { style: "max-width:620px" },
+      el("p", { class: "muted", text:
+        "Your agent works on a copy: its own machine, its own copy of the data and its own preview. " +
+        "The live service is untouched until you approve." }),
+      el("div", { class: "field" }, prompt),
+      el("div", { class: "row-actions" }, start),
+      status)));
+
+  const list = el("div", { class: "services" });
+  for (const change of changes) {
+    const open = !["promoted", "abandoned"].includes(change.state);
+    list.append(el("div", { class: "service-row" },
+      el("div", {}, el("a", { class: "service-name", href: `#/change/${change.id}`, text: change.title })),
+      el("div", {}, tag(change.state), el("span", { class: "muted", text: `  ${relativeTime(change.created_at)}` })),
+      el("div", {}, change.preview_url && open
+        ? el("a", { class: "mono", href: change.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+        : null)));
+  }
+  root.append(section("Changes", changes.length ? list : empty("No changes yet.")));
+
+  return live.subscribe(throttle(() => {
+    // Never under a half-written prompt: a redraw would throw it away.
+    if (currentPath() === `#/service/${id}` && !prompt.value && !start.disabled) renderService(id);
+  }, 3000));
+}
+
+async function renderChange(id) {
+  const { change } = await api.get(`/v1/changes/${id}`);
+  const [{ installation: one }, wsData] = await Promise.all([
+    api.get(`/v1/installations/${change.installation_id}`),
+    change.workspace_id
+      ? api.get(`/v1/workspaces/${change.workspace_id}`).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const ws = wsData && wsData.workspace;
+  const finished = change.state === "promoted" || change.state === "abandoned";
+
+  const busy = (button, words) => { button.disabled = true; button.textContent = words; };
+  const act = async (fn) => {
+    try { await fn(); } catch (err) { toast(err.message, true); route(); }
+  };
+
+  const controls = [];
+  if (change.preview_url && !finished) controls.push(external(change.preview_url, "Open preview ↗"));
+  if (!finished) {
+    const check = el("button", { class: "btn btn-secondary", text: "Check it" });
+    check.addEventListener("click", () => act(async () => {
+      busy(check, "Checking… (tests, then a real browser)");
+      await api.send("POST", `/v1/changes/${change.id}/check`, {});
+      route();
+    }));
+    controls.push(check);
+
+    const approve = el("button", {
+      class: "btn btn-primary", text: "Approve and go live",
+      disabled: change.state !== "ready",
+      title: change.state === "ready" ? null : "Check it first; it goes live only once its checks pass",
+    });
+    approve.addEventListener("click", () => act(async () => {
+      if (!confirm(`Make this the live version of ${one.name}? The current one stays a click away.`)) return;
+      busy(approve, "Going live…");
+      await api.send("POST", `/v1/changes/${change.id}/promote`, {});
+      toast(`${one.name} is live with this change.`);
+      location.hash = `#/service/${one.id}`;
+    }));
+    controls.push(approve);
+
+    controls.push(el("button", {
+      class: "btn btn-ghost", text: "Abandon",
+      onclick: () => act(async () => {
+        if (!confirm("Throw this change away, with its copy of the data? The live service is not affected.")) return;
+        await api.send("DELETE", `/v1/changes/${change.id}`);
+        location.hash = `#/service/${one.id}`;
+      }),
+    }));
+  }
+
+  const root = view();
+  clear(root);
+  root.append(pageHead(change.title, {
+    crumbs: [{ label: "Services", href: "#/" }, { label: one.name, href: `#/service/${one.id}` }, { label: "Change" }],
+    lede: change.state_reason || null,
+    aside: tag(change.state),
+    row: controls,
+  }));
+
+  if (change.state === "ready") {
+    root.append(el("div", { class: "callout" },
+      el("p", { text: "Checks passed. Look at the preview, then approve it to make it live. " +
+        "If you change your mind afterwards, rolling back is one click on the service." })));
+  } else if (change.state === "open") {
+    root.append(el("p", { class: "muted", text:
+      "Talk to your agent below. When it says it is done, check it: the app's own tests run, " +
+      "then a real browser looks at the preview as you." }));
+  }
+
+  if (change.checks && change.checks.length) {
+    const rows = el("div", {});
+    for (const check of change.checks) {
+      rows.append(el("div", { class: "subtask" },
+        el("div", { class: "subtask-head" },
+          el("span", { class: check.passed ? "svc-ok" : "svc-down", text: check.passed ? "✓" : "✗" }),
+          el("strong", { text: check.name })),
+        check.detail ? el("p", { class: "muted mono", style: "white-space:pre-wrap", text: check.detail }) : null));
+    }
+    root.append(section("Checks", rows));
+  }
+
+  if (ws) {
+    root.append(workspacePanel({
+      id: ws.id,
+      instance_id: finished ? null : ws.instance_id,
+      shellPath: `/v1/workspaces/${ws.id}/shell`,
+      conversation: true,
+      running: ws.state === "running" && !finished,
+    }, finished ? [] : (wsData.previews || [])));
+  }
+
+  return live.subscribe((event) => {
+    // Lifecycle only: the chat keeps itself current, and a redraw on every
+    // agent message would throw away whatever is half-typed in it.
+    if (currentPath() !== `#/change/${id}`) return;
+    if (event.workspace_id === change.workspace_id && String(event.type).startsWith("workspace.")) route();
+  });
+}
+
 const ROUTES = [
-  [/^#\/$/, () => renderRepos(), "repos"],
+  [/^#\/$/, () => renderServices(), "services"],
+  [/^#\/services\/new$/, () => renderNewService(), "services"],
+  [/^#\/service\/([\w-]+)$/, (m) => renderService(m[1]), "services"],
+  [/^#\/change\/([\w-]+)$/, (m) => renderChange(m[1]), "services"],
+  [/^#\/repos$/, () => renderRepos(), "repos"],
   [/^#\/workspaces$/, () => renderWorkspaces(), "workspaces"],
   [/^#\/workspace\/([\w-]+)$/, (m) => renderWorkspace(m[1]), "workspaces"],
   [/^#\/activity$/, (_, params) => renderActivity(params), "activity"],
@@ -1670,7 +2054,7 @@ async function route() {
   const root = view();
   clear(root);
   root.append(pageHead("Not found"));
-  root.append(el("a", { href: "#/", text: "Back to your repositories" }));
+  root.append(el("a", { href: "#/", text: "Back to your services" }));
 }
 
 function highlightTab(active) {
