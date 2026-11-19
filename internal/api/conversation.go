@@ -196,6 +196,21 @@ func (s *Server) runAgentTurn(ws *domain.Workspace, prompt, reply *domain.Messag
 			reply.State = domain.MessageDone
 			reply.Content = res.Escalation.Message
 		}
+		// The platform restarts the services, never the agent. They run with
+		// a database credential and a port only the platform holds, so an
+		// agent that stops one cannot start it again -- which is how a change
+		// on dbz-alpha ended with its preview dead and the agent asking the
+		// customer to restart it. Rebuilding on what the agent left is also
+		// what makes the preview show the turn's work at all.
+		if s.workspaces != nil && len(services) > 0 {
+			if err := s.workspaces.Rebuild(ctx, ws); err != nil {
+				s.logger.Error("could not rebuild after an agent turn", "workspace", ws.ID, "error", err)
+				reply.Content = strings.TrimSpace(reply.Content + "\n\n" +
+					"(After this turn the platform rebuilt the app and restarted it, and that failed, " +
+					"so the preview may not show this work: " + err.Error() + ")")
+			}
+		}
+
 		if err := s.store.FinishMessage(ctx, reply); err != nil {
 			s.logger.Error("could not record the agent's reply", "message", reply.ID, "error", err)
 			return

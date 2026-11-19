@@ -177,7 +177,7 @@ func BuildConversationPrompt(ws *domain.Workspace, repo *domain.Repo, project *d
 	b.WriteString("- This is their machine and their branch. Changes you make are live on the preview above; there is no deploy step.\n")
 	b.WriteString("- Commit as you go.\n")
 	b.WriteString("- Do what was asked and stop. They are watching the preview and will tell you what they think, so do not keep going into work they did not ask for.\n")
-	b.WriteString("- If a service needs restarting for your change to show, restart it.\n")
+	b.WriteString("- Never stop, kill or restart this project's services. They run with settings only the platform has, such as the database credentials and the port, so one you stop you cannot start again. When your turn ends the platform rebuilds the project and restarts every service on your work, so the preview shows it. To try your work before then, build it and run its tests.\n")
 	b.WriteString("- If the request is ambiguous enough that guessing could waste their time, ask instead of guessing.\n")
 
 	b.WriteString("\n" + escalationInstructions)
