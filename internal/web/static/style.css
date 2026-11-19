@@ -151,7 +151,9 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
   flex: none;
 }
 
-.tabs { display: flex; gap: var(--space-3); }
+/* Wraps rather than running off the band: five tabs do not fit beside the
+   brand on a phone, and a row that cannot wrap widens the whole page. */
+.tabs { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); min-width: 0; }
 .tabs a {
   color: color-mix(in srgb, #fff 72%, transparent);
   text-decoration: none;
@@ -455,7 +457,9 @@ details.data pre {
 .toast.bad { background: var(--color-accent); }
 
 @media (max-width: 720px) {
-  h1 { font-size: 32px; }
+  /* The tabs take their own line under the brand. */
+  .tabs { flex: 1 1 100%; }
+  h1 { font-size: 32px; overflow-wrap: anywhere; }
   h2 { font-size: 25px; }
   .view { padding-top: var(--space-3); }
   .event { display: block; }
