@@ -180,6 +180,19 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 					pr.Out.Host = pr.In.Host
 					pr.SetXForwarded()
 				},
+				// Every cookie an app sets is kept to the hostname that set
+				// it. Every customer's preview is a sibling under one
+				// registrable domain, so a cookie scoped to that domain
+				// reaches every other customer's installation: one app
+				// could sign a visitor into a session of its choosing on
+				// somebody else's, or shadow their cookies. Only the
+				// Domain attribute goes, not the cookie, so an app
+				// configured with a cookie domain keeps working on its own
+				// hostname.
+				ModifyResponse: func(resp *http.Response) error {
+					hostOnlyCookies(resp.Header)
+					return nil
+				},
 				// Flush every write immediately. Hot reload and server-sent
 				// events are both long-lived streams, and the default
 				// buffering makes a live preview arrive in batches.
@@ -286,6 +299,34 @@ func stripCookie(header http.Header, name string) {
 	}
 	if len(kept) > 0 {
 		header.Set("Cookie", strings.Join(kept, "; "))
+	}
+}
+
+// hostOnlyCookies removes the Domain attribute from every Set-Cookie in a
+// response, which makes each cookie the browser's to send back only to the
+// hostname that set it.
+//
+// Edited as text rather than parsed and reserialised, so attributes this
+// package has never heard of survive. It covers only what a server sends: a
+// page's own script can still write a cookie for the whole domain, which only
+// listing the preview domain as a public suffix stops.
+func hostOnlyCookies(header http.Header) {
+	values := header.Values("Set-Cookie")
+	if len(values) == 0 {
+		return
+	}
+	header.Del("Set-Cookie")
+	for _, value := range values {
+		parts := strings.Split(value, ";")
+		kept := parts[:1]
+		for _, attribute := range parts[1:] {
+			key, _, _ := strings.Cut(attribute, "=")
+			if strings.EqualFold(strings.TrimSpace(key), "domain") {
+				continue
+			}
+			kept = append(kept, attribute)
+		}
+		header.Add("Set-Cookie", strings.Join(kept, ";"))
 	}
 }
 
