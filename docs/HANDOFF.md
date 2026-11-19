@@ -142,7 +142,9 @@ the host, checked on the host.
   customer's data, and deleting that wants an export and a confirmation
   first. Deleting frees the name, so installing again is the retry.
   `hiring` and `recruiting` were deleted with it on the host, along with the
-  machine moved aside by hand; only `intake` is left.
+  machine moved aside by hand; only `intake` is left. Deleting releases every
+  workspace on the repository, not only the installation's own, since all
+  their records go with it.
 - Any installation could set a cookie for every other one, since all
   previews are siblings under one domain. The edge now strips `Domain` from
   every `Set-Cookie` an app sends, so each cookie stays on its own hostname
@@ -193,6 +195,30 @@ rather than a CDN error means Cloudflare is reaching the origin), and an
 installed app's **public** surface, which is deliberately anonymous — so a
 form being filled in can be checked end to end from outside. Signing in is the
 exception and stays with the owner.
+
+## The panel drives the loop
+
+`panel.dabberz.com` opens on **Services**: the catalog and a deploy form
+(name only; custom domains and bring-your-own apps are shown as coming), a
+page per service with its address, version, rollback and a box that opens a
+change and hands the prompt to the agent, and a page per change with the
+agent's chat, the live preview, a shell, the checks, and approve-and-go-live,
+enabled only once its checks pass. The older Repositories / New project
+screens are still there; "New project" needs a pay-per-token planner key and
+is not part of the product direction.
+
+All of it was clicked through against a throwaway daemon on the host
+(loopback, single-user, its own data directory and the scratch cluster),
+except promote, whose API was already proven on `intake`. To do that again:
+leave `data.public_host` out of the throwaway config, or the app is pointed at
+the production cluster on 5432 and fails to log in.
+
+What the owner asked for and is not built yet, and where it is being built:
+the agent running on the customer's own Claude, Codex or Grok subscription;
+several changes open at once on one service, going live in the customer's
+order, with the later agent taking any conflict; a "connect your agent"
+screen once the first exists. A failed install releases its machine and with
+it the service log that says why, so the reason is only what the record says.
 
 ## The next milestone
 

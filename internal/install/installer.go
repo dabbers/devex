@@ -2,7 +2,6 @@ package install
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -422,13 +421,18 @@ func (i *Installer) Delete(ctx context.Context, installation *domain.Installatio
 			store.ErrConflict, installation.Name, installation.State)
 	}
 
-	if installation.WorkspaceID != "" && i.deps.Workspaces != nil {
-		ws, err := i.deps.Store.GetWorkspace(ctx, installation.WorkspaceID)
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-		case err != nil:
+	// Every workspace on the repository, not only the one that was meant to
+	// serve it: deleting the repository's row takes all their records with
+	// it, and a machine whose record is gone is held for good with nothing
+	// left that knows to give it back.
+	if i.deps.Workspaces != nil {
+		all, err := i.deps.Store.ListWorkspaces(ctx, store.WorkspaceFilter{
+			RepoID: installation.RepoID, IncludeEphemeral: true,
+		})
+		if err != nil {
 			return err
-		default:
+		}
+		for _, ws := range all {
 			if err := i.deps.Workspaces.Release(ctx, ws); err != nil {
 				return err
 			}

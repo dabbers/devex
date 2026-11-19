@@ -61,6 +61,20 @@ func TestAFailedInstallationCanBeDeletedAndTriedAgain(t *testing.T) {
 		t.Fatalf("no repository to remove, so this proves nothing: %v", err)
 	}
 
+	// A workspace somebody opened on the same repository by hand. It is not
+	// the installation's, and its record goes with the repository all the
+	// same, so its machine has to go too.
+	extra := &domain.Workspace{
+		UserID: owner.ID, RepoID: installation.RepoID, ProjectID: installation.ProjectID,
+		Name: "by-hand", Branch: "main", State: domain.WorkspaceStopped,
+	}
+	if err := databases.store.CreateWorkspace(ctx, extra); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.deps.Workspaces.Start(ctx, extra); err != nil {
+		t.Logf("the extra workspace did not come up (%v); its machine is what matters", err)
+	}
+
 	if err := installer.Delete(ctx, installation); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -84,7 +98,7 @@ func TestAFailedInstallationCanBeDeletedAndTriedAgain(t *testing.T) {
 	}
 	// The machine is the one that matters for capacity, and its service dies
 	// with its database whether or not anything released it, so it is looked
-	// for on disk. This installation was the only one with a machine.
+	// for on disk. Nothing else in this test has one.
 	machines, err := os.ReadDir(filepath.Join(filepath.Dir(installer.opts.RepoDir), "vms"))
 	if err != nil {
 		t.Fatal(err)
