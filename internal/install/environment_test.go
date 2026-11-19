@@ -105,10 +105,10 @@ func TestRefusingToStartBeatsFailingAtThreeInTheMorning(t *testing.T) {
 		// would have been refused by the object store.
 		"storage without its secret key": {func(p *Provided) { p.Storage.SecretKey = "" }, "storage"},
 		"storage without its access key": {func(p *Provided) { p.Storage.AccessKey = "" }, "storage"},
-		"no realtime": {func(p *Provided) { p.RealtimeURL = "" }, "realtime"},
-		"no search":   {func(p *Provided) { p.SearchURL = "" }, "search"},
-		"no payments": {func(p *Provided) { p.Payments = Payments{} }, "payments"},
-		"no secret":   {func(p *Provided) { p.Secrets = nil }, "TURNSTILE_SECRET"},
+		"no realtime":                    {func(p *Provided) { p.RealtimeURL = "" }, "realtime"},
+		"no search":                      {func(p *Provided) { p.SearchURL = "" }, "search"},
+		"no payments":                    {func(p *Provided) { p.Payments = Payments{} }, "payments"},
+		"no secret":                      {func(p *Provided) { p.Secrets = nil }, "TURNSTILE_SECRET"},
 	}
 
 	for name, test := range tests {

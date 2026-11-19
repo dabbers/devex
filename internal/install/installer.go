@@ -45,7 +45,16 @@ type Deps struct {
 	// it a change is judged by its own suite alone, which notices a broken
 	// query and not a blank page.
 	Verifier *verify.Verifier
-	Logger   *slog.Logger
+	// Passes lets the verifier see a preview as the change's owner. Optional:
+	// without it the browser looks as a stranger, which for an app whose
+	// front page is behind sign-in means a check that cannot pass.
+	Passes Passes
+	Logger *slog.Logger
+}
+
+// Passes mints preview passes. It is previewpass.Issuer, narrowed.
+type Passes interface {
+	Mint(host string, user *domain.User, ttl time.Duration) (string, error)
 }
 
 // Options configure where an installer puts things.

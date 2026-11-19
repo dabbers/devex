@@ -85,6 +85,9 @@ type job struct {
 	PreviewURL string `json:"preview_url"`
 	Intent     string `json:"intent"`
 	Profile    string `json:"profile"`
+	// Pass lets the harness see the preview as its owner. Sent only to the
+	// preview's own host, and never written to the report.
+	Pass string `json:"pass,omitempty"`
 }
 
 // check is one thing the harness looked at, matching verify.Check.

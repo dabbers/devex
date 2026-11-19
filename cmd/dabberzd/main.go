@@ -33,6 +33,7 @@ import (
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/pipeline"
 	"github.com/dabbers/devex/internal/preview"
+	"github.com/dabbers/devex/internal/previewpass"
 	"github.com/dabbers/devex/internal/proxy"
 	"github.com/dabbers/devex/internal/proxy/caddy"
 	"github.com/dabbers/devex/internal/proxy/hostmux"
@@ -197,6 +198,18 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	}
 
 	router, hostRouter := buildRouter(cfg, visitors, logger)
+	// One issuer for the edge that checks passes and the installer that mints
+	// them, with a key only this process holds. Only for an edge in this
+	// process: an external router would not understand a pass, and minting
+	// one for it would hand the verifier a credential nothing accepts.
+	var passes *previewpass.Issuer
+	if hostRouter != nil {
+		passes, err = previewpass.NewRandom()
+		if err != nil {
+			return nil, err
+		}
+		hostRouter.WithPasses(passes)
+	}
 	allocator, err := preview.New(db, router, cfg.Preview)
 	if err != nil {
 		return nil, err
@@ -336,11 +349,17 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 				repoOwner = &install.Owner{UID: int(runAs.UID), GID: int(runAs.GID)}
 			}
 		}
-		installer, err = install.New(install.Deps{
+		deps := install.Deps{
 			Store: db, Catalog: catalog, Workspaces: workspaces,
 			Vault: vault, Databases: provisioner, Verifier: verifier,
 			Logger: logger,
-		}, install.Options{
+		}
+		// Set only when there is one: a nil issuer stored in the interface
+		// would read as present and fail on the first check.
+		if passes != nil {
+			deps.Passes = passes
+		}
+		installer, err = install.New(deps, install.Options{
 			RepoDir: filepath.Join(cfg.DataDir, "repos"),
 			// What the blocks that exist offer. Identity is the platform's
 			// own, so an app behind the edge is told who is asking.
