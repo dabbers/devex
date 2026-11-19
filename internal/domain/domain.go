@@ -583,6 +583,17 @@ func (u *Usage) Add(other Usage) {
 	u.Wall += other.Wall
 }
 
+// AgentProvider names whose subscription drives the coding agent. It is
+// always the customer's own -- never one the platform pays for -- and which
+// one is their choice.
+type AgentProvider string
+
+const (
+	ProviderClaude AgentProvider = "claude"
+	ProviderCodex  AgentProvider = "codex"
+	ProviderGrok   AgentProvider = "grok"
+)
+
 // EscalationKind classifies why a fork stopped and asked for the user.
 type EscalationKind string
 
@@ -683,6 +694,11 @@ const (
 	// trail, which is stored in the clear.
 	EventSecretSet     EventType = "secret.set"
 	EventSecretDeleted EventType = "secret.deleted"
+	// Agent credential events record that an account's own agent
+	// subscription credential was stored or removed, and for which provider;
+	// never the value.
+	EventAgentCredentialSet     EventType = "agent_credential.set"
+	EventAgentCredentialDeleted EventType = "agent_credential.deleted"
 	// EventShellOpened records a person attaching a terminal to a machine an
 	// agent is working in, from where they can change anything the agent can.
 	EventShellOpened EventType = "shell.opened"

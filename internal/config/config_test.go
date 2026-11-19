@@ -161,8 +161,8 @@ preview:
   domain: dab.im
 llm:
   api_key: from-file
-agent:
-  oauth_token: from-file
+claude:
+  owner_fallback: true
 `)
 	key := strings.Repeat("cd", 32)
 	t.Setenv(EnvMasterKey, key)
@@ -178,8 +178,8 @@ agent:
 	if cfg.MasterKey != key {
 		t.Fatalf("master key = %q, want the environment's", cfg.MasterKey)
 	}
-	if cfg.LLM.APIKey != "from-env" || cfg.Agent.OAuthToken != "token-from-env" {
-		t.Fatalf("credentials were not overridden: %+v %+v", cfg.LLM, cfg.Agent)
+	if cfg.LLM.APIKey != "from-env" || cfg.Claude.Token != "token-from-env" {
+		t.Fatalf("credentials were not overridden: %+v", cfg.LLM)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestWarningsNameEveryLimitingGap(t *testing.T) {
 	warnings := strings.Join(cfg.Warnings(), "\n")
 	// A configuration can be valid and still unable to do the job; the daemon
 	// should say which parts are inert rather than failing later.
-	for _, want := range []string{"orchestrator API key", "Claude Code token", "local VM driver"} {
+	for _, want := range []string{"orchestrator API key", "local VM driver"} {
 		if !strings.Contains(warnings, want) {
 			t.Errorf("warnings do not mention %q:\n%s", want, warnings)
 		}
@@ -295,7 +295,9 @@ verify:
 func TestAFullyConfiguredDeploymentWarnsAboutNothing(t *testing.T) {
 	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
 	t.Setenv(EnvOrchestrator, "key")
-	t.Setenv(EnvClaudeToken, "token")
+	// No daemon Claude token: each account brings its own, which is the
+	// configuration with nothing to warn about.
+	t.Setenv(EnvClaudeToken, "")
 
 	// A complete deployment identifies its requests, so this uses a provider.
 	// auth.kind single is expected to warn and is covered separately.
@@ -384,5 +386,39 @@ func TestClerkRequiresAUsablePublishableKey(t *testing.T) {
 				t.Fatalf("publishable key %q was accepted", key)
 			}
 		})
+	}
+}
+
+func TestTheDaemonClaudeTokenIsOnlyAnOwnerFallbackAndSaysSo(t *testing.T) {
+	t.Setenv(EnvMasterKey, strings.Repeat("ab", 32))
+	base := "owner: me@example.com\nauth:\n  kind: single\npreview:\n  domain: dab.im\n"
+
+	// A token in the environment with the fallback off funds nothing. Saying
+	// so is what stops someone believing their runs are paid for by it.
+	t.Setenv(EnvClaudeToken, "daemon-token")
+	cfg, err := Load(writeConfig(t, base))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Claude.OwnerFallback {
+		t.Fatal("the owner fallback must be off unless asked for")
+	}
+	if warnings := strings.Join(cfg.Warnings(), "\n"); !strings.Contains(warnings, "set but unused") {
+		t.Errorf("an unused daemon token was not warned about:\n%s", warnings)
+	}
+
+	// Turned on, the warning names whose runs it pays for.
+	cfg, err = Load(writeConfig(t, base+"claude:\n  owner_fallback: true\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if warnings := strings.Join(cfg.Warnings(), "\n"); !strings.Contains(warnings, "me@example.com's agent runs use the daemon's") {
+		t.Errorf("the fallback being on was not said out loud:\n%s", warnings)
+	}
+
+	// Turned on with nothing to fall back to is a mistake, refused at load.
+	t.Setenv(EnvClaudeToken, "")
+	if _, err := Load(writeConfig(t, base+"claude:\n  owner_fallback: true\n")); err == nil {
+		t.Error("owner_fallback with no token should fail validation")
 	}
 }

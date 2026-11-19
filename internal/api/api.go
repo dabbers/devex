@@ -51,6 +51,7 @@ type Server struct {
 	workspaces *workspace.Manager
 	agent      *agent.Runner
 	gitTokens  GitLinks
+	agentCreds AgentCreds
 	installer  *install.Installer
 	logger     *slog.Logger
 	streamGap  time.Duration
@@ -94,6 +95,10 @@ type Deps struct {
 	// GitLinks reports and resolves each account's GitHub connection.
 	// Optional: without it the UI says the deployment does not link accounts.
 	GitTokens GitLinks
+	// AgentCreds reports what each account's agent runs authenticate with.
+	// Optional: without it the account's credential can still be stored, but
+	// the API cannot say whether a fallback applies.
+	AgentCreds AgentCreds
 	// Authn identifies the person behind each request. It is required: without
 	// it every request would be anonymous, and this process hands out a shell.
 	// internal/auth.Single is the explicit way to run without a provider.
@@ -128,7 +133,7 @@ func New(deps Deps) (*Server, error) {
 		preview: deps.Preview, vault: deps.Vault, memory: deps.Memory,
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
 		authn: deps.Authn, visitors: deps.Visitors, workspaces: deps.Workspaces, agent: deps.Agent,
-		gitTokens: deps.GitTokens, installer: deps.Installer,
+		gitTokens: deps.GitTokens, agentCreds: deps.AgentCreds, installer: deps.Installer,
 		logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
@@ -171,6 +176,12 @@ func (s *Server) Handler() http.Handler {
 	// The signed-in account's own GitHub connection.
 	rt.handle("GET /v1/github", s.githubLink)
 	rt.handle("POST /v1/github/recheck", s.recheckGithubLink)
+
+	// The signed-in account's own subscription credential, which drives its
+	// agent runs. One per account, tagged with its provider.
+	rt.handle("GET /v1/account/agent", s.agentCredentialStatus)
+	rt.handle("PUT /v1/account/agent", s.putAgentCredential)
+	rt.handle("DELETE /v1/account/agent", s.deleteAgentCredential)
 
 	rt.handle("GET /v1/repos", s.listRepos)
 	rt.handle("POST /v1/repos", s.createRepo)

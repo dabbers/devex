@@ -256,6 +256,8 @@ func (p *Pipeline) workspaceFor(ctx context.Context, fork *domain.Fork, repo *do
 // or the run failed outright.
 func (p *Pipeline) code(ctx context.Context, fork *domain.Fork, instanceID, prompt string, env map[string]string) (bool, error) {
 	res, err := p.agent.Run(ctx, agent.Request{
+		// The fork's owner pays for its agent, with their own token.
+		UserID:     fork.UserID,
 		InstanceID: instanceID,
 		Prompt:     prompt,
 		Env:        env,

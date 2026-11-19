@@ -12,8 +12,10 @@
 #                             user's email for attribution; sign-in itself is
 #                             verified against the issuer's keys.
 #   DABBERZ_DATABASE_ADMIN_DSN  written by the bootstrap into data.env.
-#   CLAUDE_CODE_OAUTH_TOKEN   the agent's own credential. Without it a change
-#                             can be opened and nobody can work on it.
+#   CLAUDE_CODE_OAUTH_TOKEN   only read with claude.owner_fallback below, and
+#                             then only for the owner's runs. Every account
+#                             stores its own (PUT /v1/account/agent) and its
+#                             runs use that; without one they are refused.
 #   DABBERZ_STORAGE_SECRET_KEY  the object store's secret key, when storage is
 #                             real. The access key is not secret and sits in
 #                             this file; the secret key never does.
@@ -134,6 +136,14 @@ agent:
   # would be a directory at the root of the host, which the agent's account
   # cannot create.
   session_dir: ""
+
+# Whose subscription drives an agent run: always the account the run belongs
+# to, from the credential it stored with PUT /v1/account/agent. The fallback
+# lets the owner's runs use CLAUDE_CODE_OAUTH_TOKEN until the owner stores
+# their own; it never applies to any other account. Off unless set. Turning it on
+# with the variable empty stops the daemon from starting.
+claude:
+  owner_fallback: false
 
 verify:
   profiles: 4

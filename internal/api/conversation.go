@@ -160,6 +160,9 @@ func (s *Server) runAgentTurn(ws *domain.Workspace, prompt, reply *domain.Messag
 		progress := newProgressWriter(ctx, s, reply)
 
 		res, err := s.agent.Run(ctx, agent.Request{
+			// The workspace's owner pays: their Claude token, never anyone
+			// else's, and a refusal if they have none.
+			UserID:     ws.UserID,
 			InstanceID: ws.InstanceID,
 			Prompt: agent.BuildConversationPrompt(
 				ws, repo, project, services, previews, prompt.Content, history),

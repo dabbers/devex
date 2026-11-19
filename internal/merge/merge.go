@@ -221,6 +221,7 @@ func (r *Reviewer) qualityGate(ctx context.Context, req Request) (bool, string, 
 	}
 
 	res, err := r.agent.Run(ctx, agent.Request{
+		UserID:     req.Fork.UserID,
 		InstanceID: req.InstanceID,
 		Dir:        req.Dir,
 		Env:        req.Env,
@@ -239,6 +240,7 @@ func (r *Reviewer) qualityGate(ctx context.Context, req Request) (bool, string, 
 // resolveConflicts hands the conflicted merge to the coding agent.
 func (r *Reviewer) resolveConflicts(ctx context.Context, req Request, files []string) (domain.Usage, bool, error) {
 	res, err := r.agent.Run(ctx, agent.Request{
+		UserID:     req.Fork.UserID,
 		InstanceID: req.InstanceID,
 		Dir:        req.Dir,
 		Env:        req.Env,

@@ -300,11 +300,30 @@ tasks and neither is cosmetic.
   machine config already exist. **Hard constraint: the guest rootfs must be a copy-on-write
   overlay of the golden image, never a copy** — a 40 GiB copy per fork on these
   spinning disks is minutes before an agent can start.
-- **The agent's Claude token is process-wide.** `CLAUDE_CODE_OAUTH_TOKEN` is
-  read once from the daemon's environment, so one subscription funds every
-  agent run. That contradicts the whole bring-your-own position. It needs the
-  shape `internal/gitauth` already uses: resolved per workspace from that
-  customer's own stored credential.
+- **The agent's credential was process-wide; it is now per account, and the
+  customer's own subscription (not yet deployed).** Each account stores one
+  credential, tagged with its provider -- `claude`, `codex` or `grok` -- with
+  `PUT /v1/account/agent` (`{"provider": "claude", "credential": "..."}`; for
+  Claude, the token `claude setup-token` prints). `GET` says which provider is
+  set, whether it can run, and what runs would use; `DELETE` removes it. It is
+  sealed in its own table (`user_credentials`, bound to the account and the
+  provider, so a row moved or relabelled will not open) rather than as a repo
+  secret, which every service would see. `internal/agentauth` resolves it;
+  `agent.Runner` requires the run's account, refuses any provider but Claude
+  with "not supported yet", and sets the token itself, over any repo secret of
+  the same name. Codex and Grok are recognised and storable but have no runner:
+  adding one is a runner, not a schema change. An account with nothing stored
+  has its runs **refused** with a message saying how to add one -- never run
+  on someone else's. No response, log line or audit entry carries the value.
+  **What the owner must set before deploying this:** either store a Claude
+  token for the owner's account with `PUT /v1/account/agent`, or set
+  `claude.owner_fallback: true` in `/etc/dabberz/dabberz.yaml`, which lets the
+  *owner's* runs (and only the owner's) use `CLAUDE_CODE_OAUTH_TOKEN` until
+  they store their own. It is off by default; on with the variable empty, the
+  daemon refuses to start. Without one of the two, every agent run on dbz-alpha
+  is refused. Still platform-paid: the planning model's
+  `DABBERZ_ORCHESTRATOR_API_KEY`, which contradicts the never-a-platform-key
+  rule and needs the same treatment.
 
 ## How this codebase expects to be worked on
 

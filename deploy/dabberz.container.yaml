@@ -10,7 +10,8 @@
 #
 #   DABBERZ_MASTER_KEY            required; secrets key (dabberzctl keygen)
 #   DABBERZ_ORCHESTRATOR_API_KEY  optional; without it planning is unavailable
-#   CLAUDE_CODE_OAUTH_TOKEN       optional; without it the agent cannot run
+#   CLAUDE_CODE_OAUTH_TOKEN       optional; used only with claude.owner_fallback,
+#                                 and then only for the owner's own runs
 
 # Set this to the operator's address before deploying. A real one does not
 # belong in a template that lives in a public repository.

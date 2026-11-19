@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dabbers/devex/internal/agent"
+	"github.com/dabbers/devex/internal/agentauth"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/vm"
 )
@@ -92,12 +93,20 @@ func agentSaying(driver *scriptDriver, text string) *agent.Runner {
 		"usage":          map[string]any{"input_tokens": 500, "output_tokens": 100},
 	})
 	driver.on("claude", ok(string(body)))
-	return agent.New(driver, agent.Config{})
+	return agent.New(driver, ownTokens{}, agent.Config{})
+}
+
+// ownTokens gives every account a token of its own, derived from its id, so
+// a run carrying the wrong one is visible in what the driver received.
+type ownTokens struct{}
+
+func (ownTokens) AgentCredential(_ context.Context, userID string) (agentauth.Credential, error) {
+	return agentauth.Credential{Provider: domain.ProviderClaude, Secret: "tok-" + userID}, nil
 }
 
 func testFork() *domain.Fork {
 	return &domain.Fork{
-		ID: "fork_1", Name: "ratings", Description: "add star ratings",
+		ID: "fork_1", UserID: "usr_1", Name: "ratings", Description: "add star ratings",
 		Branch: "dabberz/ratings-abc123",
 	}
 }

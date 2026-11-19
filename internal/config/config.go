@@ -38,7 +38,10 @@ const (
 	EnvDataAdminDSN = "DABBERZ_DATABASE_ADMIN_DSN"
 	// EnvStorageSecret is the object store's secret key.
 	EnvStorageSecret = "DABBERZ_STORAGE_SECRET_KEY"
-	EnvClaudeToken   = "CLAUDE_CODE_OAUTH_TOKEN"
+	// EnvClaudeToken is the daemon's own Claude token. It funds nothing on
+	// its own: agent runs use each account's stored token, and this is read
+	// only as the owner's fallback when claude.owner_fallback is on.
+	EnvClaudeToken = "CLAUDE_CODE_OAUTH_TOKEN"
 	// Clerk's publishable key is not a credential -- it is sent to the browser
 	// -- but it is read from the environment alongside the secret so a
 	// deployment configures both in one place.
@@ -66,9 +69,28 @@ type Config struct {
 	Caddy     caddy.Config        `yaml:"caddy"`
 	LLM       llm.Config          `yaml:"llm"`
 	Agent     agent.Config        `yaml:"agent"`
+	Claude    ClaudeConfig        `yaml:"claude"`
 	Verify    verify.Config       `yaml:"verify"`
 	Merge     merge.Config        `yaml:"merge"`
 	Tripwire  tripwire.Thresholds `yaml:"tripwire"`
+}
+
+// ClaudeConfig is the daemon's own Claude token and when it may be used.
+//
+// Each account stores its own subscription credential (PUT
+// /v1/account/agent) and its runs use that and nothing else; an account
+// without one has its runs refused. The daemon's
+// own token is only ever a fallback for the owner, and only when asked for.
+type ClaudeConfig struct {
+	// OwnerFallback lets the owner's runs use the daemon's
+	// CLAUDE_CODE_OAUTH_TOKEN when the owner has stored no token of their
+	// own. Off by default. It never applies to any other account: with it on,
+	// a second customer without a token is refused exactly as before, rather
+	// than quietly spending the owner's subscription.
+	OwnerFallback bool `yaml:"owner_fallback"`
+	// Token is the daemon's token, from the environment only. It is not read
+	// from the file, which is meant to be safe to check in.
+	Token string `yaml:"-"`
 }
 
 // CatalogConfig is where installable apps come from.
@@ -235,7 +257,7 @@ func (c *Config) applyEnv() {
 		c.LLM.APIKey = v
 	}
 	if v := os.Getenv(EnvClaudeToken); v != "" {
-		c.Agent.OAuthToken = v
+		c.Claude.Token = v
 	}
 	if v := os.Getenv(EnvClerkPublishable); v != "" {
 		c.Auth.Clerk.PublishableKey = v
@@ -323,6 +345,9 @@ func (c *Config) Validate() error {
 	if c.MasterKey == "" {
 		problems = append(problems, "a secrets master key is required; set "+EnvMasterKey+" (generate one with `dabberzctl keygen`)")
 	}
+	if c.Claude.OwnerFallback && c.Claude.Token == "" {
+		problems = append(problems, "claude.owner_fallback is on but "+EnvClaudeToken+" is empty, so there is nothing to fall back to")
+	}
 
 	if len(problems) > 0 {
 		return fmt.Errorf("config: %s", strings.Join(problems, "; "))
@@ -338,8 +363,17 @@ func (c *Config) Warnings() []string {
 	if c.LLM.APIKey == "" {
 		warnings = append(warnings, "no orchestrator API key ("+EnvOrchestrator+"); planning and monorepo discovery are unavailable")
 	}
-	if c.Agent.OAuthToken == "" {
-		warnings = append(warnings, "no Claude Code token ("+EnvClaudeToken+"); coding agents will not authenticate")
+	switch {
+	case c.Claude.OwnerFallback && c.Claude.Token == "":
+		// Not a warning: New refuses this, so it is reported by Validate.
+	case c.Claude.OwnerFallback:
+		warnings = append(warnings,
+			"claude.owner_fallback is on: "+c.Owner+"'s agent runs use the daemon's "+EnvClaudeToken+
+				" until they store a Claude token of their own. No other account ever uses it")
+	case c.Claude.Token != "":
+		warnings = append(warnings,
+			EnvClaudeToken+" is set but unused: agent runs use each account's own stored subscription credential. "+
+				"Set claude.owner_fallback: true to let the owner's runs use it, or remove it")
 	}
 	if c.Verify.UIInstanceID == "" && !c.Verify.VM.AutoProvision {
 		warnings = append(warnings, "no shared UI VM (verify.ui_instance_id is unset and verify.vm.auto_provision is off); verification cannot run, so no fork can reach the merge gate")
