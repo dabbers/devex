@@ -42,9 +42,11 @@ Public address `147.135.70.81`.
 - **Everything inside an instance runs as `dabberz`**, not root
   (`driver.local.run_as`): the agent, builds, customers' services, shells. Each
   instance has its own `home/` beside its `workspace/`.
-- Both domains are proxied by Cloudflare. `ondabberz.link` is on Flexible and
-  works over HTTPS. `panel.dabberz.com` answers only over plain HTTP (HTTPS is
-  a 521) — see below.
+- Both domains are proxied by Cloudflare, both zones on Flexible with Always
+  Use HTTPS, so a visitor's plain HTTP gets a 301 at Cloudflare's edge.
+  Flexible means the hop from Cloudflare to this machine is plain HTTP — see
+  below. Never redirect to HTTPS at the origin while that is so: the origin
+  sees every request as HTTP and would loop.
 - Ports 80 and 443 accept only Cloudflare's ranges and the host itself
   (`/etc/nftables.d/dabberz-edge.nft`, from the bootstrap's `firewall` step).
   SSH is untouched by it.
@@ -64,11 +66,13 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
 
 ## Known wrong, in priority order
 
-1. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
-   expects 443, which nothing serves, so HTTPS is a 521 and only plain HTTP
-   works. Do not sign in over it. The daemon does not terminate TLS itself, so
-   this needs a Cloudflare origin certificate plus something on 443 (a TLS
-   listener in the daemon, or a terminator in front), then Full (strict).
+1. **Nothing has TLS at the origin.** Visitors reach Cloudflare over HTTPS,
+   but Cloudflare reaches this machine over plain HTTP across the internet, so
+   panel sign-in cookies cross that hop in the clear. The daemon does not
+   terminate TLS itself, so this needs a Cloudflare origin certificate plus
+   something on 443 (a TLS listener in the daemon, or a terminator in front),
+   then Full (strict) on both zones, port 80 closed in the edge firewall, and
+   only then HSTS. The owner chose to defer it.
 2. **Clerk is a development instance** — the sign-in card carries the orange
    "Development mode" badge, so the keys are `pk_test_`/`sk_test_`. Dev
    instances share OAuth credentials and cannot vend provider tokens, which
@@ -176,9 +180,10 @@ exception and stays with the owner.
 
 ## The next milestone
 
-The first of the known-wrong items: TLS at the origin for `panel.dabberz.com`.
-Until it exists the owner cannot sign in to the panel safely, and the panel is
-where a person rather than a curl command drives the loop above. After that,
+The first of the known-wrong items, TLS at the origin, deferred by the owner.
+Until it exists signing in to the panel sends its cookie over a plain-HTTP hop,
+and the panel is where a person rather than a curl command drives the loop
+above. After that,
 the two gaps below, which are what stand between this and a second account.
 
 ## Two structural gaps, both blocking a second account
