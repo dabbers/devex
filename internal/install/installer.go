@@ -114,6 +114,14 @@ func New(deps Deps, opts Options) (*Installer, error) {
 		if err := os.Chown(opts.RepoDir, 0, opts.RepoOwner.GID); err != nil {
 			return nil, fmt.Errorf("install: give %s to the workspace group: %w", opts.RepoDir, err)
 		}
+		// The group has to be able to enter it, and MkdirAll leaves an
+		// existing directory's mode alone. On dbz-alpha it was 0700: the
+		// repositories inside were the account's, and the account could not
+		// reach them, so the first promote failed with "does not appear to
+		// be a git repository".
+		if err := os.Chmod(opts.RepoDir, 0o750); err != nil {
+			return nil, fmt.Errorf("install: %w", err)
+		}
 		entries, err := os.ReadDir(opts.RepoDir)
 		if err != nil {
 			return nil, fmt.Errorf("install: %w", err)
