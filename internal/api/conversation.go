@@ -52,18 +52,6 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if s.agent == nil {
-		writeStatus(w, http.StatusNotImplemented, "this deployment has no coding agent configured")
-		return
-	}
-	// The agent works on the machine, so there has to be one. Starting the
-	// workspace here would hide a minutes-long boot behind what looks like
-	// sending a message.
-	if ws.State != domain.WorkspaceRunning || ws.InstanceID == "" {
-		writeStatus(w, http.StatusConflict, "start this workspace before asking the agent for anything")
-		return
-	}
-
 	// Not production. A workspace that serves an installation is the promoted
 	// revision or it is wrong: the next deploy resets its checkout, so an
 	// agent's work there is either thrown away or -- until then -- being
@@ -77,6 +65,26 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	case !errors.Is(err, store.ErrNotFound):
 		writeError(w, err)
+		return
+	}
+
+	s.askAgent(w, r, ws, content, nil)
+}
+
+// askAgent starts an agent turn in a workspace and answers the request with
+// the prompt and the reply that will fill in as the agent works. Extra fields
+// go into the response beside them.
+func (s *Server) askAgent(w http.ResponseWriter, r *http.Request, ws *domain.Workspace, content string, extra map[string]any) {
+	ctx := r.Context()
+	if s.agent == nil {
+		writeStatus(w, http.StatusNotImplemented, "this deployment has no coding agent configured")
+		return
+	}
+	// The agent works on the machine, so there has to be one. Starting the
+	// workspace here would hide a minutes-long boot behind what looks like
+	// sending a message.
+	if ws.State != domain.WorkspaceRunning || ws.InstanceID == "" {
+		writeStatus(w, http.StatusConflict, "start this workspace before asking the agent for anything")
 		return
 	}
 
@@ -105,7 +113,11 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	// The response is written before the run starts, and deliberately: the
 	// background turn writes to this same reply row as it goes, so encoding it
 	// alongside a running turn is a read of something being written.
-	writeJSON(w, http.StatusAccepted, map[string]any{"message": prompt, "reply": reply})
+	body := map[string]any{"message": prompt, "reply": reply}
+	for k, v := range extra {
+		body[k] = v
+	}
+	writeJSON(w, http.StatusAccepted, body)
 	s.runAgentTurn(ws, prompt, reply)
 }
 

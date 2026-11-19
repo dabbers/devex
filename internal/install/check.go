@@ -38,7 +38,9 @@ const (
 // Check runs a change's critical-path suite and records what it found.
 func (i *Installer) Check(ctx context.Context, change *domain.Change) (*domain.Change, error) {
 	switch change.State {
-	case domain.ChangeOpen, domain.ChangeReady, domain.ChangeBlocked:
+	// Conflicted too: once its agent has resolved the conflict, checking it
+	// is how it gets back to ready.
+	case domain.ChangeOpen, domain.ChangeReady, domain.ChangeBlocked, domain.ChangeConflicted:
 	default:
 		return nil, fmt.Errorf("%w: a change is checked while it is open, not while it is %s",
 			store.ErrConflict, change.State)
@@ -66,6 +68,19 @@ func (i *Installer) Check(ctx context.Context, change *domain.Change) (*domain.C
 		return nil, err
 	}
 	change.Revision = revision
+
+	// A conflict is over once production is part of the branch, however it
+	// got there. Until then the files stay recorded: the next promote will
+	// meet the same conflict, and the customer should see why beforehand.
+	if len(change.Conflicts) > 0 {
+		upToDate, err := i.deps.Workspaces.Contains(ctx, working, installation.Revision)
+		if err != nil {
+			return nil, err
+		}
+		if upToDate {
+			change.Conflicts = nil
+		}
+	}
 
 	// The preview is rebuilt on that revision before either check looks at
 	// it. Without this the app's suite compiles the source as it stands while

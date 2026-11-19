@@ -99,6 +99,12 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    made by this session. Leave it unless its owner says otherwise.
 7. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
+8. **A rollback leaves the serving branch ahead of what is live.** Rollback
+   redeploys the previous revision but leaves `main` on the rolled-back
+   commit, and new changes branch from `main`, so the next promote ships the
+   rolled-back commit again. Older than concurrent changes, but they make it
+   likelier to bite. Rollback should move the branch, or changes should start
+   from the installation's `revision`.
 
 ## What this session fixed, all running on the host
 
@@ -178,6 +184,62 @@ from Cloudflare to this machine is plain HTTP.
 
 The agent said 7 of Forms' own tests skip in its workspace for want of
 `FORMS_TEST_DATABASE_URL`; the check's suite, which has the database, passed.
+
+## Several changes at once
+
+An installation can have several changes open together ("add a checkout
+page", "add PostHog tracking"), each with its own branch, machine, preview and
+copy of the data. Not run on the host yet: proven by the tests in
+`internal/install/concurrent_test.go`, against real git and real Postgres.
+
+- **Capacity.** Opening asks the driver for room first (`Workspaces.Room`). A
+  host with no room answers **503** and nothing is made — no row, no copy of the
+  data. Two opens racing for the last slot: the driver refuses the loser's
+  machine, and that change is released and recorded `abandoned`, not left
+  `blocked` holding a database.
+- **Order is the customer's.** Each `promote` call means "this one next". One
+  installation's promotes queue behind each other in-process, so the second
+  always starts from what the first left live.
+- **Catching up is a merge, not a rebase.** When production is not already in
+  the change's branch, production's revision is merged into it in the change's
+  workspace. A rebase would rewrite the commits the checks and the agent's
+  conversation refer to, and replay them one at a time, so one overlap can
+  conflict several times; a merge is one commit with production as a parent,
+  so the push stays a fast-forward.
+- **Clean merge:** the change's copy of the data is replaced by a fresh copy of
+  production's, then the change is checked again (suite + browser) on the
+  merged commit, and only then goes live. The fresh copy is the point: the
+  preview restarts on it, so the merged code's migrations meet production's
+  current rows there before they meet production.
+- **Conflict:** nothing goes live. The merge is aborted, so the workspace is
+  exactly as the agent left it; the change becomes `conflicted` with
+  `conflicts: ["README.md", ...]`. `POST /v1/changes/{id}/resolve` sends that
+  change's own agent a message saying what went live meanwhile, which files
+  conflict, and to `git merge <production revision>`, keep both, test and
+  commit. It is an ordinary turn on the customer's subscription. Then `check`
+  (which accepts `conflicted` and clears `conflicts` once production is in the
+  branch) and `promote` as usual.
+- **Data is never copied back.** Promote deploys code only; the app migrates
+  on restart against production's own data. Uncommitted tracked edits in a
+  change refuse the promote (`409`), since they would not go live and a merge
+  would sweep them into a commit nobody checked.
+
+### API, for the panel
+
+| Call | Body | Answer |
+|---|---|---|
+| `POST /v1/installations/{id}/changes` | `{"title": "Add a checkout page"}` | `201 {"change": Change}`; `503 {"error"}` when the host is full; `409 {"change", "error"}` when it was made but failed to start |
+| `GET /v1/installations/{id}/changes` | — | `200 {"changes": [Change]}`, newest first; open ones have a state below other than `promoted`/`abandoned` |
+| `GET /v1/changes/{id}` | — | `200 {"change": Change}` |
+| `POST /v1/changes/{id}/check` | — | `200 {"change": Change}`; state `ready` or `blocked`. Accepted from `open`, `ready`, `blocked`, `conflicted` |
+| `POST /v1/changes/{id}/promote` | — | `200 {"installation": Installation}`; `409 {"change": Change, "error"}` when refused — the change's `state` says why: `conflicted` (see `conflicts`), `blocked` (re-check after catching up failed), or unchanged (not ready, unchecked commits, uncommitted edits). Synchronous, and minutes long when it has to catch up and re-check |
+| `POST /v1/changes/{id}/resolve` | — | `202 {"message", "reply", "change"}` like `POST /v1/workspaces/{ws}/messages`; the reply streams on that workspace. `409` unless the change is `conflicted`, or if its agent is already busy |
+| `DELETE /v1/changes/{id}` | — | `204`; abandons it and frees its machine and data |
+
+`Change` gains `base_revision` (the commit it started from; production being
+elsewhere means another change went live meanwhile — compare with the
+installation's `revision`) and `conflicts` (file paths), and its `state` gains
+`conflicted`.
 
 ## Checking it from outside, without SSH
 

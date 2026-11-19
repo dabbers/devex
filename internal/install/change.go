@@ -2,14 +2,17 @@ package install
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/id"
 	"github.com/dabbers/devex/internal/store"
+	"github.com/dabbers/devex/internal/vm"
 )
 
 // Changing a running installation.
@@ -41,17 +44,14 @@ func (i *Installer) OpenChange(ctx context.Context, installation *domain.Install
 		return nil, fmt.Errorf("install: say what the change is for; it is what you will see in the history")
 	}
 
-	// One at a time. Two changes in flight against one installation means two
-	// previews, two scratch databases, and a promote that has to reason about
-	// what the other one did -- which is a merge conflict presented to
-	// somebody who does not know what git is.
-	existing, err := i.deps.Store.OpenChangeFor(ctx, installation.ID)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		return nil, fmt.Errorf("%w: %s already has a change open (%q); finish or abandon it first",
-			store.ErrConflict, installation.Name, existing.Title)
+	// Several at once, each with its own branch, machine and copy of the
+	// data -- but only as many as the host has room for. Asked before
+	// anything is spent: the driver would refuse the machine anyway, but
+	// only after the data had been copied, leaving a half-made change and a
+	// database behind to explain.
+	if err := i.deps.Workspaces.Room(ctx); err != nil {
+		return nil, fmt.Errorf("install: no room for another change to %s; finish or abandon one first: %w",
+			installation.Name, err)
 	}
 
 	// The id is minted here rather than by the store, because the branch is
@@ -69,6 +69,19 @@ func (i *Installer) OpenChange(ctx context.Context, installation *domain.Install
 	}
 
 	if err := i.prepare(ctx, installation, change); err != nil {
+		// Two changes opened at the same moment can both see room for one.
+		// The driver turns the second away rather than overcommit, and that
+		// change is given back whole rather than left blocked holding a copy
+		// of the data: there is nothing in it worth keeping.
+		if errors.Is(err, vm.ErrNoCapacity) {
+			i.release(ctx, change)
+			change.State, change.StateReason = domain.ChangeAbandoned, "the host had no room for it"
+			if updateErr := i.deps.Store.UpdateChange(ctx, change); updateErr != nil {
+				i.deps.Logger.Error("could not record a change turned away", "change", change.ID, "error", updateErr)
+			}
+			return nil, fmt.Errorf("install: no room for another change to %s; finish or abandon one first: %w",
+				installation.Name, err)
+		}
 		return change, i.blocked(ctx, change, err)
 	}
 	return change, nil
@@ -126,6 +139,10 @@ func (i *Installer) prepare(ctx context.Context, installation *domain.Installati
 		return err
 	}
 	change.Revision = revision
+	// Where it started. Production being anywhere else by the time it is
+	// promoted means another change went live while this one was open, and
+	// the panel can say so before anybody presses promote.
+	change.BaseRevision = revision
 	return i.deps.Store.UpdateChange(ctx, change)
 }
 
@@ -137,15 +154,35 @@ func (i *Installer) prepare(ctx context.Context, installation *domain.Installati
 // submissions -- and a change tested against an empty database has not been
 // tested, so it has to be a copy of the real thing rather than a blank one.
 func (i *Installer) copyData(ctx context.Context, installation *domain.Installation, change *domain.Change) (*database.Database, error) {
-	live := &database.Database{
-		Name: installation.Database, Role: database.RoleFor(installation.Database),
-		Owner: installation.ID,
-	}
-	return i.deps.Databases.Fork(ctx, live, change.ID)
+	return i.deps.Databases.Fork(ctx, i.liveData(installation), change.ID)
 }
 
 // Promote makes a checked change live.
+//
+// Several changes can be open at once, and they go live in the order the
+// customer promotes them: each call means "this one next". One installation's
+// promotes wait for each other, so the second always starts from what the
+// first left live.
+//
+// When production has moved on since the change started -- another change
+// went live first -- this one is brought up to date before it follows, by
+// merging production into its branch. If that merges cleanly, the result is
+// checked again, against a fresh copy of production's data, before it goes
+// live; what passed before was a different commit. If the two changes edit the
+// same lines, nothing goes live: the change becomes conflicted, with the
+// files recorded, for its own agent to resolve.
 func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain.Installation, error) {
+	unlock := i.promotions.lock(change.InstallationID)
+	defer unlock()
+
+	// Read again under the lock. A promote that was waiting may be holding a
+	// copy from before the one ahead of it changed things.
+	fresh, err := i.deps.Store.GetChange(ctx, change.ID)
+	if err != nil {
+		return nil, err
+	}
+	*change = *fresh
+
 	if !change.Promotable() {
 		return nil, fmt.Errorf("%w: this change is %s; it goes live once its checks have passed",
 			store.ErrConflict, change.State)
@@ -178,6 +215,33 @@ func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain
 			store.ErrConflict, short(change.Revision), short(current))
 	}
 
+	// The same promise about edits not yet committed. What goes live is the
+	// commit, so they would not -- and a merge would either refuse over them
+	// or carry them into a commit nobody checked.
+	uncommitted, err := i.deps.Workspaces.Uncommitted(ctx, working)
+	if err != nil {
+		return nil, err
+	}
+	if len(uncommitted) > 0 {
+		return nil, fmt.Errorf("%w: this change has edits that are not committed (%s); "+
+			"commit or discard them and check it again",
+			store.ErrConflict, strings.Join(uncommitted, ", "))
+	}
+
+	// Another change went live while this one was open. Without this the
+	// push below is refused as not a fast-forward and the change is merely
+	// blocked -- or, with a push that did not insist on fast-forwards, this
+	// change would go live without the one before it.
+	upToDate, err := i.deps.Workspaces.Contains(ctx, working, installation.Revision)
+	if err != nil {
+		return nil, err
+	}
+	if !upToDate {
+		if err := i.catchUp(ctx, installation, change, working); err != nil {
+			return nil, err
+		}
+	}
+
 	change.State = domain.ChangePromoting
 	if err := i.deps.Store.UpdateChange(ctx, change); err != nil {
 		return nil, err
@@ -186,18 +250,21 @@ func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain
 	// Before anything is deployed. Code and data roll back differently, and
 	// the snapshot is what makes the second one possible at all.
 	if installation.Database != "" && i.deps.Databases != nil {
-		live := &database.Database{
-			Name: installation.Database, Role: database.RoleFor(installation.Database),
-			Owner: installation.ID,
-		}
-		if _, err := i.deps.Databases.Snapshot(ctx, live, "before promoting "+change.ID); err != nil {
+		if _, err := i.deps.Databases.Snapshot(ctx, i.liveData(installation), "before promoting "+change.ID); err != nil {
 			return nil, i.blocked(ctx, change, fmt.Errorf("install: snapshot before promoting: %w", err))
 		}
 	}
 
 	// The branch the change was worked on becomes the branch the installation
-	// serves. Fast-forward only: anything else means something moved while
-	// this change was open, which is a decision rather than a deploy.
+	// serves. Fast-forward only: anything else means something moved that
+	// catching up did not account for, which is a decision rather than a
+	// deploy.
+	//
+	// Code only. The change's copy of the data is never brought back: it is
+	// production as it was plus whatever the agent experimented with, and
+	// production has gone on taking real submissions since. The app's
+	// migrations run when the serving workspace restarts on the new revision,
+	// against production's own data as it stands.
 	if err := i.deps.Workspaces.Publish(ctx, working, serving.Branch); err != nil {
 		return nil, i.blocked(ctx, change, err)
 	}
@@ -214,6 +281,7 @@ func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain
 
 	change.State = domain.ChangePromoted
 	change.StateReason = ""
+	change.Conflicts = nil
 	change.PromotedAt = &now
 	if err := i.deps.Store.UpdateChange(ctx, change); err != nil {
 		return nil, err
@@ -227,6 +295,174 @@ func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain
 	i.deps.Logger.Info("promoted",
 		"installation", installation.ID, "change", change.ID, "revision", change.Revision)
 	return installation, nil
+}
+
+// catchUp brings a change up to date with what production now serves, and
+// checks it again.
+//
+// A merge rather than a rebase. The change's commits are the ones its checks
+// and its agent's conversation refer to; a rebase rewrites every one of them
+// and replays them one by one, so a single overlap can come up as a conflict
+// several times over. A merge is one commit that says "production, then this",
+// with the history the agent made left as it was -- and it has production's
+// own commit as a parent, so pushing the result is still a fast-forward.
+func (i *Installer) catchUp(ctx context.Context, installation *domain.Installation, change *domain.Change, working *domain.Workspace) error {
+	message := fmt.Sprintf("Bring %q up to date with production at %s", change.Title, short(installation.Revision))
+	conflicts, err := i.deps.Workspaces.Merge(ctx, working, installation.Revision, message)
+	if err != nil {
+		return i.blocked(ctx, change, fmt.Errorf("install: bring the change up to date with production: %w", err))
+	}
+	if len(conflicts) > 0 {
+		change.State = domain.ChangeConflicted
+		change.Conflicts = conflicts
+		change.StateReason = "production has moved on since this change started, and the two edit the same lines in " +
+			strings.Join(conflicts, ", ")
+		if err := i.deps.Store.UpdateChange(ctx, change); err != nil {
+			return err
+		}
+		i.deps.Logger.Info("change conflicts with production",
+			"change", change.ID, "production", installation.Revision, "files", conflicts)
+		return fmt.Errorf("%w: %s; hand it to this change's agent to resolve, then check it again",
+			store.ErrConflict, change.StateReason)
+	}
+	change.Conflicts = nil
+
+	// A fresh copy of production's data before checking again. The copy the
+	// change was opened with is as old as the change, and production may
+	// have taken rows since that the merged code's migrations have never met
+	// -- which is exactly where a migration fails. The preview restarts on
+	// the new copy as part of the check, so the migrations meet it there
+	// first, rather than on production.
+	stale, err := i.refreshData(ctx, installation, change)
+	if err != nil {
+		return i.blocked(ctx, change, fmt.Errorf("install: copy production's current data for the re-check: %w", err))
+	}
+	if stale != nil {
+		defer i.dropScratch(ctx, change, stale)
+	}
+
+	checked, err := i.Check(ctx, change)
+	if err != nil {
+		return err
+	}
+	if !checked.Passed() {
+		return fmt.Errorf("%w: brought up to date with production, this change no longer passes its checks; "+
+			"nothing went live", store.ErrConflict)
+	}
+	return nil
+}
+
+// refreshData replaces a change's copy of the data with a new copy of
+// production's, and returns the old one for the caller to drop once nothing is
+// using it. Nil, with no error, for an installation without a database.
+func (i *Installer) refreshData(ctx context.Context, installation *domain.Installation, change *domain.Change) (*database.Database, error) {
+	if installation.Database == "" || i.deps.Databases == nil || change.Database == "" {
+		return nil, nil
+	}
+	fresh, err := i.copyData(ctx, installation, change)
+	if err != nil {
+		return nil, err
+	}
+	stale := &database.Database{
+		Name: change.Database, Role: database.RoleFor(change.Database), Owner: change.ID,
+	}
+	change.Database = fresh.Name
+	if err := i.deps.Store.UpdateChange(ctx, change); err != nil {
+		return nil, err
+	}
+	return stale, nil
+}
+
+// ConflictBrief is what a conflicted change's own agent is told, in its own
+// workspace, so that it can resolve the conflict knowing what both sides were
+// for.
+//
+// That agent is the one to ask because it made this change and its
+// conversation holds why. It runs on the customer's own subscription like any
+// other turn in that workspace; the platform makes no model call of its own.
+func (i *Installer) ConflictBrief(ctx context.Context, change *domain.Change) (string, error) {
+	if change.State != domain.ChangeConflicted {
+		return "", fmt.Errorf("%w: this change is %s; only a conflicted change has a conflict to hand over",
+			store.ErrConflict, change.State)
+	}
+	installation, err := i.deps.Store.GetInstallation(ctx, change.InstallationID)
+	if err != nil {
+		return "", err
+	}
+
+	// What went live in the meantime, in the words it was asked for in, so
+	// the agent knows what the other side of the conflict was trying to do.
+	others, err := i.deps.Store.ListChanges(ctx, installation.ID, 100)
+	if err != nil {
+		return "", err
+	}
+	var since []string
+	for _, other := range others {
+		if other.ID != change.ID && other.State == domain.ChangePromoted &&
+			other.PromotedAt != nil && other.PromotedAt.After(change.CreatedAt) {
+			since = append(since, fmt.Sprintf("%q", other.Title))
+		}
+	}
+	went := "another change"
+	if len(since) > 0 {
+		went = strings.Join(since, ", ")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Production has moved on since this change was started. While you were working on %q, "+
+		"%s went live, and production is now at commit %s.\n\n", change.Title, went, installation.Revision)
+	b.WriteString("Bringing this branch up to date with production conflicts in:\n")
+	for _, file := range change.Conflicts {
+		fmt.Fprintf(&b, "- %s\n", file)
+	}
+	fmt.Fprintf(&b, "\nPlease resolve it here:\n"+
+		"1. Run `git fetch origin` and then `git merge %s`.\n"+
+		"2. Resolve each conflict so that both changes still do what they were for: keep what production now has "+
+		"and add what this change is for. Do not drop either side to make the conflict go away.\n"+
+		"3. Build the app and run its tests.\n"+
+		"4. Commit the merge. Do not push: the platform checks the result, and the customer decides when it goes live.\n\n"+
+		"When you are done, say in a sentence or two how you combined them.", installation.Revision)
+	return b.String(), nil
+}
+
+// liveData names an installation's own database.
+func (i *Installer) liveData(installation *domain.Installation) *database.Database {
+	return &database.Database{
+		Name: installation.Database, Role: database.RoleFor(installation.Database),
+		Owner: installation.ID,
+	}
+}
+
+// dropScratch drops one of a change's old copies of the data, logging rather
+// than failing: a lingering scratch database is untidy, not wrong.
+func (i *Installer) dropScratch(ctx context.Context, change *domain.Change, scratch *database.Database) {
+	if err := i.deps.Databases.Drop(ctx, scratch); err != nil {
+		i.deps.Logger.Error("could not drop a change's old copy of the data",
+			"change", change.ID, "database", scratch.Name, "error", err)
+	}
+}
+
+// perKey is a set of mutexes, one per key, made on first use. Never shrunk:
+// one per installation that has ever promoted is a few bytes each.
+type perKey struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+// lock takes the key's mutex and returns the function that gives it back.
+func (p *perKey) lock(key string) func() {
+	p.mu.Lock()
+	if p.locks == nil {
+		p.locks = map[string]*sync.Mutex{}
+	}
+	m, ok := p.locks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		p.locks[key] = m
+	}
+	p.mu.Unlock()
+	m.Lock()
+	return m.Unlock
 }
 
 // Rollback returns an installation to the revision it was serving before the
