@@ -1,12 +1,13 @@
 # Handoff: dbz-alpha, and what to do next
 
-For an agent picking this up with SSH access to the host. Written at commit
-`cd25e2a` on branch `claude/trusting-brown-dns9i5`.
+For an agent picking this up with SSH access to the host. Updated at the end of
+the first session that had it, on branch `claude/trusting-brown-dns9i5`; the
+host runs that branch's head. Verify rather than trust what follows — it was
+accurate when written and the machine has moved on.
 
-The previous session had no access to the machine, so every step was a command
-described in chat and an output pasted back. That is why this document exists:
-you can do in ten minutes what took a day that way. Verify rather than trust
-what follows — it was accurate when written and the machine has moved on.
+From Windows the SSH alias lives in the Debian WSL distro, not Git Bash:
+`wsl.exe -d Debian -- ssh dbz-alpha`. `/opt/dabberz/src` is root-only, so work
+there under `sudo`.
 
 ## What dabberz is
 
@@ -32,108 +33,153 @@ Public address `147.135.70.81`.
   re-run; `--storage` is the only destructive part and it is already done).
 - ZFS pool `tank`, mirrored across `sda5` and `sdb6`, ~1.65 TiB usable.
   Datasets: `tank/postgres` (8k recordsize), `tank/dabberz/{data,vm,snapshots}`.
-- Postgres 17, data directory moved to `/srv/pgdata` on the pool. Confirmed.
-- `dabberzd` runs under systemd from `/opt/dabberz/bin/dabberzd`, config
-  `/etc/dabberz/dabberz.yaml`, source checkout `/opt/dabberz/src`.
-- DNS: `panel.dabberz.com` → the host, direct. `*.ondabberz.link` → Cloudflare,
-  proxied. Two different registrable domains, which the code requires.
+- Postgres 17 on `/srv/pgdata`, `full_page_writes` off. The daemon's admin
+  role `dabberz` is CREATEROLE/CREATEDB, not superuser.
+- `dabberzd` runs under systemd from `/opt/dabberz/bin/dabberzd`, as root with
+  `UMask=0027`. Config `/etc/dabberz/dabberz.yaml`, secrets
+  `/etc/dabberz/dabberzd.env`, source `/opt/dabberz/src`. Every edit made to
+  either file this session left a dated `.bak-*` beside it.
+- **Everything inside an instance runs as `dabberz`**, not root
+  (`driver.local.run_as`): the agent, builds, customers' services, shells. Each
+  instance has its own `home/` beside its `workspace/`.
+- Both domains are proxied by Cloudflare. `ondabberz.link` is on Flexible and
+  works over HTTPS. `panel.dabberz.com` answers only over plain HTTP (HTTPS is
+  a 521) — see below.
+- Ports 80 and 443 accept only Cloudflare's ranges and the host itself
+  (`/etc/nftables.d/dabberz-edge.nft`, from the bootstrap's `firewall` step).
+  SSH is untouched by it.
+- Mail and storage are **stand-ins** on loopback (`deploy/standins/`): aiosmtpd
+  writes every message to `journalctl -u dabberz-mail-standin` and delivers
+  nothing; versitygw serves S3 over `/tank/dabberz/data/objects`. The Linode
+  bucket's values are kept as comments in the YAML for when storage is real.
 
-### Verified working
+### Deploying a change
 
-Control plane listening on `0.0.0.0:80`, Clerk authenticating, `data block
-ready`, `catalog ready apps=1`, and platform-token auth end to end —
-`dabberzctl status` returns capacity JSON.
+Push the branch, then on the host as root: `git merge --ff-only` in
+`/opt/dabberz/src`, `make build`, install each binary as `*.new` and `mv` it
+over the old one, restart. The restart stops every customer's service; the
+daemon brings back every workspace recorded as running once it is listening,
+which takes a second or two for `intake`. Look for `workspace resumed` in
+`journalctl -u dabberzd`, and `did not come back` for one that failed.
 
-### Known wrong or unverified, in priority order
+## Known wrong, in priority order
 
-1. **`CLERK_SECRET_KEY` is probably under the wrong name in
-   `/etc/dabberz/dabberzd.env`.** The previous session said
-   `DABBERZ_CLERK_SECRET`, which nothing reads. Sign-in still works (verified
-   against the issuer's public keys) but new-user email attribution does not.
-   `grep -c CLERK_SECRET_KEY /etc/dabberz/dabberzd.env` — zero means fix it.
-2. **`blocks.mail_url` and `blocks.storage` are empty**, so Forms cannot
-   install: its manifest declares both and the installer refuses rather than
-   installing something that fails at runtime. Needs any reachable SMTP URL and
-   an S3-compatible endpoint. The secret key is `DABBERZ_STORAGE_SECRET_KEY` in
-   the env file and has no YAML field at all.
-3. **`full_page_writes` was never confirmed off.** It is safe now that Postgres
-   is on copy-on-write storage, and on spinning disks it is worth real latency.
-   `sudo -u postgres psql -tAc 'show full_page_writes'`.
-4. **Port 80 is not firewalled to Cloudflare's ranges.** The daemon answers
-   preview hostnames over plain HTTP to anyone who hits the IP directly with
-   the right `Host` header, which bypasses the CDN entirely.
-5. **`panel.dabberz.com` serves a password field over plain HTTP**, publicly.
-   Confirmed by loading it in a browser: the panel renders, Clerk's form is
-   embedded, and the whole exchange is in clear. This is the most urgent item
-   on the list. When proxying it, use an origin certificate with Full (strict)
-   rather than Flexible: that hop carries a root shell, the secrets vault and
-   the audit trail.
-5b. **Clerk is in Development mode** -- a `pk_test_` instance, shown by the
-   badge on the sign-in card. Dev instances share OAuth credentials and cannot
-   vend provider tokens, which this project has already hit as
-   `oauth_shared_credentials_token_retrieval_not_supported`. Per-account GitHub
-   linking will not work until it is a production instance.
-6. **The Clerk secret should be rotated** — it appeared in a chat transcript.
-7. **An old token is still live**: `tok_06gz0nj2c5w0zn9wp78zzv8wac`, never
-   used. `dabberzctl token revoke` it.
-8. Old Postgres data may still sit at `/var/lib/postgresql/17/main`, holding
-   ~100 MB of the 97 GiB root for nothing.
+1. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
+   expects 443, which nothing serves, so HTTPS is a 521 and only plain HTTP
+   works. Do not sign in over it. The daemon does not terminate TLS itself, so
+   this needs a Cloudflare origin certificate plus something on 443 (a TLS
+   listener in the daemon, or a terminator in front), then Full (strict).
+2. **Clerk is a development instance** — the sign-in card carries the orange
+   "Development mode" badge, so the keys are `pk_test_`/`sk_test_`. Dev
+   instances share OAuth credentials and cannot vend provider tokens, which
+   this project already met as
+   `oauth_shared_credentials_token_retrieval_not_supported`. Per-account
+   GitHub linking therefore cannot work as configured, whatever else is fixed;
+   it needs a production instance.
+3. **The Clerk secret should be rotated** — it appeared in a chat transcript.
+   Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
+   is now right; that it is read was not confirmed end to end, because only a
+   new user's first sign-in exercises it.
+4. **Failed installations cannot be deleted or retried**, and keep their name.
+   `recruiting` and `hiring` are two such, from this session; `hiring` also
+   still holds a provisioned database. Its machine was moved aside to
+   `/tank/dabberz/data/vms-released/` before the release fix existed.
+5. **The install tests leak the services they start.** A run of
+   `./internal/install` left ~50 `forms serve` processes behind as the test
+   user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
+6. **A `scratch` platform token** created on 2026-11-18 is live and was not
+   made by this session. Leave it unless its owner says otherwise.
+7. **golangci-lint is not installed on the host**, so nothing this session
+   wrote has been linted.
+
+## What this session fixed, all running on the host
+
+Each was found by working the list or running the loop. Every code fix has a
+test that was seen to fail with the fix removed; the first two were changes to
+the host, checked on the host.
+
+- The Clerk secret was under a name nothing reads; renamed in the env file.
+- Port 80 was open to anyone; now Cloudflare's ranges only.
+- Storage with a bucket but no secret key counted as provided.
+- Provisioning failed on Postgres 16+ for a non-superuser admin: `CREATE
+  DATABASE ... OWNER` needs SET on the role. The database tests now always run
+  as a non-superuser made from whatever DSN they are given.
+- `go` was only on PATH for login shells, so the daemon could not build apps.
+- Nothing ever destroyed a machine, so finished changes and failed installs
+  held capacity forever; with 10 vCPUs that meant one change, ever.
+- The agent ran as root, where Claude Code rightly refuses to skip its
+  permission prompts. Now `dabberz`, with the repositories owned to match.
+- The control plane's database was world-readable; the unit sets a umask.
+- With a fresh home the agent had no git identity; it commits as
+  `dabberz agent <agent@dabberz.invalid>`.
+- The browser check saw an app's signed-in surface as a stranger, so a page
+  behind sign-in could never pass. It now looks as the change's owner, with a
+  **preview pass** (`internal/previewpass`): an HMAC over one preview host, one
+  user and a 15-minute expiry, keyed per daemon process, set by the harness as
+  a host-only HttpOnly cookie, accepted by the edge only on that host and
+  stripped before the app sees it. The owner's platform token was the
+  obvious alternative and the wrong one: it is the whole account, handed to a
+  page an agent just wrote.
+- The repositories directory was handed to `dabberz` but left 0700, so the
+  first promote could not reach the repository it was pushing to.
+- A daemon restart took every customer's site down until somebody restarted
+  each workspace by hand. The daemon now resumes every workspace recorded as
+  running, leaving each checkout where it stands, so a rollback survives a
+  restart. Proven on the host by restarting the daemon and touching nothing:
+  `intake` answered within two seconds, on its rolled-back revision, with
+  every response intact.
+
+## The loop, on hardware
+
+Run end to end on dbz-alpha, against a real agent, real Postgres, a real
+Chromium and Cloudflare in front:
+
+```
+export DABBERZ_TOKEN=$(cat ~/.dabberz-token)   # the `milestone` token, on the host
+
+# 1. install         POST /v1/installations                  "intake", running
+# 2. open a change   POST /v1/installations/{id}/changes     3s, own preview and data fork
+# 3. drive agent     POST /v1/workspaces/{ws}/messages       15s; committed 8aad53b
+# 4. check           POST /v1/changes/{id}/check             suite + browser as owner, ready
+# 5. promote         POST /v1/changes/{id}/promote           live on 8aad53b, machine released
+# 6. roll back       POST /v1/installations/{id}/rollback    back on e7dd585
+```
+
+What was checked rather than assumed: production held a form and a real
+response before the change; after the promote its thank-you page carried the
+agent's new link and every response was still there; after the rollback the
+link was gone and the responses still were. `intake` is left running on
+`e7dd585`, with its `Job application` form and three responses.
+
+To exercise an app's signed-in surface from the host without a browser, the
+edge accepts the platform token as a visitor. Send it to `127.0.0.1` with the
+preview's `Host` header, never through Cloudflare: Flexible means the hop
+from Cloudflare to this machine is plain HTTP.
+
+The agent said 7 of Forms' own tests skip in its workspace for want of
+`FORMS_TEST_DATABASE_URL`; the check's suite, which has the database, passed.
+
+## Checking it from outside, without SSH
+
+A sandboxed agent's `curl` is rewritten by its own egress proxy and returns
+synthetic errors wearing the server's clothes — a previous session concluded
+from them that the host was unreachable, which was wrong. A real Chromium goes
+straight through, so Playwright is the instrument for looking at this
+deployment from somewhere that is not the host.
+
+What it reaches with no credential, which is most of what matters: the panel's
+sign-in page, a preview hostname with nothing behind it (404 from the mux
+rather than a CDN error means Cloudflare is reaching the origin), and an
+installed app's **public** surface, which is deliberately anonymous — so a
+form being filled in can be checked end to end from outside. Signing in is the
+exception and stays with the owner.
 
 ## The next milestone
 
-Nothing in the product loop has ever run on hardware. Everything below has been
-proven in a sandbox against real Postgres, real Chromium and real git, and
-never on this machine:
-
-```
-export DABBERZ_TOKEN=$(dabberzctl token create -name "cli" | head -1)
-
-dabberzctl status
-curl -s localhost/v1/apps -H "Authorization: Bearer $DABBERZ_TOKEN"
-
-# 1. install
-curl -s -X POST localhost/v1/installations -H "Authorization: Bearer $DABBERZ_TOKEN" \
-  -H 'content-type: application/json' -d '{"app":"forms","name":"recruiting"}'
-
-# 2. open a change against it            POST /v1/installations/{id}/changes
-# 3. drive the agent into the change     POST /v1/workspaces/{change.workspace_id}/messages
-# 4. check it                            POST /v1/changes/{id}/check
-# 5. promote                             POST /v1/changes/{id}/promote
-# 6. roll back                           POST /v1/installations/{id}/rollback
-```
-
-Step 3 is the one that has never been exercised with a real agent doing real
-work on this machine. The agent acts without asking (`permission_mode:
-bypassPermissions`), which is safe because it works on its own branch, against
-a forked copy of the data, behind a preview nobody depends on, and a human
-promotes.
-
-Expect the browser check in step 4 to need `*.ondabberz.link` resolving to the
-host and reachable over the preview hostname, because the verifier drives a
-real Chromium at the public address rather than at a port.
-
-## You can see it in a browser, from anywhere
-
-Worth knowing because the previous session wrongly concluded otherwise. `curl`
-from a sandboxed agent gets rewritten by its egress proxy and produces
-synthetic errors that look like the server's; a real Chromium goes straight
-through. Playwright is the reliable instrument for checking this deployment
-from outside it.
-
-What that reaches without any credential, which is most of what matters:
-
-- the panel's sign-in page, so UI regressions are visible
-- a preview hostname with nothing behind it, which should answer 404 from the
-  host mux rather than a CDN error
-- once an app is installed, its **public** surface -- a form being filled in
-  is deliberately anonymous, so the whole visitor path can be checked end to
-  end from outside
-
-Signing in is the exception: that needs the owner's own credentials and should
-stay with the owner.
-
-As of this writing `test.ondabberz.link` answers 404 from the mux, which means
-Cloudflare is reaching the origin and the preview edge works.
+The first of the known-wrong items: TLS at the origin for `panel.dabberz.com`.
+Until it exists the owner cannot sign in to the panel safely, and the panel is
+where a person rather than a curl command drives the loop above. After that,
+the two gaps below, which are what stand between this and a second account.
 
 ## Two structural gaps, both blocking a second account
 
@@ -142,9 +188,10 @@ tasks and neither is cosmetic.
 
 - **The Firecracker driver does not boot guests.** `Create`, `Exec`, `Destroy`
   and `OpenSession` return `vm.ErrNotSupported`, so the only working driver is
-  `local`, which runs agents and customers' services on the host as the daemon
-  process, as root. The address layout, slot accounting and machine config
-  already exist. **Hard constraint: the guest rootfs must be a copy-on-write
+  `local`, which runs agents and customers' services on the host -- now as
+  one shared unprivileged account rather than as root, but with nothing
+  between one instance and another. The address layout, slot accounting and
+  machine config already exist. **Hard constraint: the guest rootfs must be a copy-on-write
   overlay of the golden image, never a copy** — a 40 GiB copy per fork on these
   spinning disks is minutes before an agent can start.
 - **The agent's Claude token is process-wide.** `CLAUDE_CODE_OAUTH_TOKEN` is

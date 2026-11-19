@@ -58,11 +58,13 @@ func (d *Driver) OpenSession(_ context.Context, instanceID string, spec vm.Sessi
 
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the caller supplies the argv by design
 	cmd.Dir = dir
-	cmd.Env = append(mergeEnv(inst.Spec.Env, spec.Env), "TERM=xterm-256color")
+	cmd.Env = append(d.environ(inst, spec.Env), "TERM=xterm-256color")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = replica, replica, replica
 	// A new session with the replica as its controlling terminal is what makes
-	// job control, signals and window size work at all.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	// job control, signals and window size work at all. A person's shell runs
+	// as the same account as everything else in the instance, or it would be
+	// the one way back to root.
+	cmd.SysProcAttr = d.credential(&syscall.SysProcAttr{Setsid: true, Setctty: true})
 
 	if err := cmd.Start(); err != nil {
 		primary.Close()

@@ -299,10 +299,11 @@ golang() {
 	# Needed on the host to build dabberzd, and inside the golden image too,
 	# because an app's own build step runs there.
 	local have
-	if command -v go >/dev/null; then
-		have=$(go version | awk '{print $3}' | sed 's/^go//')
+	if [ -x /usr/local/go/bin/go ]; then
+		have=$(/usr/local/go/bin/go version | awk '{print $3}' | sed 's/^go//')
 		if at_least "$have" "$GO_MINIMUM"; then
 			note "already present: go$have (>= $GO_MINIMUM)"
+			go_on_path
 			return
 		fi
 		note "go$have is older than $GO_MINIMUM; replacing it"
@@ -335,7 +336,17 @@ golang() {
 	tar -C /usr/local -xzf "/tmp/$archive"
 	rm -f "/tmp/$archive"
 	printf 'export PATH=$PATH:/usr/local/go/bin\n' > /etc/profile.d/golang.sh
+	go_on_path
 	note "installed $(/usr/local/go/bin/go version)"
+}
+
+# go_on_path links the toolchain into /usr/local/bin. The profile.d line covers
+# a login shell and nothing else: a systemd service never reads it, and the
+# daemon builds every app with go, so the first install on dbz-alpha failed
+# with "go: not found" on a machine where go worked in every terminal.
+go_on_path() {
+	ln -sfn /usr/local/go/bin/go /usr/local/bin/go
+	ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 }
 
 claude_code() {
@@ -466,6 +477,71 @@ checkout() {
 	fi
 }
 
+# The control plane listens on 80 on every interface, because the CDN has to
+# reach it. Without this, anyone who asks the address directly with a preview's
+# Host header is served over plain HTTP, around the CDN entirely. 443 is
+# included for when TLS terminates here, so that does not reopen the same hole.
+#
+# A table of its own with an accepting policy, touching only those two ports:
+# a mistake here can make the site unreachable but cannot lock out SSH. Loaded
+# with nft -f rather than by restarting nftables, whose stock config begins by
+# flushing every rule on the machine, including ones it did not write.
+#
+# Re-run to pick up a change to the CDN's published ranges.
+firewall() {
+	say "Firewall"
+
+	local rules=/etc/nftables.d/dabberz-edge.nft
+	local v4 v6
+	# Captured whole rather than piped, so a failed fetch is a failed command
+	# under set -e instead of an empty list that firewalls everything off.
+	if ! v4=$(curl -fsS --max-time 20 https://www.cloudflare.com/ips-v4) ||
+		! v6=$(curl -fsS --max-time 20 https://www.cloudflare.com/ips-v6); then
+		if [ -f "$rules" ]; then
+			warn "could not fetch the CDN's ranges; leaving $rules as it is"
+			return 0
+		fi
+		die "could not fetch the CDN's ranges, and there is no previous list to keep"
+	fi
+	# A captive page or an error body would otherwise become the allow list.
+	local bad
+	bad=$(printf '%s\n%s\n' "$v4" "$v6" | grep -vE '^[0-9a-f.:]+/[0-9]+$' | grep -v '^$' || true)
+	[ -z "$bad" ] || die "the CDN's range list has lines that are not CIDRs: $bad"
+	[ -n "$v4" ] || die "the CDN published no IPv4 ranges"
+
+	install -d -m 0755 /etc/nftables.d
+	local tmp
+	tmp=$(mktemp)
+	cat >"$tmp" <<-NFT
+		# Written by deploy/bootstrap-host.sh. Edits are overwritten on re-run.
+		table inet dabberz_edge
+		delete table inet dabberz_edge
+		table inet dabberz_edge {
+		    set cdn4 { type ipv4_addr; flags interval; elements = { $(echo $v4 | tr ' ' ',') } }
+		    set cdn6 { type ipv6_addr; flags interval; elements = { $(echo $v6 | tr ' ' ',') } }
+		    chain input {
+		        type filter hook input priority 0; policy accept;
+		        # The machine reaching itself: the browser verifier, curl on the box.
+		        tcp dport { 80, 443 } fib saddr type local accept
+		        tcp dport { 80, 443 } ip saddr @cdn4 accept
+		        tcp dport { 80, 443 } ip6 saddr @cdn6 accept
+		        tcp dport { 80, 443 } drop
+		    }
+		}
+	NFT
+	nft -c -f "$tmp" || die "generated rules do not parse; see $tmp"
+	install -m 0644 "$tmp" "$rules"
+	rm -f "$tmp"
+	nft -f "$rules"
+
+	# So the rules survive a reboot. The include goes in once.
+	if ! grep -qF 'include "/etc/nftables.d/*.nft"' /etc/nftables.conf; then
+		printf '\ninclude "/etc/nftables.d/*.nft"\n' >>/etc/nftables.conf
+	fi
+	systemctl enable -q nftables
+	note "80 and 443 accept only the CDN's ranges and this machine ($rules)"
+}
+
 summary() {
 	say "Done"
 	cat <<-NEXT
@@ -494,4 +570,5 @@ golang
 claude_code
 postgres
 checkout
+firewall
 summary

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/domain"
@@ -314,6 +315,96 @@ func (m *Manager) Stop(ctx context.Context, w *domain.Workspace) error {
 	}
 	*w = *stopped
 	return nil
+}
+
+// Resume brings back up every workspace recorded as running, after the
+// control plane itself restarted.
+//
+// The services a workspace runs are children of this process as far as the
+// service manager is concerned, so stopping the daemon stops them, and the
+// record still says running. Until this existed every deploy and every
+// reboot left each installation answering 502, and on dbz-alpha each deploy
+// was followed by somebody restarting every workspace by hand -- which is the
+// opposite of what is being sold.
+//
+// Each is stopped and started again, the same way that person did it. That
+// rebuilds what is on the disk and leaves the checkout where it stands:
+// Start switches branch only when it is on the wrong one, and never fetches
+// over or resets a checkout, so an installation that was rolled back comes
+// back on the revision it was rolled back to, and a change keeps its
+// uncommitted work. One at a time, because they share the machine's ports
+// and CPU; and one that fails does not stop the rest.
+func (m *Manager) Resume(ctx context.Context) error {
+	recorded, err := m.store.ListWorkspaces(ctx, store.WorkspaceFilter{
+		// Starting too: a restart in the middle of bringing one up leaves it
+		// there, and nothing else would ever finish the job.
+		States:           []domain.WorkspaceState{domain.WorkspaceRunning, domain.WorkspaceStarting},
+		IncludeEphemeral: true,
+	})
+	if err != nil {
+		return fmt.Errorf("workspace: list what was running: %w", err)
+	}
+
+	var failed []string
+	for _, w := range recorded {
+		if err := m.resume(ctx, w); err != nil {
+			m.opts.Logger.Error("a workspace did not come back after the restart",
+				"workspace", w.ID, "name", w.Name, "error", err)
+			failed = append(failed, w.Name)
+			continue
+		}
+		m.opts.Logger.Info("workspace resumed", "workspace", w.ID, "name", w.Name)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("workspace: %d of %d did not come back: %s",
+			len(failed), len(recorded), strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+func (m *Manager) resume(ctx context.Context, w *domain.Workspace) error {
+	if w.State == domain.WorkspaceRunning {
+		// Its services are gone but the record does not know it. Stopping
+		// first settles the record, and tolerates there being nothing to stop.
+		if err := m.Stop(ctx, w); err != nil {
+			return err
+		}
+	}
+	_, err := m.Start(ctx, w)
+	return err
+}
+
+// Release stops a workspace and destroys its machine, giving back what the
+// machine held.
+//
+// Stop keeps the machine on purpose, because a workspace's disk can hold work
+// nobody has committed. That reasoning is about a workspace somebody is still
+// using. A change that was promoted has its work merged, an abandoned one was
+// thrown away on purpose, and an install that never came up has nothing on its
+// disk but a checkout. Kept, each held its full share of the host forever:
+// nothing else ever destroys a machine, so on dbz-alpha the first change used
+// the last free slot and no second one could start.
+func (m *Manager) Release(ctx context.Context, w *domain.Workspace) error {
+	if err := m.Stop(ctx, w); err != nil {
+		return err
+	}
+	if w.InstanceID == "" {
+		return nil
+	}
+	// A failed start never reached Stop's service shutdown, and may have left
+	// something running before it failed.
+	if instance, err := m.driver.Get(ctx, w.InstanceID); err == nil {
+		services, err := m.store.ListServices(ctx, w.ProjectID)
+		if err != nil {
+			return err
+		}
+		m.stopServices(ctx, instance, services)
+	}
+	if err := m.driver.Destroy(ctx, w.InstanceID); err != nil && !errors.Is(err, vm.ErrNotFound) {
+		return fmt.Errorf("workspace: destroy machine %s: %w", w.InstanceID, err)
+	}
+	w.InstanceID = ""
+	return m.store.UpdateWorkspace(ctx, w)
 }
 
 // describe reports an already-running workspace without changing anything.

@@ -31,6 +31,7 @@ import (
 
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/previewpass"
 	"github.com/dabbers/devex/internal/proxy"
 )
 
@@ -45,6 +46,12 @@ type Identities interface {
 	Visitor(ctx context.Context, r *http.Request) (*domain.User, error)
 }
 
+// Passes checks a preview pass: a short-lived credential naming one person at
+// one preview hostname. It is previewpass.Issuer, narrowed.
+type Passes interface {
+	Check(presented, host string) (*domain.User, error)
+}
+
 // Mux routes requests for published preview hostnames to their upstreams and
 // hands everything else to a fallback handler, which is the control plane's
 // own API and UI.
@@ -57,7 +64,20 @@ type Mux struct {
 	routes   map[string]*route
 	fallback http.Handler
 	who      Identities
+	passes   Passes
 	logger   *slog.Logger
+}
+
+// WithPasses accepts preview passes as well as the visitor's own sign-in.
+//
+// The verifier has no session of anybody's. Without this, the browser check
+// sees an app's signed-in surface the way a stranger does -- for Forms, a
+// 401 at its front page -- and no change to such an app can ever pass.
+func (m *Mux) WithPasses(passes Passes) *Mux {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.passes = passes
+	return m
 }
 
 type route struct {
@@ -133,6 +153,10 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 					// could set one would have the admin surface of somebody
 					// else's installation, with nothing appearing broken.
 					proxy.StripIdentity(pr.Out.Header)
+					// A pass is the edge's, never the app's. The app is code
+					// an agent may have just written; one that could read
+					// the pass could replay it for as long as it lasts.
+					stripCookie(pr.Out.Header, previewpass.CookieName)
 					// ...and then state it, for whoever is actually signed
 					// in. Order matters: strip first, assert second, so a
 					// forged header is replaced and never merged with.
@@ -213,6 +237,28 @@ type visitorKey struct{}
 // logged, because the alternative is a signed-in person being quietly treated
 // as a stranger with nothing anywhere saying why.
 func (m *Mux) withVisitor(r *http.Request) *http.Request {
+	m.mu.RLock()
+	passes := m.passes
+	m.mu.RUnlock()
+	// A pass is checked before any sign-in, and decides the matter either
+	// way. Whoever presents one is the verifier looking on its owner's
+	// behalf; a pass that is not accepted here is logged and the request goes
+	// on as anonymous, because falling through to a session cookie would let
+	// a stale pass and a real visitor be confused with each other.
+	if cookie, err := r.Cookie(previewpass.CookieName); err == nil && cookie.Value != "" {
+		if passes == nil {
+			m.logger.Warn("a preview pass was presented to an edge that does not accept them",
+				"host", normalizeHost(r.Host))
+			return r
+		}
+		who, err := passes.Check(cookie.Value, r.Host)
+		if err != nil {
+			m.logger.Warn("a preview pass was not accepted; forwarding as anonymous",
+				"host", normalizeHost(r.Host), "error", err)
+			return r
+		}
+		return r.WithContext(context.WithValue(r.Context(), visitorKey{}, *who))
+	}
 	if m.who == nil {
 		return r
 	}
@@ -225,6 +271,22 @@ func (m *Mux) withVisitor(r *http.Request) *http.Request {
 			"forwarding as anonymous", "host", normalizeHost(r.Host), "error", err)
 	}
 	return r
+}
+
+// stripCookie removes one cookie from a request's headers and keeps the rest:
+// the app's own session cookies are the app's business.
+func stripCookie(header http.Header, name string) {
+	cookies := (&http.Request{Header: header}).Cookies()
+	header.Del("Cookie")
+	kept := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c.Name != name {
+			kept = append(kept, c.String())
+		}
+	}
+	if len(kept) > 0 {
+		header.Set("Cookie", strings.Join(kept, "; "))
+	}
 }
 
 // visitor reads back what withVisitor resolved.

@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/pipeline"
 	"github.com/dabbers/devex/internal/preview"
+	"github.com/dabbers/devex/internal/previewpass"
 	"github.com/dabbers/devex/internal/proxy"
 	"github.com/dabbers/devex/internal/proxy/caddy"
 	"github.com/dabbers/devex/internal/proxy/hostmux"
@@ -100,6 +103,9 @@ type application struct {
 	store  *store.Store
 	sched  *scheduler.Scheduler
 	server *http.Server
+	// workspaces is resumed once the server is listening, so whatever was
+	// running before a restart is running again without anybody asking.
+	workspaces *workspace.Manager
 }
 
 // build wires every component together.
@@ -195,6 +201,18 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	}
 
 	router, hostRouter := buildRouter(cfg, visitors, logger)
+	// One issuer for the edge that checks passes and the installer that mints
+	// them, with a key only this process holds. Only for an edge in this
+	// process: an external router would not understand a pass, and minting
+	// one for it would hand the verifier a credential nothing accepts.
+	var passes *previewpass.Issuer
+	if hostRouter != nil {
+		passes, err = previewpass.NewRandom()
+		if err != nil {
+			return nil, err
+		}
+		hostRouter.WithPasses(passes)
+	}
 	allocator, err := preview.New(db, router, cfg.Preview)
 	if err != nil {
 		return nil, err
@@ -322,15 +340,34 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		if err != nil {
 			return nil, err
 		}
-		installer, err = install.New(install.Deps{
+		// Workspaces clone from and push to these repositories, so whoever
+		// the workspaces run as has to own them.
+		var repoOwner *install.Owner
+		if cfg.Driver.Kind != "firecracker" {
+			runAs, err := lookupRunAs(cfg.Driver.Local.RunAs)
+			if err != nil {
+				return nil, err
+			}
+			if runAs != nil {
+				repoOwner = &install.Owner{UID: int(runAs.UID), GID: int(runAs.GID)}
+			}
+		}
+		deps := install.Deps{
 			Store: db, Catalog: catalog, Workspaces: workspaces,
 			Vault: vault, Databases: provisioner, Verifier: verifier,
 			Logger: logger,
-		}, install.Options{
+		}
+		// Set only when there is one: a nil issuer stored in the interface
+		// would read as present and fail on the first check.
+		if passes != nil {
+			deps.Passes = passes
+		}
+		installer, err = install.New(deps, install.Options{
 			RepoDir: filepath.Join(cfg.DataDir, "repos"),
 			// What the blocks that exist offer. Identity is the platform's
 			// own, so an app behind the edge is told who is asking.
-			Provided: providedBlocks(cfg, authenticator.Name()),
+			Provided:  providedBlocks(cfg, authenticator.Name()),
+			RepoOwner: repoOwner,
 		})
 		if err != nil {
 			return nil, err
@@ -379,10 +416,11 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 
 	wired = true
 	return &application{
-		cfg:    cfg,
-		logger: logger,
-		store:  db,
-		sched:  sched,
+		cfg:        cfg,
+		logger:     logger,
+		store:      db,
+		sched:      sched,
+		workspaces: workspaces,
 		server: &http.Server{
 			Addr:        cfg.Server.Addr,
 			Handler:     handler,
@@ -409,6 +447,16 @@ func (a *application) serve(ctx context.Context) error {
 		a.logger.Info("control plane listening", "addr", a.cfg.Server.Addr, "owner", a.cfg.Owner)
 		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
+		}
+	}()
+
+	// After the listener, not before: rebuilding every installation takes a
+	// while, and the panel being unreachable for that long would be a second
+	// outage on top of the one this repairs. A preview asked for in the
+	// meantime gets the edge's "not answering yet" page, which is true.
+	go func() {
+		if err := a.workspaces.Resume(ctx); err != nil {
+			a.logger.Error("not everything came back after the restart", "error", err)
 		}
 	}()
 
@@ -497,12 +545,42 @@ func buildDriver(cfg config.Config, dataDir string) (vm.Driver, error) {
 	case "firecracker":
 		return firecracker.New(cfg.Driver.Firecracker)
 	default:
+		runAs, err := lookupRunAs(cfg.Driver.Local.RunAs)
+		if err != nil {
+			return nil, err
+		}
 		return local.New(local.Options{
 			Root:         filepath.Join(dataDir, "vms"),
 			Total:        cfg.Driver.Local.Total,
 			MaxInstances: cfg.Driver.Local.MaxInstances,
+			RunAs:        runAs,
 		})
 	}
+}
+
+// lookupRunAs resolves the account instances run as. A name that does not
+// resolve stops the daemon: falling back to running as root would be the one
+// outcome the setting exists to prevent.
+func lookupRunAs(name string) (*local.User, error) {
+	if name == "" {
+		return nil, nil
+	}
+	account, err := user.Lookup(name)
+	if err != nil {
+		return nil, fmt.Errorf("driver.local.run_as: %w", err)
+	}
+	uid, err := strconv.ParseUint(account.Uid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("driver.local.run_as: uid %q: %w", account.Uid, err)
+	}
+	gid, err := strconv.ParseUint(account.Gid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("driver.local.run_as: gid %q: %w", account.Gid, err)
+	}
+	if uid == 0 {
+		return nil, fmt.Errorf("driver.local.run_as: %s is root", name)
+	}
+	return &local.User{UID: uint32(uid), GID: uint32(gid)}, nil
 }
 
 // buildRouter selects how preview routes are published, returning the router

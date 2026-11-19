@@ -36,6 +36,13 @@ TimeoutStopSec=120
 # Agent runs and Go builds open a lot at once.
 LimitNOFILE=65536
 
+# Nothing this creates is for other accounts unless it says so. The default
+# 022 left the control plane's own database readable by every account on the
+# machine -- including the one the local driver runs agents as, which reaches
+# the data directory because its workspaces are inside it. What that account
+# does need, its workspaces and the repositories, are handed to it by name.
+UMask=0027
+
 # Deliberately not hardened further. ProtectSystem, PrivateDevices,
 # NoNewPrivileges and friends are the right instincts and the wrong ones here:
 # this process exists to create machines, write to /dev/kvm, manage mounts and

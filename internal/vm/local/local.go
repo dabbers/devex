@@ -39,6 +39,23 @@ type Options struct {
 	MaxInstances int
 	// ExecTimeout overrides DefaultExecTimeout.
 	ExecTimeout time.Duration
+	// RunAs, when set, is the unprivileged account every command in every
+	// instance runs as. Linux only.
+	//
+	// Without it, everything runs as the control plane, which on a real host
+	// is root: the agent, which acts without asking, and every customer's
+	// service. Claude Code refuses to skip its permission prompts as root, so
+	// on such a host the agent cannot run at all -- and it is right to refuse.
+	// This is not isolation between instances, which all share the one
+	// account; that is still the Firecracker driver's job. It is the
+	// difference between a mistake in an agent's turn costing a workspace and
+	// costing the machine.
+	RunAs *User
+}
+
+// User is an account commands run as.
+type User struct {
+	UID, GID uint32
 }
 
 // Driver is a vm.Driver backed by the local filesystem.
@@ -62,6 +79,21 @@ func New(opts Options) (*Driver, error) {
 	}
 	if err := os.MkdirAll(opts.Root, 0o750); err != nil {
 		return nil, fmt.Errorf("local: create root %s: %w", opts.Root, err)
+	}
+	if opts.RunAs != nil {
+		if err := supportsRunAs(); err != nil {
+			return nil, err
+		}
+		// The account has to be able to reach its workspaces, and only reach:
+		// group traversal of the root, and nothing it can write there. The
+		// instance records stay root's, so a workload cannot rewrite what the
+		// driver believes about it.
+		if err := os.Chown(opts.Root, 0, int(opts.RunAs.GID)); err != nil {
+			return nil, fmt.Errorf("local: give %s to the run-as group: %w", opts.Root, err)
+		}
+		if err := os.Chmod(opts.Root, 0o750); err != nil {
+			return nil, fmt.Errorf("local: %w", err)
+		}
 	}
 
 	d := &Driver{opts: opts, instances: map[string]*vm.Instance{}}
@@ -103,9 +135,58 @@ func (d *Driver) rehydrate() error {
 		if inst.ID == "" {
 			continue
 		}
+		// An instance made before RunAs was set is owned by whoever ran the
+		// control plane then. Handed over here rather than left for its first
+		// command to fail on, which would read as a broken checkout.
+		if err := d.prepare(filepath.Dir(inst.Workspace)); err != nil {
+			return err
+		}
 		d.instances[inst.ID] = &inst
 	}
 	return nil
+}
+
+// homeDir is where an instance's account keeps its own state: toolchain
+// caches, the agent's configuration and conversations. Per instance, like the
+// home directory of a guest, so one workload cannot fill another's build cache.
+func homeDir(instanceRoot string) string { return filepath.Join(instanceRoot, "home") }
+
+// prepare gives an instance's workspace and home to the run-as account. The
+// instance directory itself, holding the driver's record, stays the
+// driver's.
+func (d *Driver) prepare(instanceRoot string) error {
+	if d.opts.RunAs == nil {
+		return nil
+	}
+	if err := os.MkdirAll(homeDir(instanceRoot), 0o700); err != nil {
+		return fmt.Errorf("local: create home in %s: %w", instanceRoot, err)
+	}
+	if err := os.Chown(instanceRoot, 0, int(d.opts.RunAs.GID)); err != nil {
+		return fmt.Errorf("local: %w", err)
+	}
+	if err := os.Chmod(instanceRoot, 0o750); err != nil {
+		return fmt.Errorf("local: %w", err)
+	}
+	for _, tree := range []string{filepath.Join(instanceRoot, "workspace"), homeDir(instanceRoot)} {
+		if err := chownTree(tree, d.opts.RunAs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// chownTree hands a directory tree to an account. Links are changed rather
+// than followed, so a link a workload planted cannot hand it a file outside.
+func chownTree(root string, to *User) error {
+	return filepath.WalkDir(root, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := os.Lchown(path, int(to.UID), int(to.GID)); err != nil {
+			return fmt.Errorf("local: hand %s to the run-as account: %w", path, err)
+		}
+		return nil
+	})
 }
 
 // record persists an instance so it survives a control-plane restart.
@@ -165,6 +246,10 @@ func (d *Driver) Create(_ context.Context, spec vm.Spec) (*vm.Instance, error) {
 	workspace := filepath.Join(d.opts.Root, instanceID, "workspace")
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return nil, fmt.Errorf("local: create workspace for %s: %w", spec.Name, err)
+	}
+	if err := d.prepare(filepath.Dir(workspace)); err != nil {
+		_ = os.RemoveAll(filepath.Dir(workspace))
+		return nil, err
 	}
 
 	inst := &vm.Instance{
@@ -270,7 +355,8 @@ func (d *Driver) run(ctx context.Context, instanceID string, cmd vm.Command, onL
 
 	proc := exec.CommandContext(ctx, cmd.Argv[0], cmd.Argv[1:]...) //nolint:gosec // the caller supplies the argv by design
 	proc.Dir = dir
-	proc.Env = mergeEnv(inst.Spec.Env, cmd.Env)
+	proc.Env = d.environ(inst, cmd.Env)
+	proc.SysProcAttr = d.credential(nil)
 	if len(cmd.Stdin) > 0 {
 		proc.Stdin = bytes.NewReader(cmd.Stdin)
 	}
@@ -310,6 +396,21 @@ func (d *Driver) run(ctx context.Context, instanceID string, cmd vm.Command, onL
 		}
 	}
 	return result, nil
+}
+
+// environ is what a command in this instance sees. Running as another account,
+// HOME is the instance's own: the control plane's home is root's, which that
+// account can neither write nor should be able to read.
+func (d *Driver) environ(inst *vm.Instance, overlay map[string]string) []string {
+	if d.opts.RunAs == nil {
+		return mergeEnv(inst.Spec.Env, overlay)
+	}
+	base := maps(inst.Spec.Env)
+	if base == nil {
+		base = map[string]string{}
+	}
+	base["HOME"] = homeDir(filepath.Dir(inst.Workspace))
+	return mergeEnv(base, overlay)
 }
 
 // mergeEnv layers command environment over instance environment. The host

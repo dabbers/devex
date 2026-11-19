@@ -56,6 +56,34 @@ type Observations struct {
 	Screenshot []byte
 }
 
+// SetCookie gives the browser a cookie for pageURL's host alone.
+//
+// Host-only by construction: Network.setCookie with a url and no domain makes
+// a cookie the browser returns to that exact host and no other, not even a
+// sibling under the same zone. Secure whenever the page is https, and always
+// HttpOnly, so the page's own scripts cannot read it.
+func SetCookie(ctx context.Context, client *Client, pageURL, name, value string) error {
+	var result struct {
+		Success *bool `json:"success"`
+	}
+	if err := client.Call(ctx, "Network.setCookie", map[string]any{
+		"url":      pageURL,
+		"name":     name,
+		"value":    value,
+		"httpOnly": true,
+		"secure":   strings.HasPrefix(pageURL, "https://"),
+		"sameSite": "Strict",
+	}, &result); err != nil {
+		return err
+	}
+	// Older protocol versions report failure in the result rather than as an
+	// error, and a cookie that was not set is a check run as a stranger.
+	if result.Success != nil && !*result.Success {
+		return fmt.Errorf("browser: the cookie for %s was refused", pageURL)
+	}
+	return nil
+}
+
 // Visit navigates a page and reports what the browser saw.
 //
 // Everything here is observed rather than asserted: deciding what counts as a

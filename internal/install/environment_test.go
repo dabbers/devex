@@ -100,10 +100,15 @@ func TestRefusingToStartBeatsFailingAtThreeInTheMorning(t *testing.T) {
 		"no identity": {func(p *Provided) { p.Identity = Identity{} }, "identity"},
 		"no mail":     {func(p *Provided) { p.MailURL = "" }, "mail"},
 		"no storage":  {func(p *Provided) { p.Storage = Storage{} }, "storage"},
-		"no realtime": {func(p *Provided) { p.RealtimeURL = "" }, "realtime"},
-		"no search":   {func(p *Provided) { p.SearchURL = "" }, "search"},
-		"no payments": {func(p *Provided) { p.Payments = Payments{} }, "payments"},
-		"no secret":   {func(p *Provided) { p.Secrets = nil }, "TURNSTILE_SECRET"},
+		// The shape dbz-alpha was in: bucket and access key in the YAML, the
+		// secret under an environment name nothing had set. Every upload
+		// would have been refused by the object store.
+		"storage without its secret key": {func(p *Provided) { p.Storage.SecretKey = "" }, "storage"},
+		"storage without its access key": {func(p *Provided) { p.Storage.AccessKey = "" }, "storage"},
+		"no realtime":                    {func(p *Provided) { p.RealtimeURL = "" }, "realtime"},
+		"no search":                      {func(p *Provided) { p.SearchURL = "" }, "search"},
+		"no payments":                    {func(p *Provided) { p.Payments = Payments{} }, "payments"},
+		"no secret":                      {func(p *Provided) { p.Secrets = nil }, "TURNSTILE_SECRET"},
 	}
 
 	for name, test := range tests {

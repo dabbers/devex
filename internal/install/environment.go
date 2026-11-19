@@ -134,8 +134,14 @@ func Environment(spec *appspec.Spec, provided Provided) (map[string]string, []Mi
 	}
 
 	if spec.Requires.Storage {
+		// A bucket without both halves of its credential is not storage. The
+		// secret has no YAML field and arrives from the environment, so it is
+		// the half most easily missing while the config file looks complete.
 		if need(provided.Storage.Bucket != "", "storage",
-			"the app stores files and no bucket was provisioned") {
+			"the app stores files and no bucket was provisioned") &&
+			need(provided.Storage.AccessKey != "" && provided.Storage.SecretKey != "", "storage",
+				"a bucket is configured without both its access key and secret key "+
+					"(the secret is read from DABBERZ_STORAGE_SECRET_KEY)") {
 			env["STORAGE_ENDPOINT"] = provided.Storage.Endpoint
 			env["STORAGE_BUCKET"] = provided.Storage.Bucket
 			env["STORAGE_PREFIX"] = provided.Storage.Prefix

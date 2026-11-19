@@ -154,6 +154,18 @@ func (b *Block) Provision(ctx context.Context, owner string) (*Database, string,
 		`CREATE ROLE %s LOGIN PASSWORD %s`, quoteID(db.Role), quoteLiteral(password))); err != nil {
 		return nil, "", fmt.Errorf("database: create role: %w", err)
 	}
+	// Since Postgres 16 a role with CREATEROLE that is not a superuser gets
+	// only ADMIN on the roles it creates, and CREATE DATABASE ... OWNER then
+	// refuses: it must be able to SET ROLE to the owner. INHERIT as well,
+	// because snapshots and forks are pg_dump run as this role, reading tables
+	// the app created. A superuser passes without either, which is how every
+	// test passed against one while the first real install on a properly
+	// unprivileged role failed.
+	if _, err := b.admin.ExecContext(ctx, fmt.Sprintf(
+		`GRANT %s TO CURRENT_USER WITH SET TRUE, INHERIT TRUE`, quoteID(db.Role))); err != nil {
+		_, _ = b.admin.ExecContext(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, quoteID(db.Role)))
+		return nil, "", fmt.Errorf("database: take membership of role: %w", err)
+	}
 	// CREATE DATABASE cannot run inside a transaction, so a failure here has
 	// to clean up the role by hand rather than rolling back.
 	if _, err := b.admin.ExecContext(ctx, fmt.Sprintf(

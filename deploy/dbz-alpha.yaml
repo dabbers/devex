@@ -70,6 +70,12 @@ driver:
       vcpus: 10
       memory_mib: 49152
       disk_gib: 1400
+    # Everything in an instance -- the agent, builds, customers' services --
+    # runs as this account rather than as the daemon, which is root. Claude
+    # Code will not skip its permission prompts as root, so without this the
+    # agent cannot run here at all. Not isolation between instances: they all
+    # share it.
+    run_as: dabberz
 
 scheduler:
   interval: 5s
@@ -121,7 +127,13 @@ agent:
   # message about configuration rather than about the work.
   mcp_config: ""
   timeout: 45m
-  session_dir: /workspace/.dabberz/agent
+  # Empty: the local driver gives each instance a home directory of its own,
+  # beside its workspace, and the agent keeps its conversations there. That
+  # outlives a restart for as long as the instance does, which is what
+  # resuming needs. /workspace is a path inside a guest; on this driver it
+  # would be a directory at the root of the host, which the agent's account
+  # cannot create.
+  session_dir: ""
 
 verify:
   profiles: 4

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -44,7 +45,16 @@ type Deps struct {
 	// it a change is judged by its own suite alone, which notices a broken
 	// query and not a blank page.
 	Verifier *verify.Verifier
-	Logger   *slog.Logger
+	// Passes lets the verifier see a preview as the change's owner. Optional:
+	// without it the browser looks as a stranger, which for an app whose
+	// front page is behind sign-in means a check that cannot pass.
+	Passes Passes
+	Logger *slog.Logger
+}
+
+// Passes mints preview passes. It is previewpass.Issuer, narrowed.
+type Passes interface {
+	Mint(host string, user *domain.User, ttl time.Duration) (string, error)
 }
 
 // Options configure where an installer puts things.
@@ -54,6 +64,16 @@ type Options struct {
 	// Provided is what the platform's blocks offer, apart from the database,
 	// which is provisioned per installation.
 	Provided Provided
+	// RepoOwner, when set, is the account workspaces run as, which is the
+	// account that has to own the repositories: workspaces clone from them
+	// and promote by pushing to them, and git refuses to serve a repository
+	// to an account that does not own it.
+	RepoOwner *Owner
+}
+
+// Owner is a Unix account, by number.
+type Owner struct {
+	UID, GID int
 }
 
 // Installer turns a catalog entry into something a customer is using.
@@ -84,7 +104,49 @@ func New(deps Deps, opts Options) (*Installer, error) {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
+	// Repositories seeded before an owner was configured belong to whoever
+	// ran the control plane then. Handed over at startup, so the first sign
+	// of the change is not a workspace failing to clone.
+	if opts.RepoOwner != nil {
+		if err := os.MkdirAll(opts.RepoDir, 0o750); err != nil {
+			return nil, fmt.Errorf("install: %w", err)
+		}
+		if err := os.Chown(opts.RepoDir, 0, opts.RepoOwner.GID); err != nil {
+			return nil, fmt.Errorf("install: give %s to the workspace group: %w", opts.RepoDir, err)
+		}
+		// The group has to be able to enter it, and MkdirAll leaves an
+		// existing directory's mode alone. On dbz-alpha it was 0700: the
+		// repositories inside were the account's, and the account could not
+		// reach them, so the first promote failed with "does not appear to
+		// be a git repository".
+		if err := os.Chmod(opts.RepoDir, 0o750); err != nil {
+			return nil, fmt.Errorf("install: %w", err)
+		}
+		entries, err := os.ReadDir(opts.RepoDir)
+		if err != nil {
+			return nil, fmt.Errorf("install: %w", err)
+		}
+		for _, entry := range entries {
+			if err := chownTree(filepath.Join(opts.RepoDir, entry.Name()), opts.RepoOwner); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return &Installer{deps: deps, opts: opts}, nil
+}
+
+// chownTree hands a repository to its owner. Links are changed rather than
+// followed, so a link inside cannot hand over anything outside.
+func chownTree(root string, to *Owner) error {
+	return filepath.WalkDir(root, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := os.Lchown(path, to.UID, to.GID); err != nil {
+			return fmt.Errorf("install: hand %s to the workspace account: %w", path, err)
+		}
+		return nil
+	})
 }
 
 // Request is one install.
@@ -182,6 +244,11 @@ func (i *Installer) record(ctx context.Context, app App, installation *domain.In
 	bare := filepath.Join(i.opts.RepoDir, repo.ID+".git")
 	if err := seedRepository(ctx, app.Dir, bare, app.Spec.Version); err != nil {
 		return nil, nil, err
+	}
+	if i.opts.RepoOwner != nil {
+		if err := chownTree(bare, i.opts.RepoOwner); err != nil {
+			return nil, nil, err
+		}
 	}
 	repo.RemoteURL = bare
 	if err := i.deps.Store.UpdateRepo(ctx, repo); err != nil {
@@ -313,6 +380,24 @@ func (i *Installer) fail(ctx context.Context, installation *domain.Installation,
 			"installation", installation.ID, "error", err)
 	}
 	i.deps.Logger.Error("install failed", "installation", installation.ID, "error", cause)
+
+	// The record, repository and database stay, so the failure can be looked
+	// at. The machine does not: an install that never came up has nothing on
+	// it but a checkout, and kept, it holds a full workspace's share of the
+	// host. Two failed installs on dbz-alpha left no room to open a change.
+	if installation.WorkspaceID == "" || i.deps.Workspaces == nil {
+		return
+	}
+	ws, err := i.deps.Store.GetWorkspace(ctx, installation.WorkspaceID)
+	if err != nil {
+		i.deps.Logger.Error("could not load a failed install's workspace",
+			"installation", installation.ID, "error", err)
+		return
+	}
+	if err := i.deps.Workspaces.Release(ctx, ws); err != nil {
+		i.deps.Logger.Error("could not release a failed install's machine",
+			"installation", installation.ID, "error", err)
+	}
 }
 
 // withoutDatabase drops the database requirement from a list of unmet ones,

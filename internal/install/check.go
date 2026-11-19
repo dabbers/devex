@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -193,10 +194,16 @@ func (i *Installer) driveBrowser(ctx context.Context, change *domain.Change) dom
 		return result
 	}
 
+	pass, err := i.ownersPass(ctx, change)
+	if err != nil {
+		result.Detail = "the preview could not be checked as its owner: " + err.Error()
+		return result
+	}
 	report, err := i.deps.Verifier.Verify(ctx, verify.Request{
 		ForkID:     change.ID,
 		PreviewURL: change.PreviewURL,
 		Intent:     change.Title,
+		Pass:       pass,
 	})
 	if err != nil {
 		result.Detail = "the preview could not be checked: " + err.Error()
@@ -208,6 +215,28 @@ func (i *Installer) driveBrowser(ctx context.Context, change *domain.Change) dom
 		result.Detail = report.Summary
 	}
 	return result
+}
+
+// passLifetime bounds a pass to roughly one check. Long enough for a slow
+// browser on a cold preview, short enough that a pass found later is spent.
+const passLifetime = 15 * time.Minute
+
+// ownersPass mints a pass for the person the change belongs to, valid at its
+// preview alone. Empty, with no error, when this installer has no issuer: the
+// check then looks as a stranger, as it always used to.
+func (i *Installer) ownersPass(ctx context.Context, change *domain.Change) (string, error) {
+	if i.deps.Passes == nil {
+		return "", nil
+	}
+	preview, err := url.Parse(change.PreviewURL)
+	if err != nil || preview.Hostname() == "" {
+		return "", fmt.Errorf("%q is not a preview URL", change.PreviewURL)
+	}
+	owner, err := i.deps.Store.GetUser(ctx, change.UserID)
+	if err != nil {
+		return "", fmt.Errorf("look up the change's owner: %w", err)
+	}
+	return i.deps.Passes.Mint(preview.Hostname(), owner, passLifetime)
 }
 
 // tailOf keeps the end of a long output, which is where a suite says what

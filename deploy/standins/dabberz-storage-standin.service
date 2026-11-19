@@ -1,0 +1,34 @@
+# A storage block on this machine's own pool: versitygw serving S3 on loopback
+# over a plain directory, where each subdirectory is a bucket. For a host that
+# has no object store yet. Objects on the same disks as the database they sit
+# beside are not a backup of anything; point blocks.storage at a real bucket
+# before anybody's files matter.
+#
+# MinIO was the obvious choice and is archived, with its binaries withdrawn.
+# Built from a pinned release through the module proxy, whose checksums are
+# verified against sum.golang.org:
+#
+#   GOBIN=/opt/dabberz/standins/bin go install github.com/versity/versitygw/cmd/versitygw@v1.10.0
+#
+# Credentials live in /etc/dabberz/storage-standin.env (0600) as
+# ROOT_ACCESS_KEY and ROOT_SECRET_KEY. The same secret goes in dabberzd.env as
+# DABBERZ_STORAGE_SECRET_KEY, the access key in blocks.storage.access_key, and
+# blocks.storage.endpoint is http://127.0.0.1:9000.
+[Unit]
+Description=dabberz storage stand-in (S3 on loopback over the local pool)
+After=network.target zfs-mount.service
+RequiresMountsFor=/tank/dabberz/data
+
+[Service]
+User=dabberz
+EnvironmentFile=/etc/dabberz/storage-standin.env
+ExecStart=/opt/dabberz/standins/bin/versitygw --port 127.0.0.1:9000 posix /tank/dabberz/data/objects
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/tank/dabberz/data/objects
+
+[Install]
+WantedBy=multi-user.target

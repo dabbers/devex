@@ -80,6 +80,11 @@ type Request struct {
 	Intent string `json:"intent"`
 	// Profile is filled in by the verifier from its pool.
 	Profile string `json:"profile"`
+	// Pass, when set, is a preview pass letting the harness see the preview
+	// as its owner would, for a page behind sign-in. It travels on stdin with
+	// the rest of the job and is set only as a cookie on the preview's own
+	// host, so nothing else the page loads is ever sent it.
+	Pass string `json:"pass,omitempty"`
 }
 
 // Check is one thing the verifier looked at.

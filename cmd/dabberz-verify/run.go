@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dabbers/devex/internal/browser"
+	"github.com/dabbers/devex/internal/previewpass"
 )
 
 // reachTimeout bounds the plain HTTP request that checks the preview answers
@@ -18,7 +19,7 @@ const reachTimeout = 20 * time.Second
 
 // run performs one verification and returns its report.
 func run(ctx context.Context, request job, settings settings) report {
-	reach := reachable(ctx, request.PreviewURL)
+	reach := reachable(ctx, request.PreviewURL, request.Pass)
 	if !reach.Passed {
 		// Nothing a browser could add: the preview is not answering. Saying so
 		// in one check beats a page of consequential failures.
@@ -40,6 +41,19 @@ func run(ctx context.Context, request job, settings settings) report {
 			fmt.Fprintln(os.Stderr, "dabberz-verify: closing the browser:", err)
 		}
 	}()
+
+	if request.Pass != "" {
+		// Host-only, so the browser sends it to the preview and to nothing
+		// else the page loads; HttpOnly, so the page's own scripts cannot
+		// read it.
+		if err := browser.SetCookie(ctx, instance.Client(), request.PreviewURL,
+			previewpass.CookieName, request.Pass); err != nil {
+			return assemble(request, []check{reach, {
+				Name:   "browser",
+				Detail: "the harness could not sign the browser in as the preview's owner: " + err.Error(),
+			}})
+		}
+	}
 
 	seen, err := browser.Visit(ctx, instance.Client(), request.PreviewURL, settings.settle)
 	if err != nil {
@@ -63,7 +77,7 @@ func run(ctx context.Context, request job, settings settings) report {
 }
 
 // reachable checks the preview answers over the public network.
-func reachable(ctx context.Context, previewURL string) check {
+func reachable(ctx context.Context, previewURL, pass string) check {
 	ctx, cancel := context.WithTimeout(ctx, reachTimeout)
 	defer cancel()
 
@@ -75,6 +89,12 @@ func reachable(ctx context.Context, previewURL string) check {
 	// differently; asking as a browser keeps this check measuring the same
 	// thing the browser will see.
 	req.Header.Set("User-Agent", "dabberz-verify/"+version)
+	// As the browser will ask: the owner's view, when there is a pass. A page
+	// behind sign-in answers a stranger 401, which is the app working, and
+	// would stop the check before a browser ever looked.
+	if pass != "" {
+		req.AddCookie(&http.Cookie{Name: previewpass.CookieName, Value: pass})
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
