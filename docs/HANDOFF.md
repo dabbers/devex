@@ -1,12 +1,13 @@
 # Handoff: dbz-alpha, and what to do next
 
-For an agent picking this up with SSH access to the host. Written at commit
-`cd25e2a` on branch `claude/trusting-brown-dns9i5`.
+For an agent picking this up with SSH access to the host. Updated at the end of
+the first session that had it, on branch `claude/trusting-brown-dns9i5`; the
+host runs that branch's head. Verify rather than trust what follows — it was
+accurate when written and the machine has moved on.
 
-The previous session had no access to the machine, so every step was a command
-described in chat and an output pasted back. That is why this document exists:
-you can do in ten minutes what took a day that way. Verify rather than trust
-what follows — it was accurate when written and the machine has moved on.
+From Windows the SSH alias lives in the Debian WSL distro, not Git Bash:
+`wsl.exe -d Debian -- ssh dbz-alpha`. `/opt/dabberz/src` is root-only, so work
+there under `sudo`.
 
 ## What dabberz is
 
@@ -32,78 +33,114 @@ Public address `147.135.70.81`.
   re-run; `--storage` is the only destructive part and it is already done).
 - ZFS pool `tank`, mirrored across `sda5` and `sdb6`, ~1.65 TiB usable.
   Datasets: `tank/postgres` (8k recordsize), `tank/dabberz/{data,vm,snapshots}`.
-- Postgres 17, data directory moved to `/srv/pgdata` on the pool. Confirmed.
-- `dabberzd` runs under systemd from `/opt/dabberz/bin/dabberzd`, config
-  `/etc/dabberz/dabberz.yaml`, source checkout `/opt/dabberz/src`.
-- DNS: `panel.dabberz.com` → the host, direct. `*.ondabberz.link` → Cloudflare,
-  proxied. Two different registrable domains, which the code requires.
+- Postgres 17 on `/srv/pgdata`, `full_page_writes` off. The daemon's admin
+  role `dabberz` is CREATEROLE/CREATEDB, not superuser.
+- `dabberzd` runs under systemd from `/opt/dabberz/bin/dabberzd`, as root with
+  `UMask=0027`. Config `/etc/dabberz/dabberz.yaml`, secrets
+  `/etc/dabberz/dabberzd.env`, source `/opt/dabberz/src`. Every edit made to
+  either file this session left a dated `.bak-*` beside it.
+- **Everything inside an instance runs as `dabberz`**, not root
+  (`driver.local.run_as`): the agent, builds, customers' services, shells. Each
+  instance has its own `home/` beside its `workspace/`.
+- Both domains are proxied by Cloudflare. `ondabberz.link` is on Flexible and
+  works over HTTPS. `panel.dabberz.com` answers only over plain HTTP (HTTPS is
+  a 521) — see below.
+- Ports 80 and 443 accept only Cloudflare's ranges and the host itself
+  (`/etc/nftables.d/dabberz-edge.nft`, from the bootstrap's `firewall` step).
+  SSH is untouched by it.
+- Mail and storage are **stand-ins** on loopback (`deploy/standins/`): aiosmtpd
+  writes every message to `journalctl -u dabberz-mail-standin` and delivers
+  nothing; versitygw serves S3 over `/tank/dabberz/data/objects`. The Linode
+  bucket's values are kept as comments in the YAML for when storage is real.
 
-### Verified working
+### Deploying a change
 
-Control plane listening on `0.0.0.0:80`, Clerk authenticating, `data block
-ready`, `catalog ready apps=1`, and platform-token auth end to end —
-`dabberzctl status` returns capacity JSON.
+Push the branch, then on the host as root: `git merge --ff-only` in
+`/opt/dabberz/src`, `make build`, install each binary as `*.new` and `mv` it
+over the old one, restart. **A restart takes every customer's site down** —
+see the first item below — so follow it with a stop and start of each running
+workspace (`POST /v1/workspaces/{id}/stop`, then `/start`).
 
-### Known wrong or unverified, in priority order
+## Known wrong, in priority order
 
-1. **`CLERK_SECRET_KEY` is probably under the wrong name in
-   `/etc/dabberz/dabberzd.env`.** The previous session gave it a
-   `DABBERZ_`-prefixed name, which nothing reads. Sign-in still works (verified
-   against the issuer's public keys) but new-user email attribution does not.
-   `grep -c CLERK_SECRET_KEY /etc/dabberz/dabberzd.env` — zero means fix it.
-2. **`blocks.mail_url` and `blocks.storage` are empty**, so Forms cannot
-   install: its manifest declares both and the installer refuses rather than
-   installing something that fails at runtime. Needs any reachable SMTP URL and
-   an S3-compatible endpoint. The secret key is `DABBERZ_STORAGE_SECRET_KEY` in
-   the env file and has no YAML field at all.
-3. **`full_page_writes` was never confirmed off.** It is safe now that Postgres
-   is on copy-on-write storage, and on spinning disks it is worth real latency.
-   `sudo -u postgres psql -tAc 'show full_page_writes'`.
-4. **Port 80 is not firewalled to Cloudflare's ranges.** The daemon answers
-   preview hostnames over plain HTTP to anyone who hits the IP directly with
-   the right `Host` header, which bypasses the CDN entirely.
-5. **`panel.dabberz.com` has no TLS.** The nameserver transfer to Cloudflare
-   was in progress. Do not sign in over plain HTTP. When proxying it, use an
-   origin certificate with Full (strict) rather than Flexible: that hop carries
-   a root shell, the secrets vault and the audit trail.
-6. **The Clerk secret should be rotated** — it appeared in a chat transcript.
-7. **An old token is still live**: `tok_06gz0nj2c5w0zn9wp78zzv8wac`, never
-   used. `dabberzctl token revoke` it.
-8. Old Postgres data may still sit at `/var/lib/postgresql/17/main`, holding
-   ~100 MB of the 97 GiB root for nothing.
+1. **Restarting the daemon kills every service it started, and nothing brings
+   them back.** Services are `setsid`-detached, but systemd stops the whole
+   control group, and there is no startup reconciliation. So every deploy and
+   every reboot leaves each installation answering 502 until somebody restarts
+   its workspace by hand. The fix wants a pass at startup that brings up every
+   workspace recorded as running; changing `KillMode` alone would survive a
+   deploy but not a reboot.
+2. **The browser check cannot pass for an app whose front page needs sign-in,
+   so no Forms change can be promoted.** `dabberz-verify` begins with an
+   anonymous GET of the preview root and stops there; Forms answers `/` with
+   401, correctly. Either the verifier sees the preview as the change's owner
+   (a short-lived identity assertion scoped to that one preview host), or the
+   manifest names a public entry point to check. That is a design decision,
+   not a bug fix, and it is where the milestone loop stopped.
+3. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
+   expects 443, which nothing serves, so HTTPS is a 521 and only plain HTTP
+   works. Do not sign in over it. The daemon does not terminate TLS itself, so
+   this needs a Cloudflare origin certificate plus something on 443 (a TLS
+   listener in the daemon, or a terminator in front), then Full (strict).
+4. **The Clerk secret should be rotated** — it appeared in a chat transcript.
+   Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
+   is now right; that it is read was not confirmed end to end, because only a
+   new user's first sign-in exercises it.
+5. **Failed installations cannot be deleted or retried**, and keep their name.
+   `recruiting` and `hiring` are two such, from this session; `hiring` also
+   still holds a provisioned database. Its machine was moved aside to
+   `/tank/dabberz/data/vms-released/` before the release fix existed.
+6. **The install tests leak the services they start.** A run of
+   `./internal/install` left ~50 `forms serve` processes behind as the test
+   user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
+7. **A `scratch` platform token** created on 2026-11-18 is live and was not
+   made by this session. Leave it unless its owner says otherwise.
+8. **golangci-lint is not installed on the host**, so nothing this session
+   wrote has been linted.
+
+## What this session fixed, all running on the host
+
+Each was found by running the loop, and each has a test that was seen to fail
+with the fix removed.
+
+- The Clerk secret was under a name nothing reads; renamed in the env file.
+- Port 80 was open to anyone; now Cloudflare's ranges only.
+- Storage with a bucket but no secret key counted as provided.
+- Provisioning failed on Postgres 16+ for a non-superuser admin: `CREATE
+  DATABASE ... OWNER` needs SET on the role. The database tests now always run
+  as a non-superuser made from whatever DSN they are given.
+- `go` was only on PATH for login shells, so the daemon could not build apps.
+- Nothing ever destroyed a machine, so finished changes and failed installs
+  held capacity forever; with 10 vCPUs that meant one change, ever.
+- The agent ran as root, where Claude Code rightly refuses to skip its
+  permission prompts. Now `dabberz`, with the repositories owned to match.
+- The control plane's database was world-readable; the unit sets a umask.
+- With a fresh home the agent had no git identity; it commits as
+  `dabberz agent <agent@dabberz.invalid>`.
 
 ## The next milestone
 
-Nothing in the product loop has ever run on hardware. Everything below has been
-proven in a sandbox against real Postgres, real Chromium and real git, and
-never on this machine:
+The loop has now run on hardware as far as step 4:
 
 ```
-export DABBERZ_TOKEN=$(dabberzctl token create -name "cli" | head -1)
+export DABBERZ_TOKEN=$(cat ~/.dabberz-token)   # the `milestone` token, on the host
 
-dabberzctl status
-curl -s localhost/v1/apps -H "Authorization: Bearer $DABBERZ_TOKEN"
-
-# 1. install
-curl -s -X POST localhost/v1/installations -H "Authorization: Bearer $DABBERZ_TOKEN" \
-  -H 'content-type: application/json' -d '{"app":"forms","name":"recruiting"}'
-
-# 2. open a change against it            POST /v1/installations/{id}/changes
-# 3. drive the agent into the change     POST /v1/workspaces/{change.workspace_id}/messages
-# 4. check it                            POST /v1/changes/{id}/check
-# 5. promote                             POST /v1/changes/{id}/promote
-# 6. roll back                           POST /v1/installations/{id}/rollback
+# 1. install                         ok   POST /v1/installations          -> "intake", running
+# 2. open a change                   ok   POST /v1/installations/{id}/changes   (3s)
+# 3. drive the agent                 ok   POST /v1/workspaces/{ws}/messages     (15s, committed)
+# 4. check                           blocked: suite passed, browser check 401 (item 2)
+# 5. promote                         not reached
+# 6. roll back                       not reached
 ```
 
-Step 3 is the one that has never been exercised with a real agent doing real
-work on this machine. The agent acts without asking (`permission_mode:
-bypassPermissions`), which is safe because it works on its own branch, against
-a forked copy of the data, behind a preview nobody depends on, and a human
-promotes.
+The live pieces: installation `ins_06gz2241nb4349s4v42ej8bpx0` (`intake`), change
+`chg_06gz23m4fnnpd006dfbe7jadtg` with the agent's commit `8aad53b`, whose
+preview is `https://web-forms-intake-06gz23m4fnnpd006dfbe7jadtg.ondabberz.link`.
+Once item 2 is decided, re-run the check on that change and carry on from 5.
 
-Expect the browser check in step 4 to need `*.ondabberz.link` resolving to the
-host and reachable over the preview hostname, because the verifier drives a
-real Chromium at the public address rather than at a port.
+The agent's reply on step 3 said 7 of Forms' own tests skip in its workspace
+for want of `FORMS_TEST_DATABASE_URL`; the check's suite, which has the
+database, passed.
 
 ## Two structural gaps, both blocking a second account
 
@@ -112,9 +149,10 @@ tasks and neither is cosmetic.
 
 - **The Firecracker driver does not boot guests.** `Create`, `Exec`, `Destroy`
   and `OpenSession` return `vm.ErrNotSupported`, so the only working driver is
-  `local`, which runs agents and customers' services on the host as the daemon
-  process, as root. The address layout, slot accounting and machine config
-  already exist. **Hard constraint: the guest rootfs must be a copy-on-write
+  `local`, which runs agents and customers' services on the host -- now as
+  one shared unprivileged account rather than as root, but with nothing
+  between one instance and another. The address layout, slot accounting and
+  machine config already exist. **Hard constraint: the guest rootfs must be a copy-on-write
   overlay of the golden image, never a copy** — a 40 GiB copy per fork on these
   spinning disks is minutes before an agent can start.
 - **The agent's Claude token is process-wide.** `CLAUDE_CODE_OAUTH_TOKEN` is
