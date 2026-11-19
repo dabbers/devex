@@ -84,16 +84,12 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
    is now right; that it is read was not confirmed end to end, because only a
    new user's first sign-in exercises it.
-4. **Failed installations cannot be deleted or retried**, and keep their name.
-   `recruiting` and `hiring` are two such, from this session; `hiring` also
-   still holds a provisioned database. Its machine was moved aside to
-   `/tank/dabberz/data/vms-released/` before the release fix existed.
-5. **The install tests leak the services they start.** A run of
+4. **The install tests leak the services they start.** A run of
    `./internal/install` left ~50 `forms serve` processes behind as the test
    user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
-6. **A `scratch` platform token** created on 2026-11-18 is live and was not
+5. **A `scratch` platform token** created on 2026-11-18 is live and was not
    made by this session. Leave it unless its owner says otherwise.
-7. **golangci-lint is not installed on the host**, so nothing this session
+6. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
 
 ## What this session fixed, all running on the host
@@ -132,6 +128,13 @@ the host, checked on the host.
   restart. Proven on the host by restarting the daemon and touching nothing:
   `intake` answered within two seconds, on its rolled-back revision, with
   every response intact.
+- A failed installation kept its name, its repository and sometimes its
+  database for good. `DELETE /v1/installations/{id}` now removes all of it,
+  and only for one that failed: a running installation has held a
+  customer's data, and deleting that wants an export and a confirmation
+  first. Deleting frees the name, so installing again is the retry.
+  `hiring` and `recruiting` were deleted with it on the host, along with the
+  machine moved aside by hand; only `intake` is left.
 
 ## The loop, on hardware
 
