@@ -62,10 +62,17 @@ ready`, `catalog ready apps=1`, and platform-token auth end to end —
 4. **Port 80 is not firewalled to Cloudflare's ranges.** The daemon answers
    preview hostnames over plain HTTP to anyone who hits the IP directly with
    the right `Host` header, which bypasses the CDN entirely.
-5. **`panel.dabberz.com` has no TLS.** The nameserver transfer to Cloudflare
-   was in progress. Do not sign in over plain HTTP. When proxying it, use an
-   origin certificate with Full (strict) rather than Flexible: that hop carries
-   a root shell, the secrets vault and the audit trail.
+5. **`panel.dabberz.com` serves a password field over plain HTTP**, publicly.
+   Confirmed by loading it in a browser: the panel renders, Clerk's form is
+   embedded, and the whole exchange is in clear. This is the most urgent item
+   on the list. When proxying it, use an origin certificate with Full (strict)
+   rather than Flexible: that hop carries a root shell, the secrets vault and
+   the audit trail.
+5b. **Clerk is in Development mode** -- a `pk_test_` instance, shown by the
+   badge on the sign-in card. Dev instances share OAuth credentials and cannot
+   vend provider tokens, which this project has already hit as
+   `oauth_shared_credentials_token_retrieval_not_supported`. Per-account GitHub
+   linking will not work until it is a production instance.
 6. **The Clerk secret should be rotated** — it appeared in a chat transcript.
 7. **An old token is still live**: `tok_06gz0nj2c5w0zn9wp78zzv8wac`, never
    used. `dabberzctl token revoke` it.
@@ -104,6 +111,29 @@ promotes.
 Expect the browser check in step 4 to need `*.ondabberz.link` resolving to the
 host and reachable over the preview hostname, because the verifier drives a
 real Chromium at the public address rather than at a port.
+
+## You can see it in a browser, from anywhere
+
+Worth knowing because the previous session wrongly concluded otherwise. `curl`
+from a sandboxed agent gets rewritten by its egress proxy and produces
+synthetic errors that look like the server's; a real Chromium goes straight
+through. Playwright is the reliable instrument for checking this deployment
+from outside it.
+
+What that reaches without any credential, which is most of what matters:
+
+- the panel's sign-in page, so UI regressions are visible
+- a preview hostname with nothing behind it, which should answer 404 from the
+  host mux rather than a CDN error
+- once an app is installed, its **public** surface -- a form being filled in
+  is deliberately anonymous, so the whole visitor path can be checked end to
+  end from outside
+
+Signing in is the exception: that needs the owner's own credentials and should
+stay with the owner.
+
+As of this writing `test.ondabberz.link` answers 404 from the mux, which means
+Cloudflare is reaching the origin and the preview edge works.
 
 ## Two structural gaps, both blocking a second account
 
