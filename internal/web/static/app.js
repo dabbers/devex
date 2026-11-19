@@ -1572,9 +1572,100 @@ async function renderAccount() {
     root.append(identity);
   }
 
+  const agentHost = el("div", { class: "section" });
+  root.append(agentHost);
+  try {
+    renderAgentCredential(agentHost, await api.get("/v1/account/agent"));
+  } catch (err) {
+    agentHost.append(el("h6", { text: "Your agent" }), el("p", { class: "muted", text: err.message }));
+  }
+
   const host = el("div", { class: "section" });
   root.append(host);
   renderGithubLink(host, link?.github || {});
+}
+
+// renderAgentCredential is where a person connects the subscription their
+// agent runs on. Agents are driven by the customer's own Claude, Codex or
+// Grok subscription and never by a key the platform pays for, so this is the
+// first thing a new account needs. The stored value is never shown again:
+// the server reports only which provider is set and whether runs would work.
+function renderAgentCredential(host, data) {
+  clear(host);
+  const agent = data.agent || {};
+  const providers = data.providers || [];
+  const nameOf = (id) => (providers.find((p) => p.id === id) || {}).name || id;
+
+  host.append(el("h6", { text: "Your agent" }));
+
+  const ready = agent.provider && agent.supported && !agent.blocked;
+  host.append(el("p", {},
+    el("span", {
+      class: `tag tag-${ready ? "good" : "warn"}`,
+      text: ready ? `${nameOf(agent.provider)} connected` : "not ready",
+    }),
+    agent.source === "owner_fallback"
+      ? el("span", { class: "muted", text: " using this deployment's token until you add your own" })
+      : agent.updated_at ? el("span", { class: "muted", text: ` saved ${relativeTime(agent.updated_at)}` }) : null));
+  if (agent.blocked) host.append(el("p", { class: "muted", text: agent.blocked }));
+
+  const choice = el("select", { class: "input" },
+    ...providers.map((p) => el("option", {
+      value: p.id, selected: p.id === (agent.provider || "claude"),
+      text: p.supported ? p.name : `${p.name} (saved now, runs coming)`,
+    })));
+  const how = el("p", { class: "muted" });
+  const showHow = () => {
+    const p = providers.find((x) => x.id === choice.value);
+    how.textContent = p ? p.obtain : "";
+  };
+  choice.addEventListener("change", showHow);
+  showHow();
+
+  // A password field: the token is a credential, and one left visible on a
+  // screen ends up in a screenshot.
+  const secret = el("input", {
+    class: "input", type: "password", autocomplete: "off", spellcheck: "false",
+    placeholder: agent.set ? "Paste a new token to replace the saved one" : "Paste the token",
+  });
+  const save = el("button", { class: "btn btn-primary", text: agent.set ? "Replace" : "Connect" });
+  save.addEventListener("click", async () => {
+    if (!secret.value.trim()) { toast("Paste the token first.", true); return; }
+    save.disabled = true;
+    try {
+      const next = await api.send("PUT", "/v1/account/agent", { provider: choice.value, credential: secret.value });
+      secret.value = "";
+      toast("Saved. Your agent runs on it from now on.");
+      renderAgentCredential(host, next);
+    } catch (err) {
+      toast(err.message, true);
+      save.disabled = false;
+    }
+  });
+
+  const actions = [save];
+  if (agent.set) {
+    actions.push(el("button", {
+      class: "btn btn-ghost", text: "Remove",
+      onclick: async () => {
+        if (!confirm("Remove your saved token? Agent runs will be refused until you add one.")) return;
+        try {
+          await api.send("DELETE", "/v1/account/agent");
+          renderAgentCredential(host, await api.get("/v1/account/agent"));
+        } catch (err) {
+          toast(err.message, true);
+        }
+      },
+    }));
+  }
+
+  host.append(el("div", { style: "max-width:620px" },
+    el("p", { class: "muted", text:
+      "Your agent runs on your own subscription, never on one dabberz pays for. " +
+      "It is stored encrypted and only ever handed to your own agent's runs." }),
+    el("div", { class: "field" }, el("label", { text: "Provider" }), choice, how),
+    el("div", { class: "field" }, el("label", { text: "Token" }), secret),
+    el("div", { class: "row-actions" }, ...actions)));
 }
 
 // renderGithubLink draws the connection state and the one action that moves it
@@ -1676,6 +1767,15 @@ async function renderServices() {
   }));
 
   const refresh = throttle(() => { if (currentPath() === "#/") renderServices(); }, 2500);
+
+  // The one thing a new account needs before a change can go anywhere.
+  const agent = await api.get("/v1/account/agent").catch(() => null);
+  if (agent && agent.agent && agent.agent.blocked) {
+    root.append(el("div", { class: "callout" },
+      el("p", {}, el("strong", { text: "Connect your agent. " }),
+        "Changes are made by an agent running on your own Claude subscription. ",
+        el("a", { href: "#/account", text: "Add it on your account →" }))));
+  }
 
   if (!installations.length) {
     root.append(empty("Nothing running yet. Pick an app from the catalog and it will be live in about a minute."));
