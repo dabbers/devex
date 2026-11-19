@@ -38,6 +38,23 @@ func (d *fakeDriver) Exec(_ context.Context, instanceID string, cmd vm.Command) 
 	return d.result, nil
 }
 
+// testUser is the account the ordinary tests run as.
+const testUser = "usr_test"
+
+// fakeCreds is a per-account token table. It returns each account's own token
+// and refuses one with none, which is the contract claudeauth implements.
+type fakeCreds map[string]string
+
+func (c fakeCreds) ClaudeToken(_ context.Context, userID string) (string, error) {
+	token, ok := c[userID]
+	if !ok {
+		return "", errors.New("no token for " + userID)
+	}
+	return token, nil
+}
+
+var testCreds = fakeCreds{testUser: "tok-" + testUser}
+
 func claudeJSON(result string, isError bool, in, out int64, cost float64) string {
 	body, _ := json.Marshal(map[string]any{
 		"type": "result", "subtype": "success", "is_error": isError,
@@ -52,9 +69,10 @@ func claudeJSON(result string, isError bool, in, out int64, cost float64) string
 
 func TestRunInvokesClaudeCodeInPrintMode(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 1000, 200, 0.42)}}
-	r := New(driver, Config{OAuthToken: "tok", MCPConfig: "/etc/dabberz/mcp.json"})
+	r := New(driver, testCreds, Config{MCPConfig: "/etc/dabberz/mcp.json"})
 
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1",
 		Prompt:     "add star ratings",
 		Env:        map[string]string{"DATABASE_URL": "postgres://x"},
@@ -80,8 +98,9 @@ func TestRunInvokesClaudeCodeInPrintMode(t *testing.T) {
 	if string(driver.lastCmd.Stdin) != "add star ratings" {
 		t.Fatalf("prompt was not sent over stdin: %q", driver.lastCmd.Stdin)
 	}
-	// The token is injected per run, alongside the repo's inherited secrets.
-	if driver.lastCmd.Env[TokenEnv] != "tok" {
+	// The token is injected per run, alongside the repo's inherited secrets,
+	// and it is the token of the account the run belongs to.
+	if driver.lastCmd.Env[TokenEnv] != "tok-"+testUser {
 		t.Fatalf("auth token not injected: %v", driver.lastCmd.Env)
 	}
 	if driver.lastCmd.Env["DATABASE_URL"] != "postgres://x" {
@@ -118,7 +137,7 @@ func TestRunCountsCacheTokensTowardsTheBudget(t *testing.T) {
 	})
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: string(body)}}
 
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -137,7 +156,7 @@ func TestRunTreatsAgentFailureAsAResultNotAnError(t *testing.T) {
 
 	// The fix loop has to be able to read the failure and feed it back, so a
 	// failing agent must not come back as a Go error.
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run returned an error for an agent failure: %v", err)
 	}
@@ -153,14 +172,14 @@ func TestRunReportsDriverFailuresAsErrors(t *testing.T) {
 	driver := &fakeDriver{err: vm.ErrNotFound}
 	// Being unable to reach the VM at all is a dabberz problem, not an agent
 	// result.
-	if _, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_gone", Prompt: "p"}); !errors.Is(err, vm.ErrNotFound) {
+	if _, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_gone", Prompt: "p"}); !errors.Is(err, vm.ErrNotFound) {
 		t.Fatalf("Run = %v, want the driver error", err)
 	}
 }
 
 func TestRunHandlesTimeout(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{TimedOut: true, ExitCode: -1}}
-	res, err := New(driver, Config{Timeout: time.Minute}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{Timeout: time.Minute}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -177,7 +196,7 @@ func TestRunParsesResultAmongProgressOutput(t *testing.T) {
 	}, "\n")
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: stdout}}
 
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -188,7 +207,7 @@ func TestRunParsesResultAmongProgressOutput(t *testing.T) {
 
 func TestUnparseableOutputIsMarkedUnaccounted(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: "claude: command not found", ExitCode: 127}}
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -204,7 +223,7 @@ func TestUnparseableOutputIsMarkedUnaccounted(t *testing.T) {
 
 func TestParsedRunIsMarkedAccounted(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.25)}}
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -218,7 +237,7 @@ func TestRunFallsBackToRawOutput(t *testing.T) {
 		Stdout:   "claude: command not found",
 		ExitCode: 127,
 	}}
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -235,7 +254,7 @@ func TestEscalationMarkerIsRecognised(t *testing.T) {
 	}
 	for marker, wantKind := range tests {
 		driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("stopped\n"+marker, false, 1, 1, 0)}}
-		res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+		res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -256,7 +275,7 @@ func TestOrdinaryOutputIsNotMistakenForAnEscalation(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{
 		Stdout: claudeJSON("I considered whether to emit DABBERZ-ESCALATE[ambiguous] but decided to continue.", false, 1, 1, 0),
 	}}
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -270,7 +289,7 @@ func TestRateLimitsAreDetected(t *testing.T) {
 		Stderr:   "Error: 429 rate limit exceeded, retry later",
 		ExitCode: 1,
 	}}
-	res, err := New(driver, Config{}).Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "p"})
+	res, err := New(driver, testCreds, Config{}).Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -282,11 +301,11 @@ func TestRateLimitsAreDetected(t *testing.T) {
 }
 
 func TestRunValidatesItsInput(t *testing.T) {
-	r := New(&fakeDriver{result: &vm.ExecResult{}}, Config{})
-	if _, err := r.Run(context.Background(), Request{Prompt: "p"}); err == nil {
+	r := New(&fakeDriver{result: &vm.ExecResult{}}, testCreds, Config{})
+	if _, err := r.Run(context.Background(), Request{UserID: testUser, Prompt: "p"}); err == nil {
 		t.Error("a run without an instance should be rejected")
 	}
-	if _, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "  "}); err == nil {
+	if _, err := r.Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "  "}); err == nil {
 		t.Error("a run without a prompt should be rejected")
 	}
 }
@@ -381,10 +400,11 @@ func argvOf(cmd vm.Command) string { return strings.Join(cmd.Argv, " ") }
 
 func TestFirstRunStartsAConversationAndRemembersIt(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 1000, 200, 0.42)}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 	session := &domain.AgentSession{}
 
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "add ratings", Session: session,
 	})
 	if err != nil {
@@ -409,10 +429,11 @@ func TestFirstRunStartsAConversationAndRemembersIt(t *testing.T) {
 // would be charged again in full.
 func TestSecondRunResumesAndChargesOnlyTheDifference(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("first", false, 1000, 200, 1.00)}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 	session := &domain.AgentSession{}
 
 	if _, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "add ratings", Session: session,
 	}); err != nil {
 		t.Fatalf("first Run: %v", err)
@@ -421,6 +442,7 @@ func TestSecondRunResumesAndChargesOnlyTheDifference(t *testing.T) {
 	// The conversation now totals $2.50 and 1800 input tokens.
 	driver.result = &vm.ExecResult{Stdout: claudeJSON("second", false, 1800, 400, 2.50)}
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "fix the thing", Session: session,
 	})
 	if err != nil {
@@ -451,10 +473,11 @@ func TestALostConversationFallsBackToAFreshOne(t *testing.T) {
 		{ExitCode: 1, Stderr: "Error: No conversation found with session ID: s1"},
 		{Stdout: claudeJSON("done from scratch", false, 900, 150, 0.30)},
 	}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 	session := &domain.AgentSession{ID: "s1", Accounted: domain.Usage{CostUSD: 5, InputTokens: 4000}}
 
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "fix the thing", Session: session,
 	})
 	if err != nil {
@@ -488,10 +511,11 @@ func TestAFailedRunIsNotMistakenForALostConversation(t *testing.T) {
 	driver := &scriptedDriver{results: []*vm.ExecResult{
 		{ExitCode: 1, Stderr: "the build failed: undefined symbol"},
 	}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 	session := &domain.AgentSession{ID: "s1"}
 
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "fix the thing", Session: session,
 	})
 	if err != nil {
@@ -507,11 +531,11 @@ func TestAFailedRunIsNotMistakenForALostConversation(t *testing.T) {
 
 func TestRunWithoutASessionStillWorks(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 100, 20, 0.05)}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	// Callers that do not keep a conversation -- the merge reviewer, for one
 	// -- pass none, and must get the reported figures unchanged.
-	res, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "review"})
+	res, err := r.Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "review"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -526,9 +550,9 @@ func TestRunWithoutASessionStillWorks(t *testing.T) {
 // start -- the behaviour resuming was added to replace.
 func TestSessionDirIsPassedToTheAgent(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.01)}}
-	r := New(driver, Config{SessionDir: "/workspace/.dabberz/agent"})
+	r := New(driver, testCreds, Config{SessionDir: "/workspace/.dabberz/agent"})
 
-	if _, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "go"}); err != nil {
+	if _, err := r.Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "go"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := driver.lastCmd.Env[ConfigDirEnv]; got != "/workspace/.dabberz/agent" {
@@ -538,14 +562,84 @@ func TestSessionDirIsPassedToTheAgent(t *testing.T) {
 
 func TestSessionDirIsOmittedWhenUnset(t *testing.T) {
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.01)}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
-	if _, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "go"}); err != nil {
+	if _, err := r.Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "go"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	// Leaving the agent's own default alone is correct when the machine's
 	// home directory is itself persistent.
 	if _, set := driver.lastCmd.Env[ConfigDirEnv]; set {
 		t.Fatalf("%s was set without being configured", ConfigDirEnv)
+	}
+}
+
+// TestEachRunAuthenticatesAsItsOwnAccountAndNoOther is the property the
+// bring-your-own-subscription position rests on: whichever account a run
+// belongs to, that account's token is the one it carries, and never another
+// customer's or the daemon's -- including when a repo secret tries to set it.
+func TestEachRunAuthenticatesAsItsOwnAccountAndNoOther(t *testing.T) {
+	const daemonToken = "tok-daemon"
+	t.Setenv(TokenEnv, daemonToken)
+	creds := fakeCreds{"usr_a": "tok-a", "usr_b": "tok-b"}
+
+	for _, tc := range []struct{ user, want, other string }{
+		{"usr_a", "tok-a", "tok-b"},
+		{"usr_b", "tok-b", "tok-a"},
+	} {
+		driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("ok", false, 1, 1, 0)}}
+		r := New(driver, creds, Config{})
+		if _, err := r.Run(context.Background(), Request{
+			UserID: tc.user, InstanceID: "vm_1", Prompt: "go",
+			// A repo secret of the same name, as another customer or a
+			// copied repo might have left it.
+			Env: map[string]string{TokenEnv: tc.other},
+		}); err != nil {
+			t.Fatalf("Run as %s: %v", tc.user, err)
+		}
+		got := driver.lastCmd.Env[TokenEnv]
+		if got != tc.want {
+			t.Fatalf("a run for %s carried %q, want its own token %q", tc.user, got, tc.want)
+		}
+		for name, value := range driver.lastCmd.Env {
+			if value == tc.other || value == daemonToken {
+				t.Fatalf("a run for %s carried a foreign token in %s", tc.user, name)
+			}
+		}
+	}
+}
+
+// TestARunWithNoTokenIsRefusedRatherThanFunded is the other half: an account
+// with no token, a run that names no account, and a runner with nowhere to
+// get tokens all fail before the agent is started -- not unauthenticated, and
+// not on anyone else's subscription.
+func TestARunWithNoTokenIsRefusedRatherThanFunded(t *testing.T) {
+	creds := fakeCreds{"usr_a": "tok-a"}
+	for name, tc := range map[string]struct {
+		creds Credentials
+		user  string
+	}{
+		"account without a token": {creds, "usr_c"},
+		// A source that would answer for the empty account, so it is the
+		// runner's own check that refuses, not the source's.
+		"no account named":     {fakeCreds{"": "tok-nobody"}, ""},
+		"no credential source": {nil, "usr_a"},
+		"an empty token":       {fakeCreds{"usr_a": "  "}, "usr_a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("ok", false, 1, 1, 0)}}
+			_, err := New(driver, tc.creds, Config{}).Run(context.Background(), Request{
+				UserID: tc.user, InstanceID: "vm_1", Prompt: "go",
+			})
+			if err == nil {
+				t.Fatal("the run was not refused")
+			}
+			if driver.lastVM != "" {
+				t.Fatalf("the agent was started anyway, with env %v", driver.lastCmd.Env)
+			}
+			if strings.Contains(err.Error(), "tok-") {
+				t.Fatalf("the refusal repeats a token: %v", err)
+			}
+		})
 	}
 }

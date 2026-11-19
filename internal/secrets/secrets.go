@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/dabbers/devex/internal/store"
 )
@@ -176,4 +177,75 @@ func (v *Vault) open(row *store.SecretRow) (string, error) {
 // associatedData binds a sealed value to its repo and name.
 func associatedData(repoID, name string) []byte {
 	return []byte(repoID + "\x00" + name)
+}
+
+// SetCredential seals a credential that belongs to a person rather than to a
+// repo, replacing any previous one of the same kind.
+//
+// Kept apart from repo secrets on purpose. A repo secret is inherited by
+// every fork and injected into every service the repo runs; a credential like
+// the customer's Claude token is theirs, not their app's, and is handed to
+// the one process that needs it and nowhere else.
+func (v *Vault) SetCredential(ctx context.Context, userID, kind, value string) error {
+	if userID == "" {
+		return errors.New("secrets: a user id is required")
+	}
+	if kind == "" {
+		return errors.New("secrets: a credential kind is required")
+	}
+
+	nonce := make([]byte, v.aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return fmt.Errorf("secrets: generate nonce: %w", err)
+	}
+	ciphertext := v.aead.Seal(nil, nonce, []byte(value), credentialData(userID, kind))
+	return v.db.PutCredential(ctx, &store.CredentialRow{
+		UserID: userID, Kind: kind, Nonce: nonce, Ciphertext: ciphertext,
+	})
+}
+
+// Credential returns one of a person's credentials, decrypted.
+func (v *Vault) Credential(ctx context.Context, userID, kind string) (string, error) {
+	row, err := v.db.GetCredential(ctx, userID, kind)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", fmt.Errorf("secrets: %s credential for %s: %w", kind, userID, ErrNotFound)
+		}
+		return "", err
+	}
+	plaintext, err := v.aead.Open(nil, row.Nonce, row.Ciphertext, credentialData(row.UserID, row.Kind))
+	if err != nil {
+		return "", fmt.Errorf("secrets: cannot decrypt the %s credential for %s; the master key may have changed: %w", row.Kind, row.UserID, err)
+	}
+	return string(plaintext), nil
+}
+
+// CredentialSet reports whether a person has a credential of a kind, and
+// when it was last set, without decrypting it. It is what a status surface
+// calls, and a status surface has no business holding the value.
+func (v *Vault) CredentialSet(ctx context.Context, userID, kind string) (bool, time.Time, error) {
+	row, err := v.db.GetCredential(ctx, userID, kind)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, time.Time{}, nil
+	}
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	return true, row.UpdatedAt, nil
+}
+
+// DeleteCredential removes one of a person's credentials.
+func (v *Vault) DeleteCredential(ctx context.Context, userID, kind string) error {
+	err := v.db.DeleteCredential(ctx, userID, kind)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("secrets: %s credential for %s: %w", kind, userID, ErrNotFound)
+	}
+	return err
+}
+
+// credentialData binds a sealed credential to its owner and kind, and to
+// being a credential: the prefix means a sealed repo secret can never be
+// opened as somebody's credential, or the reverse, even if the ids lined up.
+func credentialData(userID, kind string) []byte {
+	return []byte("user\x00" + userID + "\x00" + kind)
 }

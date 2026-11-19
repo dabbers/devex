@@ -130,7 +130,7 @@ func buildFixture(t *testing.T, withVerifier bool, responses ...llm.Response) *f
 		// A runner over a driver that cannot exec: these tests are about the
 		// conversation's bookkeeping, and a turn that cannot run still has to
 		// close its row rather than leaving the workspace busy forever.
-		Agent:  agent.New(unreachableDriver{}, agent.Config{}),
+		Agent:  agent.New(unreachableDriver{}, ownTokens{}, agent.Config{}),
 		Logger: quiet,
 	})
 	if err != nil {
@@ -758,4 +758,12 @@ func (unreachableDriver) List(context.Context) ([]*vm.Instance, error) { return 
 func (unreachableDriver) Destroy(context.Context, string) error        { return nil }
 func (unreachableDriver) Exec(context.Context, string, vm.Command) (*vm.ExecResult, error) {
 	return nil, errors.New("no machine here")
+}
+
+// ownTokens gives every account a token of its own, derived from its id, so
+// a run carrying the wrong one is visible in what the driver received.
+type ownTokens struct{}
+
+func (ownTokens) ClaudeToken(_ context.Context, userID string) (string, error) {
+	return "tok-" + userID, nil
 }

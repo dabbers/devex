@@ -34,6 +34,9 @@ type stubDriver struct {
 	// one repeats.
 	claudeReplies []string
 	claudeCalls   int
+	// claudeTokens is the Claude credential each claude invocation carried,
+	// so a test can see whose subscription paid for it.
+	claudeTokens []string
 	// verifyReplies are returned to successive verifier invocations.
 	verifyReplies []string
 	verifyCalls   int
@@ -124,6 +127,7 @@ func (d *stubDriver) Exec(_ context.Context, _ string, cmd vm.Command) (*vm.Exec
 			reply = d.claudeReplies[min(d.claudeCalls, len(d.claudeReplies)-1)]
 		}
 		d.claudeCalls++
+		d.claudeTokens = append(d.claudeTokens, cmd.Env[agent.TokenEnv])
 		return &vm.ExecResult{Stdout: claudeJSON(reply)}, nil
 
 	case strings.HasPrefix(line, "dabberz-verify"):
@@ -280,7 +284,7 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		Tripwire: thresholds, Logger: quiet,
 	})
 
-	runner := agent.New(driver, agent.Config{})
+	runner := agent.New(driver, ownTokens{}, agent.Config{})
 
 	var verifier *verify.Verifier
 	if !opts.noVerifier {
@@ -373,6 +377,31 @@ func TestHappyPathProvisionsPreviewsVerifiesAndMerges(t *testing.T) {
 	}
 	if task.State != domain.TaskCompleted {
 		t.Fatalf("task state = %q, want completed once its only fork merged", task.State)
+	}
+}
+
+// TestEveryAgentRunInAForkIsPaidForByTheForksOwner covers both places a fork
+// runs the agent -- the coding run and the merge review -- because each passes
+// the account on its own, and either forgetting would refuse the run or, worse,
+// let it fall to whatever a default would have been.
+func TestEveryAgentRunInAForkIsPaidForByTheForksOwner(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	final := h.launch(t)
+	if final.State != domain.ForkMerged {
+		t.Fatalf("state = %q, reason %q", final.State, final.StateReason)
+	}
+
+	h.driver.mu.Lock()
+	defer h.driver.mu.Unlock()
+	// At least the coding run and the review.
+	if len(h.driver.claudeTokens) < 2 {
+		t.Fatalf("only %d agent runs were seen; the review did not run", len(h.driver.claudeTokens))
+	}
+	want := "tok-" + h.fork.UserID
+	for i, got := range h.driver.claudeTokens {
+		if got != want {
+			t.Fatalf("agent run %d carried %q, want the fork owner's %q", i, got, want)
+		}
 	}
 }
 
@@ -557,7 +586,7 @@ func TestPipelineRefusesToRunWithoutAVerifier(t *testing.T) {
 	// Nothing may merge unverified, so a pipeline with no verifier is a
 	// configuration error rather than a mode that skips the check.
 	_, err := New(Deps{
-		Store: h.store, Driver: h.driver, Agent: agent.New(h.driver, agent.Config{}),
+		Store: h.store, Driver: h.driver, Agent: agent.New(h.driver, ownTokens{}, agent.Config{}),
 		Orch: h.orch,
 	}, Options{})
 	if err == nil {
@@ -835,4 +864,12 @@ func listeningPort(t *testing.T) int {
 		}
 	}()
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+// ownTokens gives every account a token of its own, derived from its id, so
+// a run carrying the wrong one is visible in what the driver received.
+type ownTokens struct{}
+
+func (ownTokens) ClaudeToken(_ context.Context, userID string) (string, error) {
+	return "tok-" + userID, nil
 }

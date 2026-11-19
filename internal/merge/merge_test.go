@@ -92,12 +92,20 @@ func agentSaying(driver *scriptDriver, text string) *agent.Runner {
 		"usage":          map[string]any{"input_tokens": 500, "output_tokens": 100},
 	})
 	driver.on("claude", ok(string(body)))
-	return agent.New(driver, agent.Config{})
+	return agent.New(driver, ownTokens{}, agent.Config{})
+}
+
+// ownTokens gives every account a token of its own, derived from its id, so
+// a run carrying the wrong one is visible in what the driver received.
+type ownTokens struct{}
+
+func (ownTokens) ClaudeToken(_ context.Context, userID string) (string, error) {
+	return "tok-" + userID, nil
 }
 
 func testFork() *domain.Fork {
 	return &domain.Fork{
-		ID: "fork_1", Name: "ratings", Description: "add star ratings",
+		ID: "fork_1", UserID: "usr_1", Name: "ratings", Description: "add star ratings",
 		Branch: "dabberz/ratings-abc123",
 	}
 }

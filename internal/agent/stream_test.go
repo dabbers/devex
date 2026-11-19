@@ -71,10 +71,11 @@ func TestStreamingDeliversTextAsItIsWritten(t *testing.T) {
 		},
 		result: &vm.ExecResult{Stdout: claudeJSON("Looking at the cart page. Done.", false, 100, 20, 0.05)},
 	}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	var seen []string
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "fix it",
 		OnText: func(text string) { seen = append(seen, text) },
 	})
@@ -114,10 +115,11 @@ func TestAFinishedBlockReplacesItsDeltas(t *testing.T) {
 		},
 		result: &vm.ExecResult{Stdout: claudeJSON("Half a sentence, finished.", false, 10, 5, 0.01)},
 	}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	var last string
 	if _, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "go",
 		OnText: func(text string) { last = text },
 	}); err != nil {
@@ -135,11 +137,11 @@ func TestStreamingIsOnlyAskedForWhenSomethingIsWatching(t *testing.T) {
 	driver := &streamingDriver{
 		result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.01)},
 	}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	// No OnText: a few thousand progress lines nobody reads is worse than one
 	// result object.
-	if _, err := r.Run(context.Background(), Request{InstanceID: "vm_1", Prompt: "go"}); err != nil {
+	if _, err := r.Run(context.Background(), Request{UserID: testUser, InstanceID: "vm_1", Prompt: "go"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if driver.streamed {
@@ -154,10 +156,11 @@ func TestANonStreamingDriverStillWorks(t *testing.T) {
 	// fakeDriver does not implement vm.Streaming, so a caller asking for text
 	// must still get a working run rather than an error.
 	driver := &fakeDriver{result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.02)}}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	called := false
 	res, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "go",
 		OnText: func(string) { called = true },
 	})
@@ -176,9 +179,10 @@ func TestStreamingArgvAsksForPartialMessages(t *testing.T) {
 	driver := &streamingDriver{
 		result: &vm.ExecResult{Stdout: claudeJSON("done", false, 10, 5, 0.01)},
 	}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	if _, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "go", OnText: func(string) {},
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -201,10 +205,11 @@ func TestNoiseInTheStreamIsIgnored(t *testing.T) {
 		},
 		result: &vm.ExecResult{Stdout: claudeJSON("real text", false, 10, 5, 0.01)},
 	}
-	r := New(driver, Config{})
+	r := New(driver, testCreds, Config{})
 
 	var updates []string
 	if _, err := r.Run(context.Background(), Request{
+		UserID:     testUser,
 		InstanceID: "vm_1", Prompt: "go",
 		OnText: func(text string) { updates = append(updates, text) },
 	}); err != nil {

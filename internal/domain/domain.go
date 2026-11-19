@@ -683,6 +683,10 @@ const (
 	// trail, which is stored in the clear.
 	EventSecretSet     EventType = "secret.set"
 	EventSecretDeleted EventType = "secret.deleted"
+	// Claude token events record that an account's own agent credential was
+	// stored or removed, never the value.
+	EventClaudeTokenSet     EventType = "claude_token.set"
+	EventClaudeTokenDeleted EventType = "claude_token.deleted"
 	// EventShellOpened records a person attaching a terminal to a machine an
 	// agent is working in, from where they can change anything the agent can.
 	EventShellOpened EventType = "shell.opened"

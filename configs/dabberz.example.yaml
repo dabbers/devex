@@ -6,7 +6,8 @@
 #
 #   DABBERZ_MASTER_KEY            secrets key (generate with `dabberzctl keygen`)
 #   DABBERZ_ORCHESTRATOR_API_KEY  the planning model's API key
-#   CLAUDE_CODE_OAUTH_TOKEN       the coding agent's token
+#   CLAUDE_CODE_OAUTH_TOKEN       optional; used only with claude.owner_fallback,
+#                                 and then only for the owner's own runs
 
 # The owner. With auth.kind "single" this is the one person every request is
 # attributed to; with a provider it is the account the first sign-in adopts, so

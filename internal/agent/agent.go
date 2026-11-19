@@ -29,8 +29,20 @@ const DefaultTimeout = 45 * time.Minute
 const DefaultPermissionMode = "bypassPermissions"
 
 // TokenEnv is the environment variable Claude Code authenticates with. It is
-// injected into the fork VM alongside the repo's inherited secrets.
+// injected into the run alongside the repo's inherited secrets, and always
+// from the account the run belongs to -- see Credentials.
 const TokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
+
+// Credentials resolves the Claude token a run is paid with.
+//
+// Per account, because the customer brings the subscription: a run in one
+// customer's workspace must authenticate as that customer and nobody else.
+// internal/claudeauth is the implementation; an error -- including an account
+// that has stored no token -- refuses the run rather than letting it start
+// unauthenticated or on somebody else's credential.
+type Credentials interface {
+	ClaudeToken(ctx context.Context, userID string) (string, error)
+}
 
 // AuthorName and AuthorEmail are who the agent's commits are by.
 const (
@@ -56,9 +68,6 @@ var escalationPattern = regexp.MustCompile(`(?m)^DABBERZ-ESCALATE\[(conflicts_in
 type Config struct {
 	// Binary is the Claude Code executable inside the VM.
 	Binary string `yaml:"binary" json:"binary"`
-	// OAuthToken authenticates Claude Code. It is passed per-run rather than
-	// baked into the golden image so it can be rotated without a rebuild.
-	OAuthToken string `yaml:"oauth_token" json:"oauth_token"`
 	// MCPConfig is the path, inside the VM, of the dabberz MCP server config
 	// that gives the agent secrets, preview control and browser driving.
 	MCPConfig string `yaml:"mcp_config" json:"mcp_config"`
@@ -106,16 +115,26 @@ func (c Config) withDefaults() Config {
 // Runner drives the coding agent inside VMs.
 type Runner struct {
 	driver vm.Driver
+	creds  Credentials
 	cfg    Config
 }
 
-// New returns a runner using driver to reach fork VMs.
-func New(driver vm.Driver, cfg Config) *Runner {
-	return &Runner{driver: driver, cfg: cfg.withDefaults()}
+// New returns a runner using driver to reach fork VMs and creds to decide
+// whose Claude token each run uses.
+//
+// The credentials are an argument rather than an optional field so that a
+// caller cannot build a runner without saying where tokens come from. A nil
+// one is accepted and refuses every run, which is loud in the right place.
+func New(driver vm.Driver, creds Credentials, cfg Config) *Runner {
+	return &Runner{driver: driver, creds: creds, cfg: cfg.withDefaults()}
 }
 
 // Request is one agent invocation.
 type Request struct {
+	// UserID is the account the run belongs to: the owner of the workspace or
+	// fork it is working in. It decides whose Claude token pays for the run,
+	// and is required.
+	UserID string
 	// InstanceID is the fork's VM.
 	InstanceID string
 	// Prompt is the instruction: the workstream description on the first run,
@@ -209,6 +228,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, fmt.Errorf("agent: a prompt is required")
 	}
+	token, err := r.token(ctx, req.UserID)
+	if err != nil {
+		return nil, err
+	}
 
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -219,9 +242,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	for k, v := range req.Env {
 		env[k] = v
 	}
-	if r.cfg.OAuthToken != "" {
-		env[TokenEnv] = r.cfg.OAuthToken
-	}
+	// Set after the repo's secrets, so it always wins. A repo secret of the
+	// same name would otherwise decide whose subscription pays, and a repo
+	// secret is reachable by every service the repo runs, which is not where
+	// a customer's Claude credential belongs.
+	env[TokenEnv] = token
 	if r.cfg.SessionDir != "" {
 		env[ConfigDirEnv] = r.cfg.SessionDir
 	}
@@ -325,6 +350,28 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	// emitted, so those are matched against everything the run produced.
 	result.RateLimited = looksRateLimited(exec.Stdout + "\n" + exec.Stderr)
 	return result, nil
+}
+
+// token resolves the run's Claude token, refusing a run that names no
+// account or whose account has none.
+//
+// The error never carries the token, and is phrased for the person whose run
+// was refused: it surfaces in their conversation or on their fork.
+func (r *Runner) token(ctx context.Context, userID string) (string, error) {
+	if userID == "" {
+		return "", fmt.Errorf("agent: a run must name the account it belongs to")
+	}
+	if r.creds == nil {
+		return "", fmt.Errorf("agent: this deployment has no source of Claude credentials, so no agent can run")
+	}
+	token, err := r.creds.ClaudeToken(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("agent: %w", err)
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("agent: the Claude token for this account is empty, so the agent cannot run")
+	}
+	return token, nil
 }
 
 // invoke runs the agent once, optionally resuming a conversation.

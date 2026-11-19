@@ -22,6 +22,7 @@ import (
 
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/api"
+	"github.com/dabbers/devex/internal/claudeauth"
 	"github.com/dabbers/devex/internal/config"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/gitauth"
@@ -167,7 +168,8 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	// has one, and so an existing single-user database is the row the first
 	// provider sign-in adopts rather than being left orphaned beside a new
 	// one. Users are otherwise created on first sign-in.
-	if _, err := db.EnsureUser(ctx, cfg.Owner); err != nil {
+	owner, err := db.EnsureUser(ctx, cfg.Owner)
+	if err != nil {
 		return nil, err
 	}
 
@@ -237,7 +239,18 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		}
 	}), orchestrator.Options{Tripwire: cfg.Tripwire, Logger: logger})
 
-	agentRunner := agent.New(driver, cfg.Agent)
+	// Each account's agent runs are paid for with that account's own Claude
+	// token, stored sealed in the vault. The daemon's token is consulted only
+	// for the owner, and only when the configuration asks for that.
+	claudeOpts := claudeauth.Options{Vault: vault}
+	if cfg.Claude.OwnerFallback {
+		claudeOpts.FallbackToken, claudeOpts.FallbackUserID = cfg.Claude.Token, owner.ID
+	}
+	claudeTokens, err := claudeauth.New(claudeOpts)
+	if err != nil {
+		return nil, err
+	}
+	agentRunner := agent.New(driver, claudeTokens, cfg.Agent)
 
 	verifier, err := buildVerifier(ctx, driver, &cfg, logger)
 	if err != nil {
@@ -396,7 +409,8 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Store: db, Orch: orch, Sched: sched, Preview: allocator,
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
 		UI: ui, Authn: authenticator, Visitors: visitors, Workspaces: workspaces,
-		Agent: agentRunner, GitTokens: gitTokens, Installer: installer, Logger: logger,
+		Agent: agentRunner, GitTokens: gitTokens, ClaudeTokens: claudeTokens,
+		Installer: installer, Logger: logger,
 	})
 	if err != nil {
 		return nil, err

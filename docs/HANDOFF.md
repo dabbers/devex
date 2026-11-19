@@ -202,11 +202,24 @@ tasks and neither is cosmetic.
   machine config already exist. **Hard constraint: the guest rootfs must be a copy-on-write
   overlay of the golden image, never a copy** — a 40 GiB copy per fork on these
   spinning disks is minutes before an agent can start.
-- **The agent's Claude token is process-wide.** `CLAUDE_CODE_OAUTH_TOKEN` is
-  read once from the daemon's environment, so one subscription funds every
-  agent run. That contradicts the whole bring-your-own position. It needs the
-  shape `internal/gitauth` already uses: resolved per workspace from that
-  customer's own stored credential.
+- **The agent's Claude token was process-wide; it is now per account (not
+  yet deployed).** Each account stores its own token with `PUT /v1/claude`
+  (`{"token": "..."}`, from `claude setup-token`); `GET` says whether one is set
+  and what runs would use, `DELETE` removes it. It is sealed in the vault in a
+  table of its own (`user_credentials`, bound to the account, so a row moved to
+  another account will not open) rather than as a repo secret, which every
+  service would see. `internal/claudeauth` resolves it, and `agent.Runner`
+  requires the run's account and sets the token itself, over any repo secret
+  of the same name. An account with no token has its runs **refused** with a
+  message saying how to add one -- never run on someone else's. No response,
+  log line or audit entry carries the value.
+  **What the owner must set before deploying this:** either store a token for
+  the owner's account with `PUT /v1/claude`, or set `claude.owner_fallback:
+  true` in `/etc/dabberz/dabberz.yaml`, which lets the *owner's* runs (and only
+  the owner's) use `CLAUDE_CODE_OAUTH_TOKEN` until they store their own. It is
+  off by default; on with the variable empty, the daemon refuses to start.
+  Without one of the two, every agent run on dbz-alpha is refused. Still
+  process-wide: the planning model's `DABBERZ_ORCHESTRATOR_API_KEY`.
 
 ## How this codebase expects to be worked on
 
