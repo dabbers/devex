@@ -143,7 +143,8 @@ agent:
 # their own; it never applies to any other account. Off unless set. Turning it on
 # with the variable empty stops the daemon from starting.
 claude:
-  owner_fallback: false
+  # On until the owner stores their own token under Account; then turn off.
+  owner_fallback: true
 
 verify:
   profiles: 4
