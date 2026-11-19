@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/dabbers/devex/internal/domain"
 )
 
 const previewRouteColumns = "workspace_id, service_id, hostname, upstream_host, upstream_port, created_at"
@@ -95,10 +98,18 @@ type OwnedRoute struct {
 	// route nobody owns may serve a public surface but may never be told that
 	// somebody is signed in.
 	OwnerID string
+	// Access is the front door of the installation this route belongs to.
+	// Every workspace on an installation's repository shares it -- the one
+	// serving customers and every change being worked on -- because a change's
+	// preview is the same app with the same admin pages, and leaving those
+	// open on a preview would be leaving them open. A route with no
+	// installation behind it, such as a plain repository's workspace, is
+	// public, which is what every route was before policies existed.
+	Access domain.Access
 }
 
-// ListOwnedRoutes returns every published route with its owner, which is what
-// the proxy configuration is regenerated from.
+// ListOwnedRoutes returns every published route with its owner and access
+// policy, which is what the proxy configuration is regenerated from.
 //
 // A left join, deliberately: a route whose workspace has been deleted still
 // answers -- stale preview links get a real page rather than a connection
@@ -106,7 +117,9 @@ type OwnedRoute struct {
 func (s *Store) ListOwnedRoutes(ctx context.Context) ([]*OwnedRoute, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT p.workspace_id, p.service_id, p.hostname, p.upstream_host, p.upstream_port, "+
-			"p.created_at, COALESCE(w.user_id, '') "+
+			"p.created_at, COALESCE(w.user_id, ''), "+
+			"(SELECT i.access FROM installations i WHERE i.repo_id = w.repo_id "+
+			"ORDER BY i.created_at LIMIT 1) "+
 			"FROM preview_routes p LEFT JOIN workspaces w ON w.id = p.workspace_id "+
 			"ORDER BY p.hostname")
 	if err != nil {
@@ -118,8 +131,12 @@ func (s *Store) ListOwnedRoutes(ctx context.Context) ([]*OwnedRoute, error) {
 	for rows.Next() {
 		var r OwnedRoute
 		var created string
+		var access sql.NullString
 		if err := rows.Scan(&r.WorkspaceID, &r.ServiceID, &r.Hostname,
-			&r.UpstreamHost, &r.UpstreamPort, &created, &r.OwnerID); err != nil {
+			&r.UpstreamHost, &r.UpstreamPort, &created, &r.OwnerID, &access); err != nil {
+			return nil, wrapErr("list owned routes", err)
+		}
+		if r.Access, err = decodeAccess(access.String); err != nil {
 			return nil, wrapErr("list owned routes", err)
 		}
 		r.CreatedAt, err = parseTime(created)

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
@@ -79,6 +80,11 @@ type Config struct {
 	// PortStart and PortEnd bound the host ports allocated to forks.
 	PortStart int `yaml:"port_start" json:"port_start"`
 	PortEnd   int `yaml:"port_end" json:"port_end"`
+	// PanelURL is where the control plane is reached, such as
+	// "https://panel.dabberz.com". A members-only page on an app bounces there
+	// to find out who the visitor is. Empty means nobody can sign in at an
+	// app, so members-only pages are refused outright.
+	PanelURL string `yaml:"panel_url" json:"panel_url"`
 }
 
 func (c Config) withDefaults() Config {
@@ -105,6 +111,12 @@ func (c Config) Validate() error {
 	}
 	if !c.Router.Valid() {
 		return fmt.Errorf("preview: router %q is not one of inprocess, caddy, none", c.Router)
+	}
+	if c.PanelURL != "" {
+		u, err := url.Parse(c.PanelURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("preview: panel_url %q must be just a scheme and a host, such as https://panel.example.com", c.PanelURL)
+		}
 	}
 	return nil
 }
@@ -250,6 +262,7 @@ func (a *Allocator) Publish(ctx context.Context) error {
 			UpstreamHost: r.UpstreamHost,
 			UpstreamPort: r.UpstreamPort,
 			OwnerID:      r.OwnerID,
+			Access:       r.Access,
 		})
 	}
 	if err := a.router.Apply(ctx, routes); err != nil {

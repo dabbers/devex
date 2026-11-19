@@ -1984,6 +1984,8 @@ async function renderService(id) {
       prompt.disabled = false;
     }
   });
+  root.append(accessSection(one));
+
   root.append(section("Ask for a change",
     el("div", { style: "max-width:620px" },
       el("p", { class: "muted", text:
@@ -2135,6 +2137,7 @@ async function renderChange(id) {
 }
 
 const ROUTES = [
+  [/^#\/open$/, (_, params) => renderOpen(params), null],
   [/^#\/$/, () => renderServices(), "services"],
   [/^#\/services\/new$/, () => renderNewService(), "services"],
   [/^#\/service\/([\w-]+)$/, (m) => renderService(m[1]), "services"],
@@ -2315,3 +2318,83 @@ async function start() {
 }
 
 start();
+
+// ------------------------------------------------------------ app sign-in
+
+// renderOpen is the panel's half of signing in at an app. The app's edge sent
+// the visitor here because a page there is for members, and the panel is the
+// one place that knows who they are. It vouches for them and sends them back;
+// the edge then decides whether that makes them a member.
+async function renderOpen(params) {
+  const host = params.get("host") || "";
+  const state = params.get("state") || "";
+  const root = view();
+  clear(root);
+  root.append(pageHead("Opening your app", { lede: host }));
+  const status = el("p", { class: "muted", text: "Signing you in…" });
+  root.append(status);
+  if (!host || !state) {
+    status.textContent = "This link is missing what it needs. Open the app again and it will send you back here properly.";
+    return null;
+  }
+  try {
+    const { url } = await api.send("POST", "/v1/edge/signin", { host, state });
+    // Replace, so Back from the app does not land on a page that would only
+    // send it forward again.
+    location.replace(url);
+  } catch (err) {
+    status.textContent = `Could not sign you in to ${host}: ${err.message}`;
+  }
+  return null;
+}
+
+const ACCESS_WORDS = {
+  internal: "Members only",
+  hybrid: "Members only, except some public pages",
+  public: "Anyone",
+};
+
+// accessSection is who the service lets in. The edge enforces it, so it holds
+// whatever the app's code does -- including code an agent just changed.
+function accessSection(one) {
+  const access = one.access || { mode: "public" };
+  const mode = el("select", { class: "input" },
+    ...Object.entries(ACCESS_WORDS).map(([value, text]) =>
+      el("option", { value, text, selected: value === access.mode })));
+  const paths = el("textarea", {
+    class: "input", rows: "3",
+    placeholder: "/f/\n/healthz",
+  });
+  paths.value = (access.public || []).join("\n");
+  const pathsField = el("div", { class: "field" },
+    el("label", { text: "Public pages (one per line; ending in / covers everything under it)" }), paths);
+  const sync = () => { pathsField.style.display = mode.value === "hybrid" ? "" : "none"; };
+  mode.addEventListener("change", sync);
+  sync();
+
+  const save = el("button", { class: "btn btn-secondary", text: "Save" });
+  save.addEventListener("click", async () => {
+    const body = { mode: mode.value };
+    if (mode.value === "hybrid") {
+      body.public = paths.value.split("\n").map((p) => p.trim()).filter(Boolean);
+    }
+    save.disabled = true;
+    try {
+      await api.send("PUT", `/v1/installations/${one.id}/access`, body);
+      toast("Saved. It applies from the next page anyone opens.");
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  return section("Who can get in",
+    el("div", { style: "max-width:620px" },
+      el("p", { class: "muted", text:
+        "Members are you, for now. Anyone else who opens a members-only page is asked to sign in, " +
+        "and turned away if they are not a member. Its previews follow the same rule." }),
+      el("div", { class: "field" }, mode),
+      pathsField,
+      el("div", { class: "row-actions" }, save)));
+}

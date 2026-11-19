@@ -41,8 +41,8 @@ func TestOneInstallationCannotSetCookiesOnAnother(t *testing.T) {
 
 	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: theirs, UpstreamHost: malloryHost, UpstreamPort: malloryPort},
-		{Hostname: yours, UpstreamHost: yoursHost, UpstreamPort: yoursPort},
+		{Access: open, Hostname: theirs, UpstreamHost: malloryHost, UpstreamPort: malloryPort},
+		{Access: open, Hostname: yours, UpstreamHost: yoursHost, UpstreamPort: yoursPort},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

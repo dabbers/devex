@@ -63,7 +63,7 @@ func TestRoutesByHostAndFallsBackToTheControlPlane(t *testing.T) {
 		io.WriteString(w, "control plane")
 	}))
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
+		{Access: open, Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestPreservesThePublicHostname(t *testing.T) {
 
 	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
+		{Access: open, Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestMatchesHostRegardlessOfPortAndCase(t *testing.T) {
 		io.WriteString(w, "fallback")
 	}))
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
+		{Access: open, Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -191,14 +191,14 @@ func TestApplyReplacesTheWholeTable(t *testing.T) {
 	}))
 	ctx := context.Background()
 	if err := mux.Apply(ctx, []proxy.Route{
-		{Hostname: "old.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
+		{Access: open, Hostname: "old.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	// Whole-config, not a delta: a withdrawn route must stop answering, which
 	// is the property that lets the database stay the single source of truth.
 	if err := mux.Apply(ctx, []proxy.Route{
-		{Hostname: "new.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
+		{Access: open, Hostname: "new.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
 		t.Fatalf("Apply (replacement): %v", err)
 	}
@@ -222,7 +222,7 @@ func TestExplainsAnUpstreamThatIsNotListeningYet(t *testing.T) {
 	// Port 1 on loopback: a route that exists, pointing at nothing. This is
 	// the ordinary state while a VM boots and dependencies install.
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: "127.0.0.1", UpstreamPort: 1},
+		{Access: open, Hostname: "web-shop-cart.ondabberz.link", UpstreamHost: "127.0.0.1", UpstreamPort: 1},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -245,8 +245,8 @@ func TestExplainsAnUpstreamThatIsNotListeningYet(t *testing.T) {
 func TestApplyRefusesDuplicateHostnames(t *testing.T) {
 	mux := New("ondabberz.link", nil, nil)
 	err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.1", UpstreamPort: 3000},
-		{Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.2", UpstreamPort: 3000},
+		{Access: open, Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.1", UpstreamPort: 3000},
+		{Access: open, Hostname: "same.ondabberz.link", UpstreamHost: "10.0.0.2", UpstreamPort: 3000},
 	})
 	if err == nil {
 		t.Fatal("two forks were allowed to claim one hostname; which preview you reach would be a coin flip")
@@ -282,7 +282,7 @@ func TestStreamingResponsesAreFlushedThrough(t *testing.T) {
 
 	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "web.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
+		{Access: open, Hostname: "web.ondabberz.link", UpstreamHost: host, UpstreamPort: port},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestStreamingResponsesAreFlushedThrough(t *testing.T) {
 func TestRoutesAreReportedForDiagnostics(t *testing.T) {
 	mux := New("ondabberz.link", nil, nil)
 	if err := mux.Apply(context.Background(), []proxy.Route{
-		{Hostname: "web.ondabberz.link", UpstreamHost: "172.30.0.2", UpstreamPort: 41000},
+		{Access: open, Hostname: "web.ondabberz.link", UpstreamHost: "172.30.0.2", UpstreamPort: 41000},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -327,6 +327,7 @@ func TestAVisitorCannotClaimToBeSomeone(t *testing.T) {
 	who := &stubVisitors{as: &domain.User{ID: "usr_real", Email: "real@example.com"}}
 	mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Access:       open,
 		Hostname:     "app.ondabberz.link",
 		UpstreamHost: "127.0.0.1",
 		UpstreamPort: upstreamPort(t, upstream.URL),
@@ -389,6 +390,7 @@ func TestAnAnonymousVisitorIsAnnouncedAsNobody(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err := mux.Apply(context.Background(), []proxy.Route{{
+				Access:       open,
 				Hostname:     "app.ondabberz.link",
 				UpstreamHost: "127.0.0.1",
 				UpstreamPort: upstreamPort(t, upstream.URL),
@@ -446,6 +448,7 @@ func TestASignedInStrangerIsNotAnnouncedOnSomebodyElsesHostname(t *testing.T) {
 	who := &stubVisitors{as: &domain.User{ID: "usr_stranger", Email: "stranger@example.com"}}
 	mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Access:       open,
 		Hostname:     "app.ondabberz.link",
 		UpstreamHost: "127.0.0.1",
 		UpstreamPort: upstreamPort(t, upstream.URL),
@@ -494,6 +497,7 @@ func TestARouteNobodyOwnsAnnouncesNobody(t *testing.T) {
 	who := &stubVisitors{as: &domain.User{ID: "usr_real", Email: "real@example.com"}}
 	mux := New("ondabberz.link", who, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Access:       open,
 		Hostname:     "orphan.ondabberz.link",
 		UpstreamHost: "127.0.0.1",
 		UpstreamPort: upstreamPort(t, upstream.URL),

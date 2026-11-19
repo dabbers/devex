@@ -208,6 +208,7 @@ func (i *Installer) Install(ctx context.Context, req Request) (*domain.Installat
 		AppVersion: app.Spec.Version,
 		Name:       name,
 		State:      domain.InstallationProvisioning,
+		Access:     app.Spec.DefaultAccess(),
 	}
 
 	repo, project, err := i.record(ctx, app, installation)

@@ -54,3 +54,12 @@ extends:
 
 checks:
   suite: checks/
+
+# Who gets in. Filling in a form is for anyone with the link; everything else
+# -- listing forms, reading what people sent, exporting -- is for the
+# installation's members, and the platform keeps that door, not this app.
+access:
+  mode: hybrid
+  public:
+    - /f/
+    - /healthz

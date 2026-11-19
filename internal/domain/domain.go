@@ -678,6 +678,7 @@ const (
 	EventWorkspaceStarted     EventType = "workspace.started"
 	EventWorkspaceStopped     EventType = "workspace.stopped"
 	EventWorkspaceArchived    EventType = "workspace.archived"
+	EventInstallationAccess   EventType = "installation.access"
 	EventWorkspaceStateChange EventType = "workspace.state_changed"
 	EventError                EventType = "error"
 
@@ -807,6 +808,10 @@ type Installation struct {
 	URL string `json:"url,omitempty"`
 	// Domain is the customer's own hostname, once attached.
 	Domain string `json:"domain,omitempty"`
+
+	// Access is who the edge lets in, starting from what the app's manifest
+	// declares and changed by the owner.
+	Access Access `json:"access"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -951,4 +956,86 @@ func (c *Change) Passed() bool {
 		}
 	}
 	return len(c.Checks) > 0
+}
+
+// AccessMode is who an app lets in, decided at the edge before the app sees a
+// request.
+type AccessMode string
+
+const (
+	// AccessPublic lets anyone in. The app may still recognise a member -- the
+	// edge says who they are -- but nothing is refused on the way in.
+	AccessPublic AccessMode = "public"
+	// AccessInternal lets in only the app's members. Everyone else is sent to
+	// sign in, or refused if they already have and are not a member.
+	AccessInternal AccessMode = "internal"
+	// AccessHybrid is internal except for the paths listed as public: a form
+	// anyone can fill in, on an app only its members can manage.
+	AccessHybrid AccessMode = "hybrid"
+)
+
+// Access is an installation's front door.
+//
+// It is enforced by the edge and not left to the app, because the app is code
+// an agent may have just changed. An admin page that an agent accidentally
+// stopped checking is still behind the door.
+//
+// Members today are the installation's owner. Organisations and roles widen
+// that; the policy's shape does not change when they do.
+type Access struct {
+	Mode AccessMode `json:"mode" yaml:"mode"`
+	// Public lists the path prefixes anyone may reach on a hybrid app. A
+	// prefix ending in "/" covers everything under it; one that does not is
+	// that exact path. Ignored for the other modes.
+	Public []string `json:"public,omitempty" yaml:"public,omitempty"`
+}
+
+// Validate checks a policy is one the edge can enforce as written.
+func (a Access) Validate() error {
+	switch a.Mode {
+	case AccessPublic, AccessInternal:
+		return nil
+	case AccessHybrid:
+		if len(a.Public) == 0 {
+			return errors.New("domain: a hybrid app names the paths that are public; with none it is internal")
+		}
+		for _, prefix := range a.Public {
+			if !strings.HasPrefix(prefix, "/") || strings.HasPrefix(prefix, "//") {
+				return fmt.Errorf("domain: public path %q must start with a single /", prefix)
+			}
+			if strings.ContainsAny(prefix, "?#*") {
+				return fmt.Errorf("domain: public path %q is a prefix, not a pattern", prefix)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("domain: access must be public, internal or hybrid, not %q", a.Mode)
+	}
+}
+
+// MembersOnly reports whether reaching path needs a member.
+//
+// The path is cleaned first, so "/f/../admin" is judged as "/admin": the
+// prefix test is on the path the app will route, not the one the visitor
+// spelled.
+func (a Access) MembersOnly(cleanPath string) bool {
+	switch a.Mode {
+	case AccessPublic:
+		return false
+	case AccessHybrid:
+		for _, prefix := range a.Public {
+			if strings.HasSuffix(prefix, "/") {
+				if strings.HasPrefix(cleanPath, prefix) || cleanPath+"/" == prefix {
+					return false
+				}
+			} else if cleanPath == prefix {
+				return false
+			}
+		}
+		return true
+	default:
+		// Internal, and anything unrecognised: a policy the edge does not
+		// understand fails closed.
+		return true
+	}
 }

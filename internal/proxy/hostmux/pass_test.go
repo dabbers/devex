@@ -30,6 +30,7 @@ func passEdge(t *testing.T, issuer *previewpass.Issuer) (*httptest.Server, chan 
 	mux := New("ondabberz.link", &stubVisitors{err: auth.ErrNoCredentials},
 		slog.New(slog.NewTextHandler(io.Discard, nil))).WithPasses(issuer)
 	if err := mux.Apply(context.Background(), []proxy.Route{{
+		Access:       open,
 		Hostname:     "app-change.ondabberz.link",
 		UpstreamHost: "127.0.0.1",
 		UpstreamPort: upstreamPort(t, upstream.URL),

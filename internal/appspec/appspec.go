@@ -52,6 +52,19 @@ type Spec struct {
 	Jobs     []Job     `yaml:"jobs"`
 	Extends  Extends   `yaml:"extends"`
 	Checks   Checks    `yaml:"checks"`
+
+	// Access is who the edge lets in, as the app ships. The owner can change
+	// it per installation. Left out, an app is internal: members only, which
+	// is the mistake that costs nothing if it is wrong.
+	Access *domain.Access `yaml:"access"`
+}
+
+// DefaultAccess is the policy an installation starts with.
+func (s *Spec) DefaultAccess() domain.Access {
+	if s.Access == nil {
+		return domain.Access{Mode: domain.AccessInternal}
+	}
+	return *s.Access
 }
 
 // Build turns a checkout into something runnable, before any service starts.
@@ -198,6 +211,11 @@ func (s *Spec) Validate() error {
 	s.validateSecrets(fail)
 	s.validateAgentSurface(fail)
 	s.validateJobs(fail)
+	if s.Access != nil {
+		if err := s.Access.Validate(); err != nil {
+			fail("access: %s", strings.TrimPrefix(err.Error(), "domain: "))
+		}
+	}
 	s.validateExtends(fail)
 
 	if len(problems) > 0 {

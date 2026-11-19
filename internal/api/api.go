@@ -53,6 +53,7 @@ type Server struct {
 	gitTokens  GitLinks
 	agentCreds AgentCreds
 	installer  *install.Installer
+	edge       EdgeSignIn
 	logger     *slog.Logger
 	streamGap  time.Duration
 	// streamKeepalive is how long a feed may say nothing before it says
@@ -107,7 +108,10 @@ type Deps struct {
 	// alongside Authn, and the same translator the edge uses, so that the
 	// panel and an app never disagree about who somebody is.
 	Visitors *identity.Translator
-	Logger   *slog.Logger
+	// EdgeSignIn signs people in at apps. Optional: without it, members-only
+	// pages on apps can only be refused.
+	EdgeSignIn EdgeSignIn
+	Logger     *slog.Logger
 }
 
 // New returns an API server.
@@ -134,7 +138,7 @@ func New(deps Deps) (*Server, error) {
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
 		authn: deps.Authn, visitors: deps.Visitors, workspaces: deps.Workspaces, agent: deps.Agent,
 		gitTokens: deps.GitTokens, agentCreds: deps.AgentCreds, installer: deps.Installer,
-		logger: logger,
+		edge: deps.EdgeSignIn, logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second, streamKeepalive: 20 * time.Second,
@@ -162,6 +166,11 @@ func (s *Server) Handler() http.Handler {
 	rt.handle("GET /v1/installations/{installation}", s.getInstallation)
 	rt.handle("DELETE /v1/installations/{installation}", s.deleteInstallation)
 	rt.handle("POST /v1/installations/{installation}/rollback", s.rollbackInstallation)
+	rt.handle("PUT /v1/installations/{installation}/access", s.setInstallationAccess)
+
+	// Signing in at an app: the panel vouches for who you are, the app's
+	// edge decides whether that lets you in.
+	rt.handle("POST /v1/edge/signin", s.edgeSignIn)
 
 	// Changing an installation. The id in the path is what the tenancy gate
 	// works from, so a change is reachable by its own id once opened.

@@ -214,6 +214,12 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 			return nil, err
 		}
 		hostRouter.WithPasses(passes)
+		if cfg.Preview.PanelURL != "" {
+			hostRouter.WithSignIn(cfg.Preview.PanelURL, cfg.Preview.Scheme, passes)
+		} else {
+			logger.Warn("preview.panel_url is not set; members-only pages on apps are refused, " +
+				"since there is nowhere to sign in")
+		}
 	}
 	allocator, err := preview.New(db, router, cfg.Preview)
 	if err != nil {
@@ -411,7 +417,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		Vault: vault, Memory: mem, Verifier: verifier, Driver: driver,
 		UI: ui, Authn: authenticator, Visitors: visitors, Workspaces: workspaces,
 		Agent: agentRunner, GitTokens: gitTokens, AgentCreds: agentCreds,
-		Installer: installer, Logger: logger,
+		Installer: installer, Logger: logger, EdgeSignIn: edgeSignIn(hostRouter),
 	})
 	if err != nil {
 		return nil, err
@@ -661,4 +667,14 @@ func providedBlocks(cfg config.Config, issuer string) install.Provided {
 		SearchURL:   cfg.Blocks.SearchURL,
 	}
 	return provided
+}
+
+// edgeSignIn is the in-process edge as the API sees it, or nothing. Spelled
+// out because a nil *hostmux.Mux in an interface is not a nil interface, and
+// the API decides whether sign-in exists by comparing with nil.
+func edgeSignIn(mux *hostmux.Mux) api.EdgeSignIn {
+	if mux == nil {
+		return nil
+	}
+	return mux
 }

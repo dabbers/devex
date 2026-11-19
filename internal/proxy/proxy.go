@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/dabbers/devex/internal/domain"
 )
 
 // Route publishes one hostname to one upstream.
@@ -34,6 +36,10 @@ type Route struct {
 	// signed-in visitor on anybody's installation. Empty means nobody: the
 	// route still serves whatever is public about it.
 	OwnerID string `json:"owner_id,omitempty"`
+	// Access is who the edge lets through to this route. The zero value lets
+	// nobody in who is not the owner, so a route built without a policy fails
+	// closed; a route meant to be open says public.
+	Access domain.Access `json:"access"`
 }
 
 // Upstream renders the dial target.

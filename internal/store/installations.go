@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,11 +15,43 @@ import (
 
 const installationColumns = `id, user_id, app, app_version, name, state, state_reason,
 	repo_id, project_id, workspace_id, database, url, domain, revision, previous_revision,
-	created_at, updated_at, started_at`
+	created_at, updated_at, started_at, access`
+
+// encodeAccess stores a policy. The zero policy is stored as empty, which is
+// what an installation made before policies existed has, and reads back as
+// public; see migration 0016.
+func encodeAccess(a domain.Access) (string, error) {
+	if a.Mode == "" {
+		return "", nil
+	}
+	if err := a.Validate(); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(a)
+	return string(raw), err
+}
+
+// decodeAccess reads a policy back. Unreadable is an error rather than a
+// default: guessing public would open an internal app, and guessing internal
+// would shut a public one, and neither should happen silently.
+func decodeAccess(raw string) (domain.Access, error) {
+	if raw == "" {
+		return domain.Access{Mode: domain.AccessPublic}, nil
+	}
+	var a domain.Access
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		return domain.Access{}, fmt.Errorf("store: unreadable access policy: %w", err)
+	}
+	return a, nil
+}
 
 // CreateInstallation records a new installation.
 func (s *Store) CreateInstallation(ctx context.Context, i *domain.Installation) error {
 	if err := i.Validate(); err != nil {
+		return err
+	}
+	access, err := encodeAccess(i.Access)
+	if err != nil {
 		return err
 	}
 	if i.ID == "" {
@@ -33,13 +66,13 @@ func (s *Store) CreateInstallation(ctx context.Context, i *domain.Installation) 
 	}
 	i.UpdatedAt = now
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO installations (`+installationColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		i.ID, i.UserID, i.App, i.AppVersion, i.Name, string(i.State), i.StateReason,
 		i.RepoID, i.ProjectID, nullableString(i.WorkspaceID), i.Database, i.URL, i.Domain,
 		i.Revision, i.PreviousRevision,
-		formatTime(i.CreatedAt), formatTime(i.UpdatedAt), nullTime(i.StartedAt))
+		formatTime(i.CreatedAt), formatTime(i.UpdatedAt), nullTime(i.StartedAt), access)
 	if err != nil {
 		if strings.Contains(err.Error(), "installations_name_per_user") {
 			return fmt.Errorf("%w: you already have an installation called %q", ErrConflict, i.Name)
@@ -103,17 +136,21 @@ func (s *Store) UpdateInstallation(ctx context.Context, i *domain.Installation) 
 	if err := i.Validate(); err != nil {
 		return err
 	}
+	access, err := encodeAccess(i.Access)
+	if err != nil {
+		return err
+	}
 	i.UpdatedAt = time.Now().UTC()
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE installations SET app_version = ?, name = ?, state = ?, state_reason = ?,
 			workspace_id = ?, database = ?, url = ?, domain = ?,
-			revision = ?, previous_revision = ?, updated_at = ?, started_at = ?
+			revision = ?, previous_revision = ?, updated_at = ?, started_at = ?, access = ?
 		WHERE id = ?`,
 		i.AppVersion, i.Name, string(i.State), i.StateReason,
 		nullableString(i.WorkspaceID), i.Database, i.URL, i.Domain,
 		i.Revision, i.PreviousRevision,
-		formatTime(i.UpdatedAt), nullTime(i.StartedAt), i.ID)
+		formatTime(i.UpdatedAt), nullTime(i.StartedAt), access, i.ID)
 	if err != nil {
 		return wrapErr("update installation", err)
 	}
@@ -140,11 +177,12 @@ func scanInstallation(row scannable) (*domain.Installation, error) {
 		startedAt   sql.NullString
 		createdAt   string
 		updatedAt   string
+		access      string
 	)
 	err := row.Scan(&one.ID, &one.UserID, &one.App, &one.AppVersion, &one.Name,
 		&state, &one.StateReason, &one.RepoID, &one.ProjectID, &workspaceID,
 		&one.Database, &one.URL, &one.Domain, &one.Revision, &one.PreviousRevision,
-		&createdAt, &updatedAt, &startedAt)
+		&createdAt, &updatedAt, &startedAt, &access)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, fmt.Errorf("%w: installation", ErrNotFound)
@@ -154,6 +192,9 @@ func scanInstallation(row scannable) (*domain.Installation, error) {
 
 	one.State = domain.InstallationState(state)
 	one.WorkspaceID = workspaceID.String
+	if one.Access, err = decodeAccess(access); err != nil {
+		return nil, err
+	}
 	if one.CreatedAt, err = parseTime(createdAt); err != nil {
 		return nil, err
 	}

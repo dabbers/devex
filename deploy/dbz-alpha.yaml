@@ -93,6 +93,9 @@ preview:
   # talks to this machine over plain HTTP, which is why the router is in
   # process rather than Caddy.
   scheme: https
+  # Where an app sends a visitor to find out who they are, before letting them
+  # on to its members-only pages.
+  panel_url: https://panel.dabberz.com
   port_start: 41000
   port_end: 42999
   router: inprocess

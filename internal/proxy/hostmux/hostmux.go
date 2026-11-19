@@ -65,6 +65,7 @@ type Mux struct {
 	fallback http.Handler
 	who      Identities
 	passes   Passes
+	signIn   *signIn
 	logger   *slog.Logger
 }
 
@@ -82,6 +83,8 @@ func (m *Mux) WithPasses(passes Passes) *Mux {
 
 type route struct {
 	upstream string
+	owner    string
+	access   domain.Access
 	proxy    *httputil.ReverseProxy
 }
 
@@ -145,6 +148,8 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 		hostname, owner := r.Hostname, r.OwnerID
 		next[hostname] = &route{
 			upstream: upstream,
+			owner:    owner,
+			access:   r.Access,
 			proxy: &httputil.ReverseProxy{
 				Rewrite: func(pr *httputil.ProxyRequest) {
 					pr.SetURL(target)
@@ -191,6 +196,7 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 				// hostname.
 				ModifyResponse: func(resp *http.Response) error {
 					hostOnlyCookies(resp.Header)
+					dropReservedCookies(resp.Header)
 					return nil
 				},
 				// Flush every write immediately. Hot reload and server-sent
@@ -219,7 +225,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.RUnlock()
 
 	if target != nil {
-		target.proxy.ServeHTTP(w, m.withVisitor(r))
+		m.serveRoute(w, r, host, target)
 		return
 	}
 	if m.inPreviewZone(host) {
