@@ -84,12 +84,9 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
    is now right; that it is read was not confirmed end to end, because only a
    new user's first sign-in exercises it.
-4. **The install tests leak the services they start.** A run of
-   `./internal/install` left ~50 `forms serve` processes behind as the test
-   user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
-5. **A `scratch` platform token** created on 2026-11-18 is live and was not
+4. **A `scratch` platform token** created on 2026-11-18 is live and was not
    made by this session. Leave it unless its owner says otherwise.
-6. **golangci-lint is not installed on the host**, so nothing this session
+5. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
 
 ## What this session fixed, all running on the host
@@ -246,3 +243,9 @@ listed because they rhyme with mistakes still available to make.
 - **Tests that substitute the wrong seam.** Several tenancy tests swapped the
   authenticator while the code had moved to a translator, so they passed
   requests they existed to refuse.
+- The install tests left ~50 `forms serve` behind per run. The local driver's
+  `Destroy` only removes the directory, and nothing stopped the services first.
+  `newInstaller` now releases every workspace its store holds when the test
+  ends, pass or fail, then fails the test and kills anything still running
+  from the test's own directory (`internal/install/leaks_test.go`). Seen to
+  fail, naming the stragglers, with the release removed.
