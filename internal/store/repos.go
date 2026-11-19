@@ -79,6 +79,19 @@ func (s *Store) UpdateRepo(ctx context.Context, r *domain.Repo) error {
 	return affectedOne("update repo", res)
 }
 
+// DeleteRepo removes a repo and, by cascade, everything recorded against it:
+// its projects, services, secrets, workspaces, tasks, and the installation and
+// changes it backs. What lives outside this database -- the repository on
+// disk, a machine, a provisioned Postgres database -- is the caller's to
+// remove first.
+func (s *Store) DeleteRepo(ctx context.Context, repoID string) error {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM repos WHERE id = ?", repoID)
+	if err != nil {
+		return wrapErr("delete repo", err)
+	}
+	return affectedOne("delete repo", res)
+}
+
 func scanRepo(row rowScanner) (*domain.Repo, error) {
 	var (
 		r                domain.Repo

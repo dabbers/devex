@@ -155,6 +155,7 @@ func (s *Server) Handler() http.Handler {
 	rt.handle("GET /v1/installations", s.listInstallations)
 	rt.handle("POST /v1/installations", s.createInstallation)
 	rt.handle("GET /v1/installations/{installation}", s.getInstallation)
+	rt.handle("DELETE /v1/installations/{installation}", s.deleteInstallation)
 	rt.handle("POST /v1/installations/{installation}/rollback", s.rollbackInstallation)
 
 	// Changing an installation. The id in the path is what the tenancy gate

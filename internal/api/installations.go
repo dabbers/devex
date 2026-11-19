@@ -115,3 +115,23 @@ func (s *Server) listInstallations(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getInstallation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"installation": scopedInstallation(r)})
 }
+
+// deleteInstallation removes one that failed to come up, which frees its name
+// so installing again under it is the retry.
+func (s *Server) deleteInstallation(w http.ResponseWriter, r *http.Request) {
+	if s.installer == nil {
+		writeStatus(w, http.StatusNotImplemented, "this deployment has no app catalog")
+		return
+	}
+	installation := scopedInstallation(r)
+	if err := s.installer.Delete(r.Context(), installation); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.audit(r.Context(), s.userID(r), &domain.Event{
+		RepoID:  installation.RepoID,
+		Type:    domain.EventWorkspaceArchived,
+		Message: "deleted " + installation.Name + ", which had failed to install",
+	})
+	w.WriteHeader(http.StatusNoContent)
+}

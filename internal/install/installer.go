@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -398,6 +399,68 @@ func (i *Installer) fail(ctx context.Context, installation *domain.Installation,
 		i.deps.Logger.Error("could not release a failed install's machine",
 			"installation", installation.ID, "error", err)
 	}
+}
+
+// Delete removes an installation that never came up, and everything made for
+// it, so the name is free and installing again is the retry.
+//
+// Only a failed one. An installation that ran has held a customer's data, and
+// deleting that is a different operation with a different bar -- an export
+// first, a confirmation the customer makes -- that does not exist yet. A failed
+// one has nothing in its database but what the app put there on first start.
+//
+// Every step is safe to repeat and the records go last, so a delete that stops
+// partway leaves the installation listed, still failed, and deleting it again
+// finishes the job rather than leaving a database or a repository that nothing
+// points at.
+func (i *Installer) Delete(ctx context.Context, installation *domain.Installation) error {
+	if installation.RepoID == "" {
+		return fmt.Errorf("install: %s has no repository recorded", installation.ID)
+	}
+	if installation.State != domain.InstallationFailed {
+		return fmt.Errorf("%w: %s is %s; only an installation that failed to come up can be deleted",
+			store.ErrConflict, installation.Name, installation.State)
+	}
+
+	if installation.WorkspaceID != "" && i.deps.Workspaces != nil {
+		ws, err := i.deps.Store.GetWorkspace(ctx, installation.WorkspaceID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			return err
+		default:
+			if err := i.deps.Workspaces.Release(ctx, ws); err != nil {
+				return err
+			}
+		}
+	}
+
+	if installation.Database != "" {
+		if i.deps.Databases == nil {
+			return fmt.Errorf("install: %s has a database and this deployment has no data block to drop it with",
+				installation.Name)
+		}
+		db := &database.Database{
+			Name: installation.Database, Role: database.RoleFor(installation.Database),
+			Owner: installation.ID,
+		}
+		if err := i.deps.Databases.Drop(ctx, db); err != nil {
+			return err
+		}
+	}
+
+	// Named for the id rather than read from the row, so a path in the
+	// database can never point this at something else to remove.
+	if err := os.RemoveAll(filepath.Join(i.opts.RepoDir, installation.RepoID+".git")); err != nil {
+		return fmt.Errorf("install: remove repository: %w", err)
+	}
+
+	if err := i.deps.Store.DeleteRepo(ctx, installation.RepoID); err != nil {
+		return err
+	}
+	i.deps.Logger.Info("failed installation deleted",
+		"installation", installation.ID, "name", installation.Name)
+	return nil
 }
 
 // withoutDatabase drops the database requirement from a list of unmet ones,
