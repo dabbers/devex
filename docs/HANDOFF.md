@@ -57,44 +57,39 @@ Public address `147.135.70.81`.
 
 Push the branch, then on the host as root: `git merge --ff-only` in
 `/opt/dabberz/src`, `make build`, install each binary as `*.new` and `mv` it
-over the old one, restart. **A restart takes every customer's site down** —
-see the first item below — so follow it with a stop and start of each running
-workspace (`POST /v1/workspaces/{id}/stop`, then `/start`).
+over the old one, restart. The restart stops every customer's service; the
+daemon brings back every workspace recorded as running once it is listening,
+which takes a second or two for `intake`. Look for `workspace resumed` in
+`journalctl -u dabberzd`, and `did not come back` for one that failed.
 
 ## Known wrong, in priority order
 
-1. **Restarting the daemon kills every service it started, and nothing brings
-   them back.** Services are `setsid`-detached, but systemd stops the whole
-   control group, and there is no startup reconciliation. So every deploy and
-   every reboot leaves each installation answering 502 until somebody restarts
-   its workspace by hand. The fix wants a pass at startup that brings up every
-   workspace recorded as running; changing `KillMode` alone would survive a
-   deploy but not a reboot.
-2. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
+1. **`panel.dabberz.com` has no TLS at the origin.** Cloudflare proxies it and
    expects 443, which nothing serves, so HTTPS is a 521 and only plain HTTP
    works. Do not sign in over it. The daemon does not terminate TLS itself, so
    this needs a Cloudflare origin certificate plus something on 443 (a TLS
    listener in the daemon, or a terminator in front), then Full (strict).
-3. **The Clerk secret should be rotated** — it appeared in a chat transcript.
+2. **The Clerk secret should be rotated** — it appeared in a chat transcript.
    Rotate in Clerk, then update `CLERK_SECRET_KEY` in the env file. The name
    is now right; that it is read was not confirmed end to end, because only a
    new user's first sign-in exercises it.
-4. **Failed installations cannot be deleted or retried**, and keep their name.
+3. **Failed installations cannot be deleted or retried**, and keep their name.
    `recruiting` and `hiring` are two such, from this session; `hiring` also
    still holds a provisioned database. Its machine was moved aside to
    `/tank/dabberz/data/vms-released/` before the release fix existed.
-5. **The install tests leak the services they start.** A run of
+4. **The install tests leak the services they start.** A run of
    `./internal/install` left ~50 `forms serve` processes behind as the test
    user. Kill them after running it on the host: `pkill -u $USER -f './forms serve'`.
-6. **A `scratch` platform token** created on 2026-11-18 is live and was not
+5. **A `scratch` platform token** created on 2026-11-18 is live and was not
    made by this session. Leave it unless its owner says otherwise.
-7. **golangci-lint is not installed on the host**, so nothing this session
+6. **golangci-lint is not installed on the host**, so nothing this session
    wrote has been linted.
 
 ## What this session fixed, all running on the host
 
-Each was found by running the loop, and each has a test that was seen to fail
-with the fix removed.
+Each was found by working the list or running the loop. Every code fix has a
+test that was seen to fail with the fix removed; the first two were changes to
+the host, checked on the host.
 
 - The Clerk secret was under a name nothing reads; renamed in the env file.
 - Port 80 was open to anyone; now Cloudflare's ranges only.
@@ -120,6 +115,12 @@ with the fix removed.
   page an agent just wrote.
 - The repositories directory was handed to `dabberz` but left 0700, so the
   first promote could not reach the repository it was pushing to.
+- A daemon restart took every customer's site down until somebody restarted
+  each workspace by hand. The daemon now resumes every workspace recorded as
+  running, leaving each checkout where it stands, so a rollback survives a
+  restart. Proven on the host by restarting the daemon and touching nothing:
+  `intake` answered within two seconds, on its rolled-back revision, with
+  every response intact.
 
 ## The loop, on hardware
 
@@ -153,10 +154,10 @@ The agent said 7 of Forms' own tests skip in its workspace for want of
 
 ## The next milestone
 
-The first of the known-wrong items. A loop that works until the next deploy is a demo, not
-operational confidence: bring every workspace recorded as running back up when
-the daemon starts, and prove it by restarting the daemon and watching
-`intake` answer without anybody touching it.
+The first of the known-wrong items: TLS at the origin for `panel.dabberz.com`.
+Until it exists the owner cannot sign in to the panel safely, and the panel is
+where a person rather than a curl command drives the loop above. After that,
+the two gaps below, which are what stand between this and a second account.
 
 ## Two structural gaps, both blocking a second account
 
