@@ -12,10 +12,10 @@ three are decided at install time.
 
 Read this before deciding who gets an account.
 
-The production driver does not boot guests yet. `internal/vm/firecracker`
-carries the address layout, the slot accounting and the machine config, and its
-`Create`, `Exec`, `Destroy` and `OpenSession` return `vm.ErrNotSupported`. The
-only driver that runs anything today is `local`, which runs agents and services
+The production driver boots guests in development but is not deployed, and
+it does not yet stop guests reaching each other or the host's ports; see
+[FIRECRACKER.md](FIRECRACKER.md). The only driver that runs anything in
+production today is `local`, which runs agents and services
 on the host, as the dabberzd process, with that process's access -- and the
 agent acts without asking, because there is nobody to ask.
 
@@ -100,8 +100,8 @@ on datasets there. OS redundancy and a mirrored copy-on-write pool, which beats
 having either one alone.
 
 100 GB of root is deliberate rather than stingy. The toolchain, Chromium and
-packages fit easily; the things that grow -- the golden rootfs, the per-guest
-copies under `chroot_base` where each fork's `disk_gib` is actually spent,
+packages fit easily; the things that grow -- the golden zvol, the per-guest
+ZFS clones where each fork's `disk_gib` is actually spent,
 Postgres, snapshots -- belong on the pool.
 
 If the installer refuses to leave `/` short of the whole disk, partition one

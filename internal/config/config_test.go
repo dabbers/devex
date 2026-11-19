@@ -134,7 +134,7 @@ driver:
   kind: firecracker
   firecracker:
     kernel_image: /srv/vmlinux
-    golden_rootfs: /srv/golden.ext4
+    golden_rootfs: tank/dabberz/vm/golden@base
     host_reserve:
       vcpus: 4
       memory_mib: 8192
@@ -317,7 +317,7 @@ driver:
   kind: firecracker
   firecracker:
     kernel_image: /srv/vmlinux
-    golden_rootfs: /srv/golden.ext4
+    golden_rootfs: tank/dabberz/vm/golden@base
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)

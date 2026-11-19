@@ -7,11 +7,18 @@
 // gets its own microVM booted from a single generic golden image carrying the
 // whole toolchain, so spin-up does not depend on per-toolchain image builds.
 //
-// Boot status: the layout, networking, capacity accounting and machine
-// configuration in this package are implemented and tested. Actually launching
-// the jailer and driving the Firecracker API socket is NOT yet implemented --
-// Create returns vm.ErrNotSupported. Until that lands, the control plane runs
-// on the local driver.
+// How a guest is put together (see boot_linux.go):
+//
+//   - Its disk is a ZFS clone of one snapshot of the golden zvol. A clone is
+//     copy-on-write and costs nothing to make, which is the point: copying a
+//     40 GiB image per fork on spinning disks is minutes before an agent can
+//     start, and a clone is milliseconds.
+//   - The jailer runs Firecracker in a chroot of its own under a uid of its
+//     own, and only the guest's own clone is visible in that chroot, as a
+//     device node.
+//   - Its network is a TAP device carrying the host side of the guest's /30.
+//   - Commands reach it over vsock, to the agent in cmd/dabberz-guest; see
+//     package guestproto for why vsock rather than SSH.
 package firecracker
 
 import (
@@ -21,8 +28,11 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/dabbers/devex/internal/vm"
 )
@@ -35,6 +45,14 @@ const (
 	// standard Firecracker recipe: one TAP device per guest, host and guest
 	// occupying the two usable addresses.
 	DefaultNetwork = "172.30.0.0/16"
+	// DefaultBootTimeout is generous: a guest normally answers within a few
+	// seconds, and one that has not answered in this long is broken.
+	DefaultBootTimeout = 60 * time.Second
+	// DefaultExecTimeout matches the local driver's.
+	DefaultExecTimeout = 30 * time.Minute
+	// Workspace is where the repository lives inside every guest, and where
+	// commands run when they name no directory.
+	Workspace = "/workspace"
 )
 
 // Config configures the driver against a host.
@@ -45,12 +63,24 @@ type Config struct {
 	JailerBin      string `yaml:"jailer_bin" json:"jailer_bin"`
 	// KernelImage is the uncompressed kernel every guest boots.
 	KernelImage string `yaml:"kernel_image" json:"kernel_image"`
-	// GoldenRootfs is the single generic image carrying the full toolchain.
-	// Each VM boots a copy-on-write overlay of it rather than the file itself.
+	// GoldenRootfs is the single generic image carrying the full toolchain:
+	// a ZFS snapshot of an ext4 zvol, "pool/dataset@snapshot". Each VM boots a
+	// clone of it, never the image itself and never a copy of it.
 	GoldenRootfs string `yaml:"golden_rootfs" json:"golden_rootfs"`
+	// CloneDataset is the ZFS dataset each guest's clone is created under.
+	// Left empty it is "instances" beside the golden volume.
+	CloneDataset string `yaml:"clone_dataset" json:"clone_dataset"`
+	// BootTimeout bounds how long Create waits for a new guest's agent to
+	// answer. Zero means DefaultBootTimeout.
+	BootTimeout time.Duration `yaml:"boot_timeout" json:"boot_timeout"`
+	// ExecTimeout bounds a command that did not ask for its own deadline.
+	// Zero means DefaultExecTimeout.
+	ExecTimeout time.Duration `yaml:"exec_timeout" json:"exec_timeout"`
 	// ChrootBase is the directory the jailer builds per-VM chroots under.
 	ChrootBase string `yaml:"chroot_base" json:"chroot_base"`
-	// BridgeName is the host bridge every TAP device is enslaved to.
+	// BridgeName is unused: each guest's TAP carries its /30 directly, which is
+	// already a point-to-point link, so there is no bridge. Kept so existing
+	// configuration files still load.
 	BridgeName string `yaml:"bridge_name" json:"bridge_name"`
 	// Network is the CIDR guest /30s are carved from.
 	Network string `yaml:"network" json:"network"`
@@ -86,6 +116,17 @@ func (c Config) withDefaults() Config {
 	if c.ChrootBase == "" {
 		c.ChrootBase = "/srv/dabberz/vm"
 	}
+	if c.CloneDataset == "" {
+		if volume, _, ok := strings.Cut(c.GoldenRootfs, "@"); ok {
+			c.CloneDataset = path.Join(path.Dir(volume), "instances")
+		}
+	}
+	if c.BootTimeout <= 0 {
+		c.BootTimeout = DefaultBootTimeout
+	}
+	if c.ExecTimeout <= 0 {
+		c.ExecTimeout = DefaultExecTimeout
+	}
 	return c
 }
 
@@ -97,6 +138,14 @@ func (c Config) Validate() error {
 	}
 	if c.GoldenRootfs == "" {
 		return errors.New("firecracker: golden_rootfs is required")
+	}
+	// A file path here is the mistake the copy-on-write rule exists to
+	// prevent: there is no cheap way to give each guest its own copy of a file.
+	if volume, snap, ok := strings.Cut(c.GoldenRootfs, "@"); !ok || volume == "" || snap == "" || strings.HasPrefix(volume, "/") {
+		return fmt.Errorf("firecracker: golden_rootfs %q must be a ZFS snapshot (pool/volume@snapshot), not a file", c.GoldenRootfs)
+	}
+	if c.CloneDataset == "" || strings.HasPrefix(c.CloneDataset, "/") {
+		return fmt.Errorf("firecracker: clone_dataset %q must be a ZFS dataset name", c.CloneDataset)
 	}
 	if _, err := netip.ParsePrefix(c.Network); err != nil {
 		return fmt.Errorf("firecracker: network %q is not a valid CIDR: %w", c.Network, err)
@@ -119,6 +168,8 @@ type Driver struct {
 	// be released only when the instance is destroyed.
 	slots    map[string]int
 	usedSlot map[int]bool
+	// machines holds the host-side state of each booted guest.
+	machines map[string]*machine
 }
 
 // New returns a Firecracker driver for the host it runs on.
@@ -144,6 +195,7 @@ func New(cfg Config) (*Driver, error) {
 		instances: map[string]*vm.Instance{},
 		slots:     map[string]int{},
 		usedSlot:  map[int]bool{},
+		machines:  map[string]*machine{},
 	}, nil
 }
 
@@ -165,17 +217,13 @@ func (d *Driver) Capacity(context.Context) (vm.Capacity, error) {
 	return capacity, nil
 }
 
-// Create implements vm.Driver.
-//
-// Booting a guest is not yet implemented. Everything up to the boot -- slot
-// allocation, networking, the chroot layout and the machine configuration --
-// is done here so that the remaining work is confined to launching the jailer
-// and waiting for the guest to come up.
-func (d *Driver) Create(_ context.Context, spec vm.Spec) (*vm.Instance, error) {
+// Create implements vm.Driver: it clones the golden image, builds the jail and
+// the TAP device, boots the guest and returns once its agent answers.
+func (d *Driver) Create(ctx context.Context, spec vm.Spec) (*vm.Instance, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("firecracker: booting guests is not implemented yet: %w", vm.ErrNotSupported)
+	return d.create(ctx, spec)
 }
 
 // Get implements vm.Driver.
@@ -202,14 +250,53 @@ func (d *Driver) List(context.Context) ([]*vm.Instance, error) {
 	return out, nil
 }
 
-// Destroy implements vm.Driver.
-func (d *Driver) Destroy(_ context.Context, instanceID string) error {
-	return fmt.Errorf("firecracker: tearing down guests is not implemented yet: %w", vm.ErrNotSupported)
+// Destroy implements vm.Driver. It stops the guest and removes everything
+// Create made for it; a half-built guest from a failed Create is already gone.
+func (d *Driver) Destroy(ctx context.Context, instanceID string) error {
+	d.mu.Lock()
+	m, ok := d.machines[instanceID]
+	d.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("firecracker: %s: %w", instanceID, vm.ErrNotFound)
+	}
+	if err := d.teardown(ctx, m); err != nil {
+		return err
+	}
+	d.forget(instanceID)
+	return nil
 }
 
-// Exec implements vm.Driver.
-func (d *Driver) Exec(_ context.Context, instanceID string, _ vm.Command) (*vm.ExecResult, error) {
-	return nil, fmt.Errorf("firecracker: in-guest exec is not implemented yet: %w", vm.ErrNotSupported)
+// forget drops an instance from the driver's books and frees its slot.
+func (d *Driver) forget(instanceID string) {
+	d.mu.Lock()
+	delete(d.instances, instanceID)
+	delete(d.machines, instanceID)
+	d.mu.Unlock()
+	d.ReleaseSlot(instanceID)
+}
+
+// Exec implements vm.Driver by running the command through the guest agent.
+func (d *Driver) Exec(ctx context.Context, instanceID string, cmd vm.Command) (*vm.ExecResult, error) {
+	return d.exec(ctx, instanceID, cmd, nil)
+}
+
+// ExecStream implements vm.Streaming.
+func (d *Driver) ExecStream(ctx context.Context, instanceID string, cmd vm.Command, onLine func([]byte)) (*vm.ExecResult, error) {
+	return d.exec(ctx, instanceID, cmd, onLine)
+}
+
+// running returns a booted guest, or why there is none.
+func (d *Driver) running(instanceID string) (*machine, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	inst, ok := d.instances[instanceID]
+	if !ok {
+		return nil, fmt.Errorf("firecracker: %s: %w", instanceID, vm.ErrNotFound)
+	}
+	if inst.State != vm.StateRunning {
+		return nil, fmt.Errorf("firecracker: %s is %s, not running", instanceID, inst.State)
+	}
+	return d.machines[instanceID], nil
 }
 
 // ReserveSlot claims the lowest free guest index for an instance and returns
@@ -253,13 +340,10 @@ func (d *Driver) ReleaseSlot(instanceID string) {
 	}
 }
 
-// OpenSession implements vm.Interactive.
-//
-// A guest's terminal will come over its serial console or an in-guest SSH
-// daemon on the forwarded port; neither is wired up while the boot path itself
-// is unimplemented.
-func (d *Driver) OpenSession(_ context.Context, instanceID string, _ vm.SessionSpec) (vm.Session, error) {
-	return nil, fmt.Errorf("firecracker: interactive sessions are not implemented yet: %w", vm.ErrNotSupported)
+// OpenSession implements vm.Interactive with a pseudo-terminal the guest agent
+// allocates inside the guest.
+func (d *Driver) OpenSession(ctx context.Context, instanceID string, spec vm.SessionSpec) (vm.Session, error) {
+	return d.openSession(ctx, instanceID, spec)
 }
 
 // Guest describes the host-side resources one microVM occupies. Every field is
@@ -275,10 +359,9 @@ type Guest struct {
 	GuestIP netip.Addr `json:"guest_ip"`
 	// PrefixLen is the guest subnet's mask length.
 	PrefixLen int `json:"prefix_len"`
-	// SSHPort is the host port forwarded to the guest's SSH daemon.
+	// SSHPort is the host port reserved for forwarding to the guest's SSH
+	// daemon. Nothing forwards it yet.
 	SSHPort int `json:"ssh_port"`
-	// ChrootDir is the jailer chroot for this guest.
-	ChrootDir string `json:"chroot_dir"`
 	// MAC is derived from the guest IP so it is stable across reboots.
 	MAC string `json:"mac"`
 }
@@ -319,7 +402,6 @@ func (d *Driver) Layout(slot int) (Guest, error) {
 		GuestIP:   guestIP,
 		PrefixLen: 30,
 		SSHPort:   d.cfg.SSHPortBase + slot,
-		ChrootDir: filepath.Join(d.cfg.ChrootBase, fmt.Sprintf("slot-%d", slot)),
 		MAC:       macForIP(guestIP),
 	}, nil
 }
@@ -363,6 +445,15 @@ type MachineConfig struct {
 		Smt        bool `json:"smt"`
 	} `json:"machine-config"`
 	NetworkInterfaces []NetworkInterface `json:"network-interfaces"`
+	// Vsock is how the host reaches the guest agent.
+	Vsock *Vsock `json:"vsock,omitempty"`
+}
+
+// Vsock is a guest's virtio-vsock device. Firecracker serves it on the host as
+// a Unix socket at UDSPath.
+type Vsock struct {
+	GuestCID uint32 `json:"guest_cid"`
+	UDSPath  string `json:"uds_path"`
 }
 
 // Drive is one block device attached to a guest.
@@ -458,6 +549,9 @@ func (d *Driver) JailerArgs(instanceID string, guest Guest, configPath string) [
 		"--chroot-base-dir", d.cfg.ChrootBase,
 		"--",
 		"--config-file", configPath,
+		// The default socket path is under /run, which the chroot does not
+		// have; Firecracker refuses to start without somewhere to put it.
+		"--api-sock", "/api.sock",
 	}
 }
 
