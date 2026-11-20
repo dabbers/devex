@@ -665,6 +665,49 @@ positions, and only one of them leaves the customer holding neither job:
 | Build-your-own | customer | **customer** | customer |
 | dabberz | us | the agent | customer |
 
+### The change flow is no longer novel either
+
+Four days after the note above, Lovable shipped "drafts": copy a project, get
+its own chat and preview, edit it apart from the live app, accept and then
+publish, both by hand. That is this project's change flow, arrived at
+independently, by somebody with distribution this does not have.
+
+Worth being exact about what they built, because the differences are the
+expensive parts rather than the obvious ones.
+
+**A draft carries example data.** The post is explicit: every draft "comes
+filled with example data", and anything added while testing "is cleared when
+you accept". So a draft is a schema plus fixtures. A change here gets a fork
+of the customer's real data, because a change tested against an empty database
+has not been tested -- and the question a customer actually has is whether a
+migration survives their forty thousand contacts, which fixtures cannot
+answer. This is the slowest thing here to build and the slowest to copy.
+
+**Nothing checks a draft.** Testing is described as looking at it. Here the
+app's own critical-path suite runs, a real browser opens the preview at its
+public hostname, promotion refuses a revision that moved since those passed,
+and the result says out loud what was *not* verified. The difference between
+"you can test it" and "it was tested" is the whole of `PLATFORM.md`.
+
+**Rollback stops at publish.** They revert a draft before publishing; the post
+says nothing about after. Here the previous revision is recorded, the database
+is snapshotted before promoting, and going back is one request. That axis --
+what happens when it breaks -- is the thing being sold.
+
+And they are a builder: you start from nothing. This starts from something
+that already works. Drafts do not answer "I need a HubSpot".
+
+So the honest read is not that an idea was taken. It is that the rate of
+arrival has gone up: two independent products landed on pieces of this thesis
+inside a week. That is evidence the thesis is right and that the novelty in it
+is nearly spent. What is left, and what neither of them has, is the part that
+looks like overhead: the shared blocks, running the thing for somebody,
+forking real data, checks that run themselves, and sending fixes back
+upstream.
+
+The defence was never the change flow. Somebody with distribution just shipped
+it in a week.
+
 And it is why import without export is the tell. Six import formats and no
 export is a product that is easy to enter and quiet about leaving, which is
 the posture of the thing being escaped from. Export is not a feature here, it
