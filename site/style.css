@@ -1,0 +1,137 @@
+/* dabberz.com, set in the same Broadsheet system as the control plane:
+   near-black serif on paper, a press maroon used small and deliberately,
+   structure from the serif scale and whitespace rather than from boxes. */
+
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap');
+
+:root {
+  color-scheme: light;
+  --paper: #f3f2f2;
+  --surface: #eae9e9;
+  --ink: #201e1d;
+  --muted: rgba(32, 30, 29, 0.62);
+  --rule: rgba(32, 30, 29, 0.16);
+  --maroon: #7a1f2b;
+  --maroon-deep: #3a1015;
+  --maroon-pale: #fdeef0;
+  --cyan: #0088b0;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --measure: 34rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 1.0625rem/1.65 var(--serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 56rem; margin: 0 auto; padding: 0 16px; }
+
+/* Masthead ---------------------------------------------------------------- */
+
+header.site {
+  background: var(--maroon-deep);
+  border-bottom: 3px solid var(--maroon);
+}
+header.site .wrap {
+  display: flex; align-items: baseline; gap: 20px;
+  padding-top: 14px; padding-bottom: 14px;
+  flex-wrap: wrap;
+}
+header.site a { color: #f6ecec; text-decoration: none; }
+header.site .mark { font-size: 1.35rem; font-weight: 600; letter-spacing: 0.01em; }
+header.site .mark .star { color: #d8808c; margin-right: 6px; }
+header.site nav { display: flex; gap: 18px; margin-left: auto; }
+header.site nav a { color: rgba(246, 236, 236, 0.78); font-size: 0.95rem; }
+header.site nav a:hover, header.site nav a[aria-current] { color: #fff; text-decoration: underline; }
+
+/* Type -------------------------------------------------------------------- */
+
+h1 { font-weight: 600; font-size: clamp(2.1rem, 5vw, 3.1rem); line-height: 1.12; margin: 0 0 12px; letter-spacing: -0.012em; }
+h2 { font-weight: 600; font-size: 1.5rem; line-height: 1.25; margin: 44px 0 10px; }
+h3 { font-weight: 600; font-size: 1.1rem; margin: 26px 0 6px; }
+p, li { max-width: var(--measure); }
+a { color: var(--maroon); text-underline-offset: 2px; }
+.lede { font-size: 1.2rem; color: rgba(32, 30, 29, 0.78); max-width: 36rem; }
+.muted { color: var(--muted); }
+small, .small { font-size: 0.9rem; }
+
+main { padding: 44px 0 72px; }
+article > p:first-of-type { margin-top: 0; }
+
+/* Hero -------------------------------------------------------------------- */
+
+.hero { padding: 64px 0 8px; border-bottom: 1px solid var(--rule); }
+.hero .kicker {
+  font-size: 0.82rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--maroon); margin: 0 0 14px;
+}
+.hero .objection {
+  margin: 26px 0 0; padding-left: 16px; border-left: 3px solid var(--maroon);
+  font-style: italic; color: rgba(32, 30, 29, 0.78); max-width: 34rem;
+}
+.actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 30px 0 60px; }
+
+.btn {
+  display: inline-block; padding: 9px 20px; border-radius: 2px;
+  background: var(--maroon); color: #fff; text-decoration: none;
+  font-weight: 600; font-size: 1rem; border: 1px solid var(--maroon);
+}
+.btn:hover { background: var(--maroon-deep); border-color: var(--maroon-deep); }
+.btn.ghost { background: transparent; color: var(--maroon); }
+.btn.ghost:hover { background: var(--maroon-pale); color: var(--maroon-deep); }
+
+/* Steps and grids --------------------------------------------------------- */
+
+.steps { list-style: none; padding: 0; margin: 20px 0 0; counter-reset: s; max-width: 40rem; }
+.steps li {
+  counter-increment: s; position: relative; padding: 0 0 16px 44px; max-width: none;
+}
+.steps li::before {
+  content: counter(s); position: absolute; left: 0; top: 1px;
+  width: 28px; height: 28px; border: 1px solid var(--maroon);
+  color: var(--maroon); border-radius: 50%;
+  font-size: 0.85rem; line-height: 26px; text-align: center;
+}
+.steps b { font-weight: 600; }
+
+.cols { display: grid; gap: 28px 36px; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); margin-top: 18px; }
+.cols p, .cols li { max-width: none; }
+.cols h3 { margin-top: 0; }
+
+.shot { width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 2px; margin: 10px 0 6px; display: block; }
+figure { margin: 28px 0; }
+figcaption { font-size: 0.9rem; color: var(--muted); max-width: var(--measure); }
+
+code { font-family: var(--mono); font-size: 0.88em; background: var(--surface); padding: 1px 4px; border-radius: 1px; }
+
+.note {
+  background: var(--maroon-pale); border-left: 3px solid var(--maroon);
+  padding: 14px 18px; margin: 28px 0; border-radius: 0 2px 2px 0;
+}
+.note p { margin: 0; max-width: none; }
+
+/* Legal pages ------------------------------------------------------------- */
+
+.legal p, .legal li { max-width: 38rem; }
+.legal h2 { font-size: 1.25rem; margin-top: 36px; }
+.legal .updated { color: var(--muted); font-size: 0.92rem; }
+dl.defs dt { font-weight: 600; margin-top: 14px; }
+dl.defs dd { margin: 2px 0 0; max-width: 38rem; }
+
+/* Footer ------------------------------------------------------------------ */
+
+footer.site { border-top: 1px solid var(--rule); margin-top: 56px; padding: 26px 0 50px; }
+footer.site .wrap { display: flex; gap: 20px; flex-wrap: wrap; align-items: baseline; }
+footer.site nav { display: flex; gap: 18px; flex-wrap: wrap; }
+footer.site, footer.site a { color: var(--muted); font-size: 0.92rem; }
+
+@media (max-width: 34rem) {
+  .hero { padding-top: 40px; }
+  header.site nav { margin-left: 0; width: 100%; gap: 14px; }
+}
