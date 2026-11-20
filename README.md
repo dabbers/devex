@@ -1,61 +1,113 @@
-# devex
+# dabberz
 
-dabberz — an AI automation platform for developing code-based projects
-automatically.
+**SaaS-as-a-service: the self-host for people who are not technical.**
 
-dabberz takes a request against a repository, splits it into independent
-workstreams, and runs each one as a coding agent in its own microVM with its own
-branch and its own live preview URL. Finished work is verified by driving a real
-browser against that preview, then reviewed and merged. The loop is automatic;
-it asks you only when a fix would contradict your instructions, when the
-situation is genuinely ambiguous, or when an agent is stuck.
+You install your own HubSpot or Notion equivalent. dabberz runs it — the
+machine, the database, the backups, the uptime — and when you want it changed,
+you ask in English. An agent makes the change on a copy, it gets checked, you
+decide whether it goes live, and your data stays yours.
 
-- [Requirements](docs/REQUIREMENTS.md) — what it is meant to do.
-- [Architecture](docs/ARCHITECTURE.md) — how it is built, and what is not built yet.
+The objection this answers is not *can I run my own tools*. It is *do I want to
+be the person who runs them*.
 
-## Status
+---
 
-The control plane is implemented and tested end to end against a local VM
-driver: planning and the approval checkpoint, fork scheduling, preview
-allocation and Caddy routing, repo-scoped secrets, the per-repo memory store,
-the verify/fix loop, tripwires, and the merge gate.
+![An app running on the platform](docs/images/installed-app.png)
 
-The web UI is served by the daemon at its listen address, set in the Broadsheet
-newsprint design system. It opens on your repositories and the projects under
-them; each project's sub-tasks carry their own machine, branch, preview URL and
-remaining budget. Behind it is a single audit trail recording every action
-across every repository, attributed either to you or to the component that took
-it. Secret values never enter that trail.
+That is a real installation on the live host, reached over its own public
+hostname. Four things are visible in one screenshot:
 
-A task runs end to end on the local driver: plan, approval checkpoint, fork
-scheduling with fork-time serialization, preview allocation, coding, browser
-verification, the merge gate, and completion — with spend accounted against
-each workstream's tripwire budget.
+- **An app the platform installed** — provisioned a Postgres database, seeded a
+  git repository, built it, started it, gave it a hostname.
+- **A change an agent made, now live.** Somebody asked for a 1999 homepage.
+  The agent wrote it on a branch, against a fork of the data, behind a
+  throwaway preview. A human promoted it.
+- **Identity enforced at the edge.** The visitor is anonymous, so the admin
+  surface refuses. The app never implements login.
+- **Actually hosted** — HTTPS through a CDN, health endpoint green, systemd
+  underneath.
 
-Firecracker guests boot and run commands in development, but the driver is
-not deployed and does not yet isolate guests' networks
-([docs/FIRECRACKER.md](docs/FIRECRACKER.md)). See [Architecture](docs/ARCHITECTURE.md#what-is-not-implemented)
-for the full list.
+## Asking for a change
 
-## Quick start
-
-```sh
-make check                      # fmt, vet, race tests
-make build                      # bin/dabberzd, bin/dabberzctl, bin/dabberz-verify
-
-cp configs/dabberz.example.yaml configs/dabberz.yaml
-export DABBERZ_MASTER_KEY=$(./bin/dabberzctl keygen | head -1)
-make run
+```
+POST /v1/installations                    install an app              ~60s
+POST /v1/installations/{id}/changes       own branch, machine, data    ~3s
+POST /v1/workspaces/{ws}/messages         the agent does the work
+POST /v1/changes/{id}/check               its tests + a real browser
+POST /v1/changes/{id}/promote             a human, never the agent
+POST /v1/installations/{id}/rollback      one request, back to before
 ```
 
-Then open the printed address in a browser, or drive it from another terminal:
+A change gets its own machine, its own branch, its own preview hostname, and
+its own **copy of the real data** — forked a moment earlier, so experimenting
+cannot reach anything a customer depends on, and a migration is tested against
+records that actually exist.
 
-```sh
-./bin/dabberzctl status
-./bin/dabberzctl repos add myapp git@github.com:you/myapp.git
-./bin/dabberzctl tasks new <repo-id> "add ratings, photo upload and rank notes"
-./bin/dabberzctl tasks approve <task-id>
-./bin/dabberzctl events follow <task-id>
-```
+## Three problems that were harder than they look
 
-`dabberzctl help` lists the rest.
+**Telling an app who is asking, without letting a visitor decide.** Apps behind
+the platform never implement login; the edge tells them. That means stripping
+identity headers a visitor sent *and* asserting the real ones — and the obvious
+version of the second half is a cross-tenant hole. Every customer has an
+account, so announcing any signed-in visitor would make each of them an
+administrator of everybody else's installation, with nothing looking broken. A
+published route carries whose hostname it is, and only that person is
+announced. ([`internal/proxy/hostmux`](internal/proxy/hostmux))
+
+**Making "nothing goes live unchecked" true about a commit.** Checks mean
+little if the preview runs a binary built before the agent's last commit — then
+the app's own suite tests the new code while the browser looks at the old, and
+together they describe something that never existed. So checking rebuilds the
+preview on the current revision first, records which one that was, and
+promotion refuses a revision that has moved since.
+([`internal/install/check.go`](internal/install/check.go))
+
+**Keeping production off the table.** An agent is addressed by workspace, and a
+running installation has one — so the whole safety story could be sidestepped
+by naming it, after which the agent's edits would either be discarded by the
+next deploy or served to customers having been reviewed by nobody. An agent
+turn in a serving workspace is refused and told to open a change.
+
+Each of those is covered by a test that was confirmed by deleting the guard and
+watching it fail. That is the house style: a test nobody has seen fail is not
+evidence.
+
+## How it is built
+
+Go, four direct dependencies, ~50k lines, ~600 tests. SQLite for the control
+plane; a Postgres database per installation. The reverse proxy that routes
+preview hostnames, the WebSocket framing for workspace shells, and the Chrome
+DevTools client that drives the browser checks are all in-tree rather than
+pulled in — each was a few hundred lines and removed a dependency from the
+path that has to stay up.
+
+Apps declare what they need in a manifest (`dabberz.yaml`); an app that asks
+for a block the deployment does not provide is refused at install time with the
+missing names, rather than installed and left to fail at runtime.
+
+![The control plane](docs/images/panel.png)
+
+## Where it runs
+
+One OVH box: Debian 13, ZFS mirror, Postgres on a copy-on-write dataset, the
+daemon under systemd, Cloudflare in front. The host is built by one idempotent
+script ([`deploy/bootstrap-host.sh`](deploy/bootstrap-host.sh)) rather than by
+somebody typing into an SSH session.
+
+**Honest about scope.** This runs one operator's own installations. The
+Firecracker driver does not boot guests yet, so agents run on the host rather
+than in microVMs — fine for a single owner, and the thing to fix before a
+second account exists. It is written down rather than discovered:
+[`docs/HANDOFF.md`](docs/HANDOFF.md) lists what is unfinished, unverified, or
+known wrong.
+
+## Reading further
+
+- [`docs/PLATFORM.md`](docs/PLATFORM.md) — the contract apps are built against:
+  blocks, the manifest, checks and their honest limits, agent access, pricing
+  principles.
+- [`docs/DIRECTION.md`](docs/DIRECTION.md) — why it is shaped this way, and what
+  changed when the project pivoted.
+- [`docs/HOST.md`](docs/HOST.md) — what a machine has to provide, and which
+  choices cannot be undone after install.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the pieces and how they fit.
