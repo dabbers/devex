@@ -19,8 +19,9 @@ and nothing to keep up to date.
 
 ## Before it goes live
 
-- `contact.html` carries `REPLACE-ME@dabberz.com`. Put the real address in, in
-  both the link and the text.
+- `contact.html` points at `support@dab-media.com`, the catch-all that already
+  serves Dab Media's other properties. Swap it when dabberz has its own
+  mailbox; it appears twice, as the link and as the text.
 - The two legal pages name Dab Media LLC and Delaware law. Both were written to
   describe what the platform actually does rather than from a template, but
   neither has been read by a lawyer. Have one read them before the service takes
