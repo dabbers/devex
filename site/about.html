@@ -23,11 +23,15 @@
 ask.</p>
 
 <h2>The problem it exists for</h2>
-<p>Small teams pay for tools priced as though they were large ones. The obvious
-answer is to self-host something open source, and the obvious answer has a
-catch: you have just hired yourself as a system administrator. Somebody has to
-patch it, watch it, back it up, and be awake when it breaks.</p>
-<p>That catch is the whole product. You get software you own and data you
+<p>Small teams pay for tools priced as though they were large ones, and the
+tools themselves are rarely the hard part. A form builder, a contact list, a
+ticket queue &mdash; these are a weekend each, and plenty of people have a
+half-finished one in a repository to prove it.</p>
+<p>What stops it is never the feature you set out to build. It is the database,
+the login, the domain, the backups, the patching, and being the person who finds
+out on Monday that it went down on Friday. Self-hosting somebody else&rsquo;s
+open-source version swaps the bill for exactly the same second job.</p>
+<p>That second job is the whole product. You get software you own and data you
 control, and the operations are somebody else&rsquo;s problem.</p>
 
 <h2>How a change actually works</h2>
@@ -82,6 +86,13 @@ lifted out of dabberz needs something to take over that job before it can let
 anyone in. The interface it expects is deliberately a boring one, and it is
 documented with the rest of the platform rather than left for you to reverse
 engineer.</p>
+<p>That same boundary is what will let you bring an app of your own. The
+condition is that it has to be built against the platform&rsquo;s components
+&mdash; identity, database, storage, mail &mdash; because that contract is
+precisely what lets us operate something without knowing what it does. An app
+that implements its own authentication is not one we can host this way. Today
+the practical route is the other end of the same deal: start from an app in the
+catalog and change it until it is yours.</p>
 <p>Apps dabberz publishes are AGPL-3.0, declared in each app&rsquo;s manifest.
 The platform&rsquo;s source is public to read; its own licence is still being
 settled, and when it is, it will be stated in the repository rather than

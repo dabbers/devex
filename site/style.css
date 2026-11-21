@@ -71,7 +71,7 @@ article > p:first-of-type { margin-top: 0; }
   font-size: 0.82rem; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--maroon); margin: 0 0 14px;
 }
-.hero h1 { max-width: 34rem; font-size: clamp(1.85rem, 4vw, 2.5rem); }
+.hero h1 { max-width: 34rem; font-size: clamp(2.15rem, 5.5vw, 3.2rem); }
 .hero h1 em { font-style: italic; }
 .hero .availability {
   margin: 26px 0 0; padding-left: 16px; border-left: 3px solid var(--maroon);
@@ -108,6 +108,7 @@ article > p:first-of-type { margin-top: 0; }
 
 .cols { display: grid; gap: 28px 36px; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); margin-top: 18px; }
 .cols p, .cols li { max-width: none; }
+.cols.pair { grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
 .cols h3 { margin-top: 0; }
 
 .shot { width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 2px; margin: 10px 0 6px; display: block; }
