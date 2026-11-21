@@ -22,8 +22,11 @@ hostname. Four things are visible in one screenshot:
 - **A change an agent made, now live.** Somebody asked for a 1999 homepage.
   The agent wrote it on a branch, against a fork of the data, behind a
   throwaway preview. A human promoted it.
-- **Identity enforced at the edge.** The visitor is anonymous, so the admin
-  surface refuses. The app never implements login.
+- **The sign-in prompt, with an asterisk.** The app does not implement login —
+  the platform decides who a visitor is. But this screenshot predates the
+  access policy work (public / internal / hybrid), so what it shows is an app
+  with no policy yet rather than a policy being enforced. The enforcement is
+  real and tested; this picture is not the evidence for it.
 - **Actually hosted** — HTTPS through a CDN, health endpoint green, systemd
   underneath.
 

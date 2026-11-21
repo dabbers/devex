@@ -54,39 +54,55 @@ software is yours and so is the data.</p>
 <p>Deliberately. Every tool like this eventually grows a configuration screen with four
 hundred checkboxes on it, because somebody had to guess in advance which things you might
 want to change &mdash; and whatever you actually want is never one of the four hundred.</p>
-<p>So there isn&rsquo;t one. Theming, branding, fields, wording, what happens when
-somebody submits the form: all of it is a request, and all of it goes through the same
-path below &mdash; checked, previewed, and live only when you say so. The things a
-settings page would have let you change are not a special category here, and the things
-it wouldn&rsquo;t have aren&rsquo;t off limits.</p>
+<p>So there isn&rsquo;t one. Your colours, your logo, the wording, the questions, what
+happens after somebody answers them &mdash; you ask for all of it the same way, and it
+all goes through the steps below: checked, shown to you, live only when you say so.
+Nothing here is a setting, so nothing is off limits for not being one.</p>
+
+<h2>A template is where you start, not what you get</h2>
+<p>Every template is a finished, working tool on the day you install it. Plenty of people
+will use one exactly as it comes and never ask for anything. That is a perfectly good
+outcome and it costs you nothing but the install.</p>
+<p>But it is a starting point, not a boundary. There is no part of it the agent
+can&rsquo;t change &mdash; the wording, the look, the fields, what happens after someone
+fills it in, who sees what, what the thing is fundamentally <em>for</em>. A form that
+collects enquiries can become the thing that sorts and scores them. Nobody is going to
+tell you that you have reached the edge of what the template allows, because there
+isn&rsquo;t one.</p>
+<p>What this is really about is where your effort goes. Everybody who builds one of these
+builds the same sign-in, the same list with a search box, the same way of letting
+somebody out again &mdash; work that has been done thousands of times and is worth
+nothing to your business. Whether you would pay for that in weekends, in a developer, or
+in the hours and credits of asking an AI to do it for you, it is the same waste. Start
+from the part that is already solved, and spend what you have on the part that is
+actually yours.</p>
 
 <h2>Asking for a change</h2>
 <ol class="steps">
-  <li><b>Install an app.</b> It gets its own database, its own web address, its own copy
-  of the code. About a minute.</li>
+  <li><b>Install it.</b> You get your own copy at your own web address, with nothing
+  shared with anybody else&rsquo;s. About a minute.</li>
   <li><b>Say what you want changed.</b> &ldquo;Add a budget-range dropdown to the enquiry
   form, and make it match my brand colours.&rdquo; An agent does the work on a separate
   machine, nowhere near your live site.</li>
   <li><b>Look at it.</b> The change gets a web address of its own, so you can click
   around the new version yourself. Your live site hasn&rsquo;t moved.</li>
-  <li><b>It gets checked before you&rsquo;re asked.</b> The app&rsquo;s own tests run, and
-  a real browser opens the new version to confirm the pages still work &mdash; tested
-  against a copy of your actual records, because a change tested against an empty
-  database hasn&rsquo;t been tested.</li>
+  <li><b>It gets checked before you&rsquo;re asked.</b> The new version is tested
+  automatically, including something clicking through the pages the way a person would,
+  using a copy of your real information. Checking it against an empty app would prove
+  nothing &mdash; the question is whether it still works with your things in it.</li>
   <li><b>You decide.</b> Going live is a person&rsquo;s decision, never the
   agent&rsquo;s.</li>
-  <li><b>Changed your mind?</b> One click back to the previous version. The database is
-  snapshotted before anything ships.</li>
+  <li><b>Changed your mind?</b> One click back to how it was. A copy of everything is
+  put aside before any change goes live.</li>
 </ol>
 
 <figure>
   <img class="shot" src="/installed-app.png" alt="A Forms installation running on dabberz, restyled by an agent as a 1999 homepage, refusing an anonymous visitor.">
-  <figcaption><b>The guard rail, not the wallpaper.</b> Somebody asked this installation
-  for a 1999 homepage and got one &mdash; checked, then promoted by a human. The part
-  worth looking at is the sign-in prompt. The agent rewrote the whole page and
-  <em>couldn&rsquo;t</em> expose the records behind it, because the app never implements
-  its own login: that boundary sits underneath the app, where an agent editing the app
-  cannot reach it.</figcaption>
+  <figcaption>A real installation, mid-experiment. Somebody asked it for a 1999
+  homepage and got one &mdash; written, checked and put live the same way any other
+  change would be. Not a mock-up, and not what the tool looks like out of the box: a
+  deliberately silly request, used to find out whether the thing does what it is
+  told.</figcaption>
 </figure>
 
 <h2 id="cost">What it costs</h2>
@@ -101,24 +117,23 @@ about the number than show you a page with no number on it at all. <b>You rent r
 run things in &mdash; not seats, and not apps.</b></p>
 <div class="cols pair">
   <div>
-    <h3>A slice, from $15 a month</h3>
-    <p>Enough room for two to four apps. Run one big one or four small ones; we
-    don&rsquo;t count them and we don&rsquo;t count the people using them. Spin up an
-    experiment, decide it was a bad idea, delete it &mdash; the bill doesn&rsquo;t
-    notice.</p>
+    <h3>From $15 a month</h3>
+    <p>Room for two to four tools. Run one busy one or four quiet ones; we don&rsquo;t
+    count them, and we don&rsquo;t count the people using them. Try something, decide it
+    was a bad idea, delete it &mdash; the bill doesn&rsquo;t notice.</p>
   </div>
   <div>
-    <h3>Outgrown it? Take a bigger slice</h3>
-    <p>Roughly twice the room for roughly twice the price, and so on up. Whether that is
-    one larger machine or several smaller ones with your apps spread across them is our
-    problem to solve, not a line on your invoice.</p>
+    <h3>Outgrown it? Take more room</h3>
+    <p>Roughly twice the room for roughly twice the price, and so on up. How we actually
+    arrange that behind the scenes is our problem to solve, and never a line on your
+    invoice.</p>
   </div>
   <div>
-    <h3>Storage metered above a real allowance</h3>
-    <p>This is the one meter we keep, and we&rsquo;d rather explain it than hide it:
-    unbounded storage on a flat fee is a promise that gets broken quietly two years later
-    by a company that needs the money. So there&rsquo;s a generous allowance, and above it
-    you pay close to what it costs us, visible before you cross it.</p>
+    <h3>Storage, past a point</h3>
+    <p>The one thing we charge for by the amount, and we&rsquo;d rather say so than hide
+    it: &ldquo;unlimited&rdquo; storage on a flat fee is a promise that gets quietly
+    broken two years later by a company that needs the money. So there is an allowance
+    that most people will never reach, and past it you pay about what it costs us.</p>
   </div>
   <div>
     <h3>Your own Claude subscription</h3>
@@ -140,17 +155,17 @@ run things in &mdash; not seats, and not apps.</b></p>
   </div>
   <div>
     <h3>Bill you for growing</h3>
-    <p>No per-app, per-record, per-contact, per-submission or per-request pricing. Every
-    one of those meters bills you for your own success on an axis you didn&rsquo;t
-    choose &mdash; and charging per app would punish exactly the experimenting this is
-    for. Storage is the single exception, at cost, above an allowance: that one is
-    physics, not a pricing strategy.</p>
+    <p>Nothing priced per tool, per record, per contact or per response. Each of those
+    bills you more for doing well, on a number you never agreed to &mdash; and charging
+    per tool would punish exactly the trying-things-out this is for. Storage past the
+    allowance is the one exception, at roughly our cost, because that one is real weight
+    on a real disk rather than a pricing idea.</p>
   </div>
   <div>
     <h3>Resell you AI</h3>
-    <p>We don&rsquo;t mark up tokens, and agent access is included in every app rather
-    than sold as an upgrade &mdash; the opposite of &ldquo;seats, plus extra for
-    agents&rdquo;.</p>
+    <p>We take no cut of what the AI costs, and asking for changes is part of every
+    tool rather than an upgrade &mdash; the opposite of &ldquo;seats, and then extra for
+    the AI ones&rdquo;.</p>
   </div>
   <div>
     <h3>Make leaving hard</h3>
@@ -161,54 +176,54 @@ run things in &mdash; not seats, and not apps.</b></p>
 </div>
 
 <h2>Where your data goes</h2>
-<p>Step four says the agent&rsquo;s work gets checked against a copy of your real records.
-That&rsquo;s the part people ask about, so here is exactly what it means.</p>
+<p>Step four says changes get checked against a copy of your real information. That is
+the part people ask about, so here is plainly what it means.</p>
 <div class="cols pair">
   <div>
-    <h3>The copy is real, and temporary</h3>
-    <p>It isn&rsquo;t scrubbed or faked, because that&rsquo;s the whole point of it. It is
-    a separate database, created when the change opens and dropped when the change goes
-    live or is thrown away.</p>
+    <h3>The copy is real, and short-lived</h3>
+    <p>It is your actual information, not a made-up version &mdash; that is the whole
+    point of checking against it. The copy is made when you ask for the change and
+    deleted when the change goes live or gets thrown away.</p>
   </div>
   <div>
-    <h3>A preview is as private as the live app</h3>
-    <p>A change&rsquo;s web address enforces the same sign-in rules as your installation,
-    by the same mechanism, in the same place. Preview addresses are readable rather than
-    secret &mdash; so it&rsquo;s the rule protecting them, not the obscurity.</p>
+    <h3>The draft is as private as the real thing</h3>
+    <p>The version you are shown sits at its own web address and asks people to sign in
+    exactly the way your live one does. That address is readable rather than secret, on
+    purpose: what keeps people out is the lock, not the hope that nobody finds the
+    door.</p>
   </div>
   <div>
-    <h3>The agent can read those records</h3>
-    <p>It has to, in order to check its own work against them. So what it reads goes to
-    Anthropic under your subscription and your agreement with them, not ours. If that
-    isn&rsquo;t acceptable for a particular app, that app isn&rsquo;t one to install here
-    yet, and we&rsquo;d rather say so than bury it.</p>
+    <h3>The agent can read your information</h3>
+    <p>It has to, to check its own work against it. So whatever it reads goes to
+    Anthropic, under your subscription and your agreement with them rather than ours. If
+    that isn&rsquo;t something you can agree to for a particular job, then that job
+    isn&rsquo;t one to bring here yet, and we would rather say so than bury it.</p>
   </div>
   <div>
     <h3>So can we</h3>
-    <p>One operator, one machine, administrator access to it. Any claim otherwise would be
-    theatre. Encryption at rest protects the disk from someone who steals it; it does not
-    protect you from us. What protects you is that the export works and you can leave.</p>
+    <p>One person, one machine, and full access to it. Any claim otherwise would be
+    theatre. Scrambling the disk stops somebody who steals the hardware; it does not stop
+    us, and a padlock drawn on a web page never has. Pick accordingly, and know that you
+    can take everything and go at any point.</p>
   </div>
 </div>
 
-<h2>Bringing your own app</h2>
-<p>This is where it&rsquo;s going, and it comes with one real condition: an app has to be
-built against the platform&rsquo;s own components &mdash; the login, the database, the
-storage, the mail. That contract is the entire reason we can run something without
-knowing what it does, change it safely and hand it back to you. An app that rolls its own
-authentication is not one we can host this way.</p>
-<p>Which is the trade, stated plainly: build against the proven half, and the operations
-stop being your problem. Today that means starting from a template and changing it until
-it&rsquo;s yours &mdash; the same thing from the other end, and the end that works right
-now. Most people will never need the other one, and nothing on this page assumes you
-write code.</p>
+<h2>If you build things yourself</h2>
+<p>You will be able to bring your own, with one condition: it has to use the pieces the
+platform already provides for signing people in, storing things and sending mail. Those
+shared pieces are the only reason we can look after something without knowing what it
+does. Anything that brings its own way of signing people in is not something we can run
+this way.</p>
+<p>Today, the route that works is the other end of the same deal: take a template and
+change it until it is yours. Most people will never need the first one.</p>
 
 <h2>Honest about where this is</h2>
 <div class="note">
   <p>dabberz is early, and specific about it. Forms is the only template available today.
-  The platform runs on a single machine operated by one person &mdash; so there is no
-  second region and no second pair of hands, which is fine for a forms tool and is a real
-  thing to weigh before you move anything you&rsquo;d miss.</p>
+  Everything runs on one machine looked after by one person &mdash; so there is nowhere
+  else for it to run if that machine has a bad day, and nobody else to pick up the phone.
+  That is fine for a survey or an internal form. Weigh it properly before you move
+  something you would genuinely miss.</p>
   <p><a href="https://github.com/dabbers/devex">The source is public</a>, including the
   parts that aren&rsquo;t finished and a written list of what is unverified or known
   wrong. If you&rsquo;re deciding whether to trust this, that list is a more useful page
