@@ -123,6 +123,41 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--surface); 
 }
 .note p { margin: 0; max-width: none; }
 
+/* Landing page ------------------------------------------------------------ */
+
+.actions.tight { margin-bottom: 12px; }
+.next {
+  font-size: 0.95rem; line-height: 1.6; color: var(--muted);
+  max-width: 32rem; margin: 0 0 56px;
+}
+main .next { margin-bottom: 8px; }
+
+/* Fit / not-fit lists */
+.fit ul { margin: 10px 0 0; padding-left: 1.15rem; }
+.fit li { max-width: none; padding-bottom: 9px; }
+.fit li::marker { color: var(--maroon); }
+
+/* Price ledger */
+.ledger { list-style: none; padding: 0; margin: 20px 0 22px; max-width: 42rem; }
+.ledger li {
+  display: flex; gap: 10px 20px; flex-wrap: wrap; align-items: baseline;
+  max-width: none; padding: 11px 0; border-top: 1px solid var(--rule);
+}
+.ledger li:last-child { border-bottom: 1px solid var(--rule); }
+.ledger .amt {
+  font-weight: 600; white-space: nowrap;
+  flex: 0 0 8.5rem; color: var(--maroon);
+}
+.ledger li > span:last-child { flex: 1 1 18rem; }
+
+/* Screenshot: the source image is mostly empty background around the app,
+   so frame the app rather than reprint the whole canvas. */
+.shotframe {
+  aspect-ratio: 1.9 / 1; overflow: hidden; margin: 10px 0 6px;
+  border: 1px solid var(--rule); border-radius: 2px; background: var(--surface);
+}
+.shotframe img { display: block; width: 146%; margin-left: -23%; }
+
 /* Legal pages ------------------------------------------------------------- */
 
 .legal p, .legal li { max-width: 38rem; }
@@ -140,5 +175,8 @@ footer.site, footer.site a { color: var(--muted); font-size: 0.92rem; }
 
 @media (max-width: 34rem) {
   .hero { padding-top: 40px; }
+  .hero .lede { font-size: 1.1rem; }
+  .actions .btn { flex: 1 1 100%; text-align: center; }
+  .ledger .amt { flex: 0 0 100%; }
   header.site nav { margin-left: 0; width: 100%; gap: 14px; }
 }
