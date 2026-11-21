@@ -27,12 +27,24 @@ ask.</p>
 tools themselves are rarely the hard part. A form builder, a contact list, a
 ticket queue &mdash; these are a weekend each, and plenty of people have a
 half-finished one in a repository to prove it.</p>
-<p>What stops it is never the feature you set out to build. It is the database,
-the login, the domain, the backups, the patching, and being the person who finds
-out on Monday that it went down on Friday. Self-hosting somebody else&rsquo;s
-open-source version swaps the bill for exactly the same second job.</p>
+<p>What stops it is never the feature anyone wanted. It is the database, the
+login, the domain, the backups, the patching, and being the person who finds out
+on Monday that it went down on Friday. Self-hosting somebody else&rsquo;s
+open-source version swaps the bill for exactly that second job &mdash; which is
+a bad trade if you can do it, and not a trade at all if you can&rsquo;t.</p>
 <p>That second job is the whole product. You get software you own and data you
 control, and the operations are somebody else&rsquo;s problem.</p>
+
+<h2>Why there is no settings page</h2>
+<p>Software like this normally grows a configuration screen, which is a list of
+the changes somebody guessed in advance that you might want. It is always too
+long to navigate and never contains the thing you came for, and the moment you
+want something off the list you are filing a feature request or hiring someone.</p>
+<p>dabberz has no such screen. Branding, colours, wording, fields, what happens
+when a form is submitted &mdash; these are not settings, they are changes to the
+app, and they go through the route below like any other change. The effect is
+that there is no boundary between what you are allowed to configure and what
+would require a developer, because the same mechanism handles both.</p>
 
 <h2>How a change actually works</h2>
 <p>When you ask for something to be different, nothing touches your live site.
@@ -94,13 +106,18 @@ that implements its own authentication is not one we can host this way. Today
 the practical route is the other end of the same deal: start from an app in the
 catalog and change it until it is yours.</p>
 <p>Apps dabberz publishes are AGPL-3.0, declared in each app&rsquo;s manifest.
-The platform&rsquo;s source is public to read; its own licence is still being
-settled, and when it is, it will be stated in the repository rather than
-implied by a marketing page.</p>
+The platform itself is headed for MIT &mdash; the point of this is that you can
+leave with the thing you were running, and a restrictive licence on the half
+that runs it would make that a slogan rather than an exit.</p>
 
 <h2>Who builds it</h2>
 <p>dabberz is built and operated by Dab Media LLC, a small US company that also
 runs Kompare, Kollectibles and Gamer Galaxy.</p>
+<p>The name is older than this version of it. dabberz began as game servers and
+shared web hosting &mdash; renting people a reliable piece of somebody
+else&rsquo;s machine so they didn&rsquo;t have to run their own. This is the
+same business with a different lever: the thing being hosted can now be changed
+by asking, which is what makes it worth owning rather than renting.</p>
 <p>The platform is developed in the open. The source, the design documents, and
 an honest list of what is unfinished are all
 <a href="https://github.com/dabbers/devex">on GitHub</a> &mdash; including the
