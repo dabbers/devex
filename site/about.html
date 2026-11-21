@@ -32,8 +32,8 @@ control, and the operations are somebody else&rsquo;s problem.</p>
 
 <h2>How a change actually works</h2>
 <p>When you ask for something to be different, nothing touches your live site.
-The change gets its own machine, its own branch of the code, its own web
-address, and its own copy of your data &mdash; forked a moment before the work
+The change gets a machine of its own, a separate copy of the code, a web address
+of its own, and its own copy of your data &mdash; taken a moment before the work
 starts.</p>
 <p>That last part matters more than it sounds. A change tested against an empty
 database has not been tested. The question you actually have is whether this
@@ -46,6 +46,15 @@ told what was checked &mdash; and what wasn&rsquo;t, because an automated check
 can confirm the page works and cannot confirm it does what you meant.</p>
 <p>Promotion is always a person&rsquo;s decision. The agent proposes; it never
 ships.</p>
+<p>The copy of your data is the part people ask about, so: it is a real copy
+rather than a scrubbed or invented one, it lives in a separate database created
+when the change opens and dropped when the change ships or is thrown away, and
+the change&rsquo;s web address enforces the same sign-in rules as your live
+installation &mdash; by the same mechanism, in the same place. Preview addresses
+are readable rather than secret, so it is that rule protecting them and not the
+obscurity. The agent can read those records, because checking its own work
+against them is the point; what it reads goes to Anthropic under your own
+subscription and your own agreement with them.</p>
 
 <h2>Agents, and who pays for them</h2>
 <p>Software increasingly charges for seats and then charges again for the AI
@@ -55,6 +64,28 @@ than buying tokens from us at a markup.</p>
 <p>It also means we aren&rsquo;t reselling somebody else&rsquo;s margin, which
 keeps the incentives straight: we make money by running things well, not by you
 using more of something we buy wholesale.</p>
+<p>The honest cost of that arrangement, which is easy to leave out of a sentence
+like the one above: it is a second subscription if you don&rsquo;t already have
+one, and an afternoon of changes draws on your own usage limits &mdash; the same
+allowance you use for your own work.</p>
+
+<h2>What&rsquo;s yours, and what&rsquo;s ours</h2>
+<p>Worth separating, because &ldquo;you own it&rdquo; can be made to cover a lot.
+The <em>app</em> is yours: its code, its database, and an export that is a
+database dump rather than a souvenir CSV. The <em>platform</em> &mdash; the
+routing, the identity layer, the preview machinery, the backups &mdash; is what
+you are paying us to operate.</p>
+<p>That split has a consequence we would rather state than have you discover.
+Apps here never implement their own login, because the platform tells them who
+is asking. That is what makes them small and consistent, and it means an app
+lifted out of dabberz needs something to take over that job before it can let
+anyone in. The interface it expects is deliberately a boring one, and it is
+documented with the rest of the platform rather than left for you to reverse
+engineer.</p>
+<p>Apps dabberz publishes are AGPL-3.0, declared in each app&rsquo;s manifest.
+The platform&rsquo;s source is public to read; its own licence is still being
+settled, and when it is, it will be stated in the repository rather than
+implied by a marketing page.</p>
 
 <h2>Who builds it</h2>
 <p>dabberz is built and operated by Dab Media LLC, a small US company that also

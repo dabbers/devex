@@ -71,6 +71,12 @@ article > p:first-of-type { margin-top: 0; }
   font-size: 0.82rem; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--maroon); margin: 0 0 14px;
 }
+.hero h1 { max-width: 34rem; font-size: clamp(1.85rem, 4vw, 2.5rem); }
+.hero h1 em { font-style: italic; }
+.hero .availability {
+  margin: 26px 0 0; padding-left: 16px; border-left: 3px solid var(--maroon);
+  color: var(--ink); max-width: 34rem;
+}
 .hero .objection {
   margin: 26px 0 0; padding-left: 16px; border-left: 3px solid var(--maroon);
   font-style: italic; color: rgba(32, 30, 29, 0.78); max-width: 34rem;

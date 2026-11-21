@@ -3,102 +3,180 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dabberz &mdash; SaaS-as-a-service</title>
-<meta name="description" content="Install your own CRM, forms or wiki. We run it, an agent changes it when you ask, and the data stays yours. Never per seat.">
+<title>dabberz &mdash; business software you own</title>
+<meta name="description" content="Install your own forms tool, CRM or help desk. We run the machine, the database and the backups. You ask for changes in plain English. Never billed per person.">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header class="site"><div class="wrap">
   <a class="mark" href="/"><span class="star">&#10038;</span>dabberz</a>
   <nav>
+    <a href="#cost">Pricing</a>
     <a href="/about.html">About</a>
     <a href="/contact.html">Contact</a>
     <a href="https://github.com/dabbers/devex">Source</a>
   </nav>
 </div></header>
 <div class="hero"><div class="wrap">
-  <p class="kicker">SaaS-as-a-service</p>
-  <h1>The self-host for people who aren&rsquo;t technical.</h1>
-  <p class="lede">Install your own CRM, help desk or forms tool. We run it &mdash; the
-  machine, the database, the backups, the uptime. When you want it changed, you ask
-  in plain English, see the change running somewhere safe, and decide whether it
-  goes live.</p>
-  <p class="objection">The question was never &ldquo;can I run my own tools?&rdquo;
-  It was &ldquo;do I want to be the person who runs them?&rdquo;</p>
+  <p class="kicker">Business software you own, operated by somebody else</p>
+  <h1>The question was never whether you <em>could</em> run your own tools. It&rsquo;s whether you want to be the person who runs them.</h1>
+  <p class="lede">dabberz installs a business app on a machine we operate &mdash; your own
+  database, your own web address, your own copy of the code. We handle the server, the
+  backups and the 2am pager. When you want the app changed, you ask in plain English.
+  Nobody is ever billed per person.</p>
+  <p class="availability"><b>Forms is the app that exists today, and it&rsquo;s free while
+  dabberz is this early.</b> CRM and help desk are next.
+  <a href="#cost">Here&rsquo;s what it will cost when it isn&rsquo;t free</a>.</p>
   <div class="actions">
     <a class="btn" href="/contact.html">Request access</a>
-    <a class="btn ghost" href="/about.html">How it works</a>
+    <a class="btn ghost" href="/contact.html">Tell us which app you need</a>
   </div>
 </div></div>
 
 <main class="wrap">
 
 <h2>You own it. You don&rsquo;t run it.</h2>
-<p>Self-hosting solves the bill and hands you a second job: patching, monitoring,
-restoring, and finding out at 2am that nobody noticed it was down. Buying SaaS
-solves the second job and hands back the bill, the per-seat tax, and somebody
-else&rsquo;s roadmap.</p>
-<p>dabberz is the third option. The software is yours and so is the data. The
-operations are ours.</p>
+<p>Running the open-source version yourself solves the bill and hands you a second job:
+patching, monitoring, restoring, and finding out at 2am that nobody noticed it was down.
+Buying the software as a service solves the second job and hands back the bill, the
+per-seat tax, and somebody else&rsquo;s roadmap.</p>
+<p>dabberz is the third option. The software is yours and so is the data. The operations
+are ours.</p>
 
 <h2>Asking for a change</h2>
 <ol class="steps">
-  <li><b>Install an app.</b> It gets its own database, its own address, its own
-  copy of the code. About a minute.</li>
-  <li><b>Say what you want changed.</b> &ldquo;Add a company field to the contact
-  form.&rdquo; An agent does the work &mdash; on a branch, on its own machine,
-  against a copy of your real data taken a moment earlier.</li>
-  <li><b>Look at it.</b> The change gets a preview address of its own. Your live
-  site has not moved.</li>
-  <li><b>It gets checked.</b> The app&rsquo;s own tests run, and a real browser
-  opens the preview to confirm the page still loads and renders.</li>
-  <li><b>You decide.</b> Promotion is a person&rsquo;s decision, never the
+  <li><b>Install an app.</b> It gets its own database, its own web address, its own copy
+  of the code. About a minute.</li>
+  <li><b>Say what you want changed.</b> &ldquo;Add a budget-range dropdown to the enquiry
+  form, and make it match my brand colours.&rdquo; An agent does the work on a separate
+  machine, nowhere near your live site.</li>
+  <li><b>Look at it.</b> The change gets a web address of its own, so you can click
+  around the new version yourself. Your live site hasn&rsquo;t moved.</li>
+  <li><b>It gets checked before you&rsquo;re asked.</b> The app&rsquo;s own tests run, and
+  a real browser opens the new version to confirm the pages still work &mdash; tested
+  against a copy of your actual records, because a change tested against an empty
+  database hasn&rsquo;t been tested.</li>
+  <li><b>You decide.</b> Going live is a person&rsquo;s decision, never the
   agent&rsquo;s.</li>
-  <li><b>Changed your mind?</b> One click back to the previous version. The
-  database is snapshotted before anything ships.</li>
+  <li><b>Changed your mind?</b> One click back to the previous version. The database is
+  snapshotted before anything ships.</li>
 </ol>
 
 <figure>
   <img class="shot" src="/installed-app.png" alt="A Forms installation running on dabberz, restyled by an agent as a 1999 homepage, refusing an anonymous visitor.">
-  <figcaption>A real installation. Somebody asked for a 1999 homepage; the agent
-  wrote it, it was checked, a human promoted it. Note that it still refuses a
-  visitor who isn&rsquo;t signed in &mdash; the app never implements login,
-  because the platform handles that.</figcaption>
+  <figcaption><b>The guard rail, not the wallpaper.</b> Somebody asked this installation
+  for a 1999 homepage and got one &mdash; checked, then promoted by a human. The part
+  worth looking at is the sign-in prompt. The agent rewrote the whole page and
+  <em>couldn&rsquo;t</em> expose the records behind it, because the app never implements
+  its own login: that boundary sits underneath the app, where an agent editing the app
+  cannot reach it.</figcaption>
 </figure>
+
+<h2 id="cost">What it costs</h2>
+<div class="note">
+  <p><b>Nothing today.</b> Forms is free while dabberz is this early, there is no card on
+  file, and there is no trial clock &mdash; a trial that expires once you&rsquo;ve put real
+  records into it is a trap, not an offer. You&rsquo;ll get 90 days&rsquo; notice before
+  that changes, and your data exports on the way out either way.</p>
+</div>
+<p>We would rather tell you the shape of the price before we&rsquo;ve finished arguing
+about the number than show you a page with no number on it at all:</p>
+<div class="cols">
+  <div>
+    <h3>A flat monthly fee per app</h3>
+    <p>We&rsquo;re aiming at around $20 a month for a small installation &mdash; roughly
+    one seat of the thing it replaces, for the whole team. Not per person, not per record,
+    not per form submission, not per agent request.</p>
+  </div>
+  <div>
+    <h3>Storage metered above a real allowance</h3>
+    <p>This is the one meter we keep, and we&rsquo;d rather explain it than hide it:
+    unbounded storage on a flat fee is a promise that gets broken quietly two years later
+    by a company that needs the money. So there&rsquo;s a generous allowance, and above it
+    you pay close to what it costs us, visible before you cross it.</p>
+  </div>
+  <div>
+    <h3>Your own Claude subscription</h3>
+    <p>The agent runs on your Anthropic credentials, so the AI line on your dabberz bill
+    is zero and cannot surprise you. Two things to know first: it&rsquo;s a second
+    subscription of about $20 a month if you don&rsquo;t already have one, and a busy
+    afternoon of changes counts against your own usage limits &mdash; the same ones you
+    use for your own work.</p>
+  </div>
+</div>
 
 <h2>What we won&rsquo;t do</h2>
 <div class="cols">
   <div>
     <h3>Charge per person</h3>
-    <p>Per-seat pricing taxes collaboration. Adding a colleague so they can see
-    one dashboard shouldn&rsquo;t cost a full seat, so people share logins or
-    leave somebody out. We charge on anything that isn&rsquo;t a human being.</p>
+    <p>Per-seat pricing taxes collaboration. Adding a colleague so they can see one
+    dashboard shouldn&rsquo;t cost a full seat, so people share logins or leave somebody
+    out. We charge on anything that isn&rsquo;t a human being.</p>
   </div>
   <div>
-    <h3>Charge per gigabyte</h3>
-    <p>The replacement everyone reaches for, and it&rsquo;s the same tax wearing
-    different clothes: a bill that grows with your own success, on an axis you
-    didn&rsquo;t choose. Nobody should learn to delete things to control a bill.</p>
+    <h3>Bill you for growing</h3>
+    <p>No per-record, per-contact, per-submission or per-request pricing. Every one of
+    those meters bills you for your own success on an axis you didn&rsquo;t choose.
+    Storage is the single exception, at cost, above an allowance &mdash; that one is
+    physics, not a pricing strategy.</p>
   </div>
   <div>
     <h3>Resell you AI</h3>
-    <p>You bring your own Claude subscription. We don&rsquo;t mark up tokens, and
-    agent access is included in every app rather than sold as an upgrade &mdash;
-    the opposite of &ldquo;seats, plus extra for agents&rdquo;.</p>
+    <p>We don&rsquo;t mark up tokens, and agent access is included in every app rather
+    than sold as an upgrade &mdash; the opposite of &ldquo;seats, plus extra for
+    agents&rdquo;.</p>
   </div>
   <div>
     <h3>Make leaving hard</h3>
-    <p>Every app exports everything it can import. A platform for rescuing people
-    from SaaS shouldn&rsquo;t become the thing they were trying to leave.</p>
+    <p>Every app exports everything it can import, as a database dump rather than a
+    souvenir CSV. A platform for rescuing people from SaaS shouldn&rsquo;t become the
+    thing they were trying to leave.</p>
+  </div>
+</div>
+
+<h2>Where your data goes</h2>
+<p>Step four says the agent&rsquo;s work gets checked against a copy of your real records.
+That&rsquo;s the part people ask about, so here is exactly what it means.</p>
+<div class="cols">
+  <div>
+    <h3>The copy is real, and temporary</h3>
+    <p>It isn&rsquo;t scrubbed or faked, because that&rsquo;s the whole point of it. It is
+    a separate database, created when the change opens and dropped when the change goes
+    live or is thrown away.</p>
+  </div>
+  <div>
+    <h3>A preview is as private as the live app</h3>
+    <p>A change&rsquo;s web address enforces the same sign-in rules as your installation,
+    by the same mechanism, in the same place. Preview addresses are readable rather than
+    secret &mdash; so it&rsquo;s the rule protecting them, not the obscurity.</p>
+  </div>
+  <div>
+    <h3>The agent can read those records</h3>
+    <p>It has to, in order to check its own work against them. So what it reads goes to
+    Anthropic under your subscription and your agreement with them, not ours. If that
+    isn&rsquo;t acceptable for a particular app, that app isn&rsquo;t one to install here
+    yet, and we&rsquo;d rather say so than bury it.</p>
+  </div>
+  <div>
+    <h3>So can we</h3>
+    <p>One operator, one machine, administrator access to it. Any claim otherwise would be
+    theatre. Encryption at rest protects the disk from someone who steals it; it does not
+    protect you from us. What protects you is that the export works and you can leave.</p>
   </div>
 </div>
 
 <h2>Honest about where this is</h2>
 <div class="note">
-  <p>dabberz is early. One app is in the catalog today &mdash; Forms &mdash; and
-  the platform runs on a single machine operated by one person. The code is
-  public, including the parts that aren&rsquo;t finished. If that&rsquo;s
-  interesting rather than disqualifying, get in touch.</p>
+  <p>dabberz is early, and specific about it. Forms is the only app in the catalog today.
+  The platform runs on a single machine operated by one person &mdash; so there is no
+  second region and no second pair of hands, which is fine for a forms tool and is a real
+  thing to weigh before you move anything you&rsquo;d miss.</p>
+  <p><a href="https://github.com/dabbers/devex">The source is public</a>, including the
+  parts that aren&rsquo;t finished and a written list of what is unverified or known
+  wrong. If you&rsquo;re deciding whether to trust this, that list is a more useful page
+  than this one.</p>
+  <p>Forms today &mdash; tell us which app you&rsquo;d actually move, and we&rsquo;ll tell
+  you when it ships. <a href="/contact.html">Say hello</a>.</p>
 </div>
 
 </main>
