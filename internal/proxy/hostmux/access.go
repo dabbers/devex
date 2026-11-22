@@ -184,6 +184,31 @@ func cleanPath(p string) string {
 	return cleaned
 }
 
+// membersOnly judges a request against the route's policy.
+//
+// The edge judges a decoded, cleaned path and forwards the one the visitor
+// spelled, and an app may read that spelling differently: to a router,
+// /admin/x%2F..%2F..%2Ff%2Fy is under /admin, and cleaned it is /f/y. So a
+// path is only public when there is one way to read it. Any other is for
+// members, whichever page it turns out to name.
+func (rt *route) membersOnly(u *url.URL) bool {
+	if rt.access.Mode == domain.AccessPublic {
+		return false
+	}
+	return !unambiguous(u) || rt.access.MembersOnly(u.Path)
+}
+
+// unambiguous reports whether every app would route u to the path the edge
+// judged: nothing to clean, no encoded separator or dot, nothing that decodes
+// a second time, and none of the characters some servers treat as separators.
+func unambiguous(u *url.URL) bool {
+	if u.Path != cleanPath(u.Path) || strings.ContainsAny(u.Path, "\\;%?#\x00") {
+		return false
+	}
+	raw := strings.ToLower(u.EscapedPath())
+	return !strings.Contains(raw, "%2f") && !strings.Contains(raw, "%2e")
+}
+
 // serveRoute applies the route's policy and then forwards.
 func (m *Mux) serveRoute(w http.ResponseWriter, r *http.Request, host string, rt *route) {
 	if strings.HasPrefix(r.URL.Path, reservedPrefix) {
@@ -191,7 +216,7 @@ func (m *Mux) serveRoute(w http.ResponseWriter, r *http.Request, host string, rt
 		return
 	}
 	r = m.withVisitor(r)
-	if rt.access.MembersOnly(cleanPath(r.URL.Path)) {
+	if rt.membersOnly(r.URL) {
 		who, known := visitor(r.Context())
 		if !rt.isMember(who, known) {
 			m.refuse(w, r, host, who, known)
@@ -242,8 +267,9 @@ func (m *Mux) serveEdge(w http.ResponseWriter, r *http.Request, host string) {
 	switch strings.TrimPrefix(r.URL.Path, reservedPrefix) {
 	case "signin":
 		if s == nil {
-			page(w, http.StatusNotFound, "Sign-in is not available here",
-				"This deployment has no panel to sign in through.", "", "")
+			// Nowhere to sign in. The panel links here to open any app, so
+			// carry on to the app as whoever they already are.
+			http.Redirect(w, r, safeReturn(r.URL.Query().Get("return")), http.StatusFound)
 			return
 		}
 		state, err := randomToken()

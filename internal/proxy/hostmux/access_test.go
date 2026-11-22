@@ -482,3 +482,75 @@ func TestSigningOutEndsTheSession(t *testing.T) {
 		t.Errorf("signing out left the session cookie: %+v", c)
 	}
 }
+
+// TestAPathTwoWaysToReadIsNeverPublic: the edge forwards the path as it was
+// spelled, so one that cleans to a public page and routes to an admin one
+// must not get through. Nor may the reverse.
+func TestAPathTwoWaysToReadIsNeverPublic(t *testing.T) {
+	t.Parallel()
+	forms := domain.Access{Mode: domain.AccessHybrid, Public: []string{"/f/"}}
+
+	for target, public := range map[string]bool{
+		"/admin/x%2F..%2F..%2Ff%2Fy": false,
+		"/admin/x%2f..%2f..%2ff%2fy": false,
+		"/admin/../f/y":              false,
+		"/admin/%2e%2e/f/y":          false,
+		"/f/%252e%252e/admin":        false,
+		"/f/..;/admin":               false,
+		"/f/..%5cadmin":              false,
+		"/f//admin":                  false,
+		"/f/%2e":                     false,
+		"/f/a%2Fb":                   false,
+		"/f/v1%2e2":                  false,
+		"/f/x%00":                    false,
+		"/f/x%23y":                   false,
+		"/f/x%3Fy":                   false,
+		"/f/contact":                 true,
+		"/f/contact%20us":            true,
+		"/f/v1.2":                    true,
+		"/f/contact?next=%2Fthanks":  true,
+	} {
+		mux, app := edgeFor(t, forms, nil)
+		rec := visit(mux, http.MethodGet, target)
+		if reached := len(app.requests()) > 0; reached != public {
+			t.Errorf("%s: reached the app = %v (status %d), want %v", target, reached, rec.Code, public)
+		}
+	}
+}
+
+// TestTheOwnerCanSignInAtAPublicApp: a public app refuses nobody, so nothing
+// bounces its owner, and Forms met them as a stranger. The sign-in path works
+// whatever the policy, which is what the panel's Open links rely on.
+func TestTheOwnerCanSignInAtAPublicApp(t *testing.T) {
+	t.Parallel()
+	mux, app := edgeFor(t, open, nil)
+
+	start := visit(mux, http.MethodGet, "/_dabberz/signin?return=/")
+	state := cookieNamed(start, stateCookie)
+	if state == nil {
+		t.Fatalf("a public app did not start a sign-in: status %d", start.Code)
+	}
+	value, _, _ := strings.Cut(state.Value, ".")
+	link, err := mux.Handoff(appHost, value, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := cookieNamed(visit(mux, http.MethodGet, back.RequestURI(), state), previewpass.CookieName)
+	if session == nil {
+		t.Fatal("no session at a public app")
+	}
+	visit(mux, http.MethodGet, "/", session)
+	if seen := app.requests(); len(seen) != 1 || seen[0].Header.Get(proxy.UserHeader) != ownerID {
+		t.Error("a public app was not told its owner is asking")
+	}
+
+	// With nowhere to sign in, the link still opens the app.
+	mux.signIn = nil
+	if rec := visit(mux, http.MethodGet, "/_dabberz/signin?return=/forms/1"); rec.Header().Get("Location") != "/forms/1" {
+		t.Errorf("with no panel the Open link ends at %q, status %d", rec.Header().Get("Location"), rec.Code)
+	}
+}

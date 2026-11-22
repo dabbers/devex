@@ -638,7 +638,7 @@ function subtaskRow(fork) {
     el("div", { class: "subtask-meta" },
       el("span", { class: "mono", text: fork.branch }),
       fork.preview_url
-        ? el("a", { href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+        ? el("a", { href: appLink(fork.preview_url), target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
         : null,
       el("a", { href: `#/fork/${fork.id}`, text: "machine →" }),
       ...budgetMeters(fork.usage)));
@@ -701,7 +701,7 @@ async function renderFork(forkID) {
     aside: tag(fork.state),
     row: fork.preview_url ? [
       el("span", { class: "mono", text: fork.preview_url.replace(/^https?:\/\//, "") }),
-      el("a", { class: "btn btn-secondary btn-sm", href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "Open ↗" }),
+      el("a", { class: "btn btn-secondary btn-sm", href: appLink(fork.preview_url), target: "_blank", rel: "noopener noreferrer", text: "Open ↗" }),
       validateButton(fork),
     ] : [],
   }));
@@ -920,7 +920,7 @@ async function renderWorkspaces() {
       el("div", {},
         ws.preview_url
           ? el("a", {
-              class: "mono", href: ws.preview_url, target: "_blank", rel: "noopener noreferrer",
+              class: "mono", href: appLink(ws.preview_url), target: "_blank", rel: "noopener noreferrer",
               text: ws.preview_url.replace(/^https?:\/\//, ""),
             })
           : el("span", { class: "muted", text: ws.state === "running" ? "no front door" : "not running" }))));
@@ -1065,7 +1065,7 @@ function workspaceControls(ws) {
   }
   if (ws.preview_url) {
     controls.push(el("a", {
-      class: "btn btn-secondary", href: ws.preview_url,
+      class: "btn btn-secondary", href: appLink(ws.preview_url),
       target: "_blank", rel: "noopener noreferrer", text: "Open ↗",
     }));
   }
@@ -1241,7 +1241,7 @@ function workspacePanel(owner, previews) {
       }
     }
     header.append(el("a", {
-      class: "btn btn-secondary btn-sm", href: shownService.url,
+      class: "btn btn-secondary btn-sm", href: appLink(shownService.url),
       target: "_blank", rel: "noopener noreferrer", text: "Open ↗",
     }));
 
@@ -1420,7 +1420,7 @@ async function renderRepo(repoID) {
         el("div", { class: "subtask-meta" },
           el("span", { text: entry.forks ? plural(entry.forks, "sub-task") : "no sub-tasks yet" }),
           entry.preview_url
-            ? el("a", { href: entry.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+            ? el("a", { href: appLink(entry.preview_url), target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
             : null)))));
   }
 
@@ -1755,6 +1755,19 @@ function changeTitle(prompt) {
   return truncate(line, 80);
 }
 
+// appSignIn is whether this deployment's edge can sign people in at apps.
+let appSignIn = false;
+
+// appLink opens an app as the person using the panel. An app's hostname never
+// sees the panel's sign-in, and on a public app nothing would send them to
+// fetch one: the edge refuses nobody there, so the app meets its own owner as
+// a stranger. So the link asks the edge to sign them in on the way.
+function appLink(href) {
+  if (!appSignIn || !href) return href;
+  const to = new URL(href);
+  return `${to.origin}/_dabberz/signin?return=${encodeURIComponent(to.pathname + to.search)}`;
+}
+
 const external = (href, text, cls = "btn btn-secondary") =>
   el("a", { class: cls, href, target: "_blank", rel: "noopener noreferrer", text });
 
@@ -1792,7 +1805,7 @@ async function renderServices() {
       el("div", {},
         one.url && one.state === "running"
           ? el("a", {
-              class: "mono", href: one.url, target: "_blank", rel: "noopener noreferrer",
+              class: "mono", href: appLink(one.url), target: "_blank", rel: "noopener noreferrer",
               text: one.url.replace(/^https?:\/\//, ""),
             })
           : el("span", { class: "muted", text: one.state === "failed" ? "did not come up" : "not live" }))));
@@ -1901,7 +1914,7 @@ async function renderService(id) {
   };
 
   const controls = [];
-  if (one.url && one.state === "running") controls.push(external(one.url, "Open ↗"));
+  if (one.url && one.state === "running") controls.push(external(appLink(one.url), "Open ↗"));
   if (one.previous_revision && one.state === "running") {
     controls.push(el("button", {
       class: "btn btn-secondary",
@@ -1945,7 +1958,7 @@ async function renderService(id) {
     el("dl", { class: "kv" },
       el("dt", { text: "Address" }),
       el("dd", {}, one.url
-        ? el("a", { href: one.url, target: "_blank", rel: "noopener noreferrer", text: one.url })
+        ? el("a", { href: appLink(one.url), target: "_blank", rel: "noopener noreferrer", text: one.url })
         : "not yet"),
       el("dt", { text: "Version" }), el("dd", { class: "mono", text: shortRevision(one.revision) }),
       el("dt", { text: "Before that" }), el("dd", { class: "mono", text: shortRevision(one.previous_revision) }),
@@ -2002,7 +2015,7 @@ async function renderService(id) {
       el("div", {}, el("a", { class: "service-name", href: `#/change/${change.id}`, text: change.title })),
       el("div", {}, tag(change.state), el("span", { class: "muted", text: `  ${relativeTime(change.created_at)}` })),
       el("div", {}, change.preview_url && open
-        ? el("a", { class: "mono", href: change.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+        ? el("a", { class: "mono", href: appLink(change.preview_url), target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
         : null)));
   }
   root.append(section("Changes", changes.length ? list : empty("No changes yet.")));
@@ -2030,7 +2043,7 @@ async function renderChange(id) {
   };
 
   const controls = [];
-  if (change.preview_url && !finished) controls.push(external(change.preview_url, "Open preview ↗"));
+  if (change.preview_url && !finished) controls.push(external(appLink(change.preview_url), "Open preview ↗"));
   if (!finished) {
     const check = el("button", { class: "btn btn-secondary", text: "Check it" });
     check.addEventListener("click", () => act(async () => {
@@ -2289,6 +2302,7 @@ async function start() {
     return;
   }
 
+  appSignIn = !!config.app_sign_in;
   if (config.sign_in_required) {
     try {
       await loadClerk(config);
@@ -2393,7 +2407,8 @@ function accessSection(one) {
     el("div", { style: "max-width:620px" },
       el("p", { class: "muted", text:
         "Members are you, for now. Anyone else who opens a members-only page is asked to sign in, " +
-        "and turned away if they are not a member. Its previews follow the same rule." }),
+        "and turned away if they are not a member. Its previews follow the same rule. " +
+        "Anyone means Dabberz turns nobody away; the app can still keep some pages to signed-in people." }),
       el("div", { class: "field" }, mode),
       pathsField,
       el("div", { class: "row-actions" }, save)));

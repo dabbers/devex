@@ -109,7 +109,10 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    lives only in the process, so a restart signs everyone out of every app;
    the next members-only page bounces them back in without a prompt while
    their panel sign-in holds. `intake` predates policies and is public until
-   its owner sets it on the service page.
+   its owner sets it on the service page. A public app never bounces anyone,
+   so the panel opens every app through `/_dabberz/signin` for the app to
+   know its owner. A path with more than one reading (encoded separators or
+   dots, anything cleaning would change) is never public on a hybrid app.
 
 ## What this session fixed, all running on the host
 
