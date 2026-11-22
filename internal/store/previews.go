@@ -98,11 +98,11 @@ type OwnedRoute struct {
 	// route nobody owns may serve a public surface but may never be told that
 	// somebody is signed in.
 	OwnerID string
-	// Access is the front door of the installation this route belongs to.
-	// Every workspace on an installation's repository shares it -- the one
-	// serving customers and every change being worked on -- because a change's
-	// preview is the same app with the same admin pages, and leaving those
-	// open on a preview would be leaving them open. A route with no
+	// Access is this route's front door. The workspace serving an installation
+	// has the installation's. Any other workspace on that repository -- a
+	// change's preview -- is for members whatever that says: a site is open
+	// because its app decides who sees what, and a change is that app's code
+	// before anyone approved it, on a copy of its real data. A route with no
 	// installation behind it, such as a plain repository's workspace, is
 	// public, which is what every route was before policies existed.
 	Access domain.Access
@@ -118,7 +118,9 @@ func (s *Store) ListOwnedRoutes(ctx context.Context) ([]*OwnedRoute, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT p.workspace_id, p.service_id, p.hostname, p.upstream_host, p.upstream_port, "+
 			"p.created_at, COALESCE(w.user_id, ''), "+
-			"(SELECT i.access FROM installations i WHERE i.repo_id = w.repo_id "+
+			"(SELECT CASE WHEN i.workspace_id = w.id THEN i.access "+
+			"ELSE '{\"mode\":\"internal\"}' END "+
+			"FROM installations i WHERE i.repo_id = w.repo_id "+
 			"ORDER BY i.created_at LIMIT 1) "+
 			"FROM preview_routes p LEFT JOIN workspaces w ON w.id = p.workspace_id "+
 			"ORDER BY p.hostname")

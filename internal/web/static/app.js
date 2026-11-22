@@ -2363,9 +2363,9 @@ async function renderOpen(params) {
 }
 
 const ACCESS_WORDS = {
-  internal: "Members only",
-  hybrid: "Members only, except some public pages",
-  public: "Anyone",
+  public: "The app decides, page by page",
+  internal: "Locked: members only",
+  hybrid: "Locked, except some public pages",
 };
 
 // accessSection is who the service lets in. The edge enforces it, so it holds
@@ -2406,9 +2406,9 @@ function accessSection(one) {
   return section("Who can get in",
     el("div", { style: "max-width:620px" },
       el("p", { class: "muted", text:
-        "Members are you, for now. Anyone else who opens a members-only page is asked to sign in, " +
-        "and turned away if they are not a member. Its previews follow the same rule. " +
-        "Anyone means Dabberz turns nobody away; the app can still keep some pages to signed-in people." }),
+        "Members are you, for now. Normally the site is open and the app says which pages are for anyone " +
+        "and which are for members, such as form by form. Locking it overrides the app. " +
+        "A change's preview is always members only, until it is approved." }),
       el("div", { class: "field" }, mode),
       pathsField,
       el("div", { class: "row-actions" }, save)));

@@ -33,6 +33,9 @@ type recordingUpstream struct {
 	seen []*http.Request
 	// setCookies is what the app answers with.
 	setCookies []string
+	// status and headers are the rest of its answer, when a test cares.
+	status  int
+	headers http.Header
 }
 
 func (u *recordingUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +45,14 @@ func (u *recordingUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, c := range u.setCookies {
 		w.Header().Add("Set-Cookie", c)
 	}
-	w.WriteHeader(http.StatusOK)
+	for name, values := range u.headers {
+		w.Header()[name] = values
+	}
+	status := u.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
 	io.WriteString(w, "app:"+r.URL.Path) //nolint:errcheck // a test upstream
 }
 
@@ -552,5 +562,82 @@ func TestTheOwnerCanSignInAtAPublicApp(t *testing.T) {
 	mux.signIn = nil
 	if rec := visit(mux, http.MethodGet, "/_dabberz/signin?return=/forms/1"); rec.Header().Get("Location") != "/forms/1" {
 		t.Errorf("with no panel the Open link ends at %q, status %d", rec.Header().Get("Location"), rec.Code)
+	}
+}
+
+// TestAnAppAsksForSignInAndTheEdgeDoesIt: on an open site the app decides a
+// page is for members, and the edge does what follows for each kind of
+// visitor, without ever looping.
+func TestAnAppAsksForSignInAndTheEdgeDoesIt(t *testing.T) {
+	t.Parallel()
+	asking := http.Header{proxy.SignInHeader: {"required"}}
+	stranger := &domain.User{ID: "usr_other", Email: "other@example.com"}
+
+	for name, c := range map[string]struct {
+		who      *domain.User
+		status   int
+		headers  http.Header
+		method   string
+		accept   string
+		want     int
+		location string
+	}{
+		"a person signed out": {nil, 401, asking, "GET", "text/html", 302,
+			"/_dabberz/signin?return=" + url.QueryEscape("/f/team?x=1&y=2")},
+		"a script":                         {nil, 401, asking, "GET", "application/json", 401, ""},
+		"a post":                           {nil, 401, asking, "POST", "text/html", 401, ""},
+		"somebody who is not a member":     {stranger, 401, asking, "GET", "text/html", 403, ""},
+		"a member the app still refused":   {owner, 401, asking, "GET", "text/html", 401, ""},
+		"the app's own accounts":           {nil, 401, nil, "GET", "text/html", 401, ""},
+		"the header on a page that loaded": {nil, 200, asking, "GET", "text/html", 200, ""},
+	} {
+		mux, app := edgeFor(t, open, c.who)
+		app.status, app.headers = c.status, c.headers
+		req := httptest.NewRequest(c.method, "http://"+appHost+"/f/team?x=1&y=2", nil)
+		req.Header.Set("Accept", c.accept)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != c.want || rec.Header().Get("Location") != c.location {
+			t.Errorf("%s: %d to %q, want %d to %q", name, rec.Code, rec.Header().Get("Location"), c.want, c.location)
+		}
+		if rec.Header().Get(proxy.SignInHeader) != "" {
+			t.Errorf("%s: the app's request to the edge reached the visitor", name)
+		}
+		replaced := c.who != owner && c.status == 401 && c.headers != nil
+		if shown := strings.Contains(rec.Body.String(), "app:"); shown == replaced {
+			t.Errorf("%s: the app's page shown = %v", name, shown)
+		}
+		if c.want == http.StatusFound && rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: the bounce can be cached", name)
+		}
+	}
+}
+
+// TestWhatAMemberWasShownIsNotCached: the CDN caches by path, so a members'
+// file it kept would be served to whoever asked next.
+func TestWhatAMemberWasShownIsNotCached(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		policy  domain.Access
+		who     *domain.User
+		private bool
+	}{
+		"a member at an open site":   {open, owner, true},
+		"a member at a shut route":   {internal, owner, true},
+		"a stranger at an open site": {open, nil, false},
+	} {
+		mux, app := edgeFor(t, c.policy, c.who)
+		app.headers = http.Header{
+			"Cache-Control":                {"public, max-age=14400"},
+			"Cdn-Cache-Control":            {"max-age=14400"},
+			"Cloudflare-Cdn-Cache-Control": {"max-age=14400"},
+		}
+		got := visit(mux, http.MethodGet, "/app.js").Header()
+		private := got.Get("Cache-Control") == "private, no-store" &&
+			got.Get("CDN-Cache-Control") == "" && got.Get("Cloudflare-CDN-Cache-Control") == ""
+		if private != c.private {
+			t.Errorf("%s: kept out of shared caches = %v, want %v (%v)", name, private, c.private, got)
+		}
 	}
 }

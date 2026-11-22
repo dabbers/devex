@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -82,7 +83,7 @@ func run() error {
 	}
 
 	server := &http.Server{
-		Addr:              ":" + strconv.Itoa(cfg.port),
+		Addr:              net.JoinHostPort(cfg.host, strconv.Itoa(cfg.port)),
 		Handler:           app.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -140,8 +141,12 @@ const (
 
 type config struct {
 	databaseURL string
-	port        int
-	maxConns    int
+	// host is where to listen, from the platform. Identity arrives as a header,
+	// so anyone who can reach this port around the platform is whoever they
+	// say they are.
+	host     string
+	port     int
+	maxConns int
 
 	trustProxy bool
 	devUser    string
@@ -155,6 +160,7 @@ type config struct {
 func configFromEnv() (config, error) {
 	cfg := config{
 		databaseURL:     os.Getenv("DATABASE_URL"),
+		host:            os.Getenv("HOST"),
 		port:            3000,
 		maxConns:        10,
 		trustProxy:      os.Getenv(trustEnv) == "1",

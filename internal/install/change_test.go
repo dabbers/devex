@@ -33,7 +33,7 @@ func TestAChangeGoesLiveWithoutTouchingProductionFirst(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	installer, db, owner, edge, _ := newInstaller(t, os.Getenv(clusterEnv))
+	installer, db, owner, edge, visiting := newInstaller(t, os.Getenv(clusterEnv))
 	installation := installApp(t, ctx, installer, owner.ID, "live")
 	waitForHealth(t, ctx, edge, installation.URL, "/healthz")
 
@@ -43,8 +43,9 @@ func TestAChangeGoesLiveWithoutTouchingProductionFirst(t *testing.T) {
 	// Something real in production, which the change must be able to see and
 	// must not be able to destroy.
 	if status := post(t, client, live, "", "/forms", url.Values{
-		"title":  {"Contact us"},
-		"fields": {"Your name | text | required"},
+		"title":    {"Contact us"},
+		"fields":   {"Your name | text | required"},
+		"audience": {"public"},
 	}, asOwner(owner.ID)); status != http.StatusSeeOther {
 		t.Fatalf("creating the live form returned %d", status)
 	}
@@ -67,7 +68,16 @@ func TestAChangeGoesLiveWithoutTouchingProductionFirst(t *testing.T) {
 	if change.Revision == "" {
 		t.Fatal("the change records no revision, so there is nothing to promote")
 	}
+	// An open site does not open its changes: this is unapproved code on a
+	// copy of real answers, so even a public form is shut to strangers here.
+	if status := post(t, client, edge, change.PreviewURL, "/f/contact-us", url.Values{
+		"your-name": {"A stranger"},
+	}, nil); status != http.StatusUnauthorized {
+		t.Fatalf("a stranger reached an unapproved change's preview: %d", status)
+	}
+	visiting.be(owner)
 	waitForHealth(t, ctx, edge, change.PreviewURL, "/healthz")
+	visiting.be(nil)
 
 	// The copy is real data. A change tested against an empty database has
 	// not been tested.

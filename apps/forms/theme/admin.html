@@ -1,14 +1,15 @@
 {{define "body"}}
 <h1>Your forms</h1>
-<p class="lede">Each one has a public address. Answers land here.</p>
+<p class="lede">Each one has an address and says who can answer it. Only members see this page and the answers.</p>
 
 {{if .Forms}}
 <table>
-  <tr><th>Form</th><th>Address</th><th>Answers</th></tr>
+  <tr><th>Form</th><th>Address</th><th>Who can answer</th><th>Answers</th></tr>
   {{range .Forms}}
   <tr>
     <td><a href="/forms/{{.Form.ID}}">{{.Form.Title}}</a></td>
     <td><a href="/f/{{.Form.Slug}}"><code>/f/{{.Form.Slug}}</code></a></td>
+    <td>{{if eq .Form.Audience "public"}}Anyone{{else}}Members{{end}}</td>
     <td>{{.Count}}</td>
   </tr>
   {{end}}
@@ -29,6 +30,11 @@
     placeholder="One per line: Label | type | required&#10;type is text, email, textarea, number or checkbox">Your name | text | required
 Email | email | required
 What can we help with? | textarea</textarea>
+  <label for="audience">Who can answer</label>
+  <select id="audience" name="audience">
+    <option value="internal" selected>Members only (signed in)</option>
+    <option value="public">Anyone with the link (no sign-in)</option>
+  </select>
   <button type="submit">Create form</button>
 </form>
 {{end}}

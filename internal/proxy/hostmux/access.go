@@ -1,6 +1,7 @@
 package hostmux
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -16,15 +17,17 @@ import (
 
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/previewpass"
+	"github.com/dabbers/devex/internal/proxy"
 )
 
 // Access at the edge.
 //
-// An app's front door is the edge's to keep, not the app's: the app is code an
-// agent may have just rewritten, and an admin page an agent forgot to protect
-// is still behind the door if the door is here. So each route carries its
-// installation's policy, and a members-only path is refused before the app
-// sees the request.
+// There are two places to decide. An app decides its own routes -- this form
+// is for anyone, that one for members -- and on a 401 asks the edge to deal
+// with whoever that is (proxy.SignInHeader), so no app writes a login. And
+// each route carries a policy the edge keeps by itself, before the app sees
+// the request: open for most sites, shut for a change's preview, which is
+// code nobody has approved, and for any site its owner chose to lock.
 //
 // Refusing is only half of it. A member has to be able to get in, and the
 // panel's sign-in cannot help directly: it lives on the control plane's
@@ -216,14 +219,55 @@ func (m *Mux) serveRoute(w http.ResponseWriter, r *http.Request, host string, rt
 		return
 	}
 	r = m.withVisitor(r)
-	if rt.membersOnly(r.URL) {
+	shut := rt.membersOnly(r.URL)
+	if shut {
 		who, known := visitor(r.Context())
 		if !rt.isMember(who, known) {
 			m.refuse(w, r, host, who, known)
 			return
 		}
 	}
-	rt.proxy.ServeHTTP(w, r)
+	ctx := context.WithValue(r.Context(), forwardedKey{}, forwarded{asked: r, shut: shut})
+	rt.proxy.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// forwarded is what the response side needs to know about a request the edge
+// passed on: how it was asked, before rewriting, and whether the policy alone
+// made it members-only.
+type forwarded struct {
+	asked *http.Request
+	shut  bool
+}
+
+type forwardedKey struct{}
+
+// errForMembers is an app's answer that the page is for members, given to
+// somebody who is not one.
+var errForMembers = errors.New("hostmux: the app says this is for its members")
+
+// settle applies to an app's response what only the edge can: the sign-in it
+// asked for, and keeping what a member was shown out of shared caches.
+func (rt *route) settle(resp *http.Response) error {
+	asked := resp.Header.Get(proxy.SignInHeader) != ""
+	resp.Header.Del(proxy.SignInHeader)
+
+	ctx := resp.Request.Context()
+	who, known := visitor(ctx)
+	member := rt.isMember(who, known)
+	// Only for a non-member: bouncing a member the app refused would come
+	// straight back here. An app's own 401, for accounts of its own, is the
+	// app's and passes through.
+	if asked && !member && resp.StatusCode == http.StatusUnauthorized {
+		return errForMembers
+	}
+	if f, _ := ctx.Value(forwardedKey{}).(forwarded); member || f.shut {
+		// The CDN-specific headers outrank Cache-Control where they are set.
+		for _, name := range []string{"CDN-Cache-Control", "Cloudflare-CDN-Cache-Control", "Surrogate-Control", "Expires"} {
+			resp.Header.Del(name)
+		}
+		resp.Header.Set("Cache-Control", "private, no-store")
+	}
+	return nil
 }
 
 // refuse answers a members-only request from somebody who is not a member.
@@ -239,8 +283,8 @@ func (m *Mux) refuse(w http.ResponseWriter, r *http.Request, host string, who do
 		if name == "" {
 			name = "an account"
 		}
-		page(w, http.StatusForbidden, "This app is private",
-			"You are signed in as "+name+", which is not one of its members. "+
+		page(w, http.StatusForbidden, "This is for members only",
+			"You are signed in as "+name+", which is not one of this app's members. "+
 				"Ask its owner to let you in, or sign in as somebody else.",
 			reservedPrefix+"signout", "Sign out of this app")
 		return
@@ -248,6 +292,7 @@ func (m *Mux) refuse(w http.ResponseWriter, r *http.Request, host string, who do
 	if s != nil && (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 		strings.Contains(r.Header.Get("Accept"), "text/html") {
 		// A person in a browser: send them round the panel and back.
+		w.Header().Set("Cache-Control", "no-store")
 		http.Redirect(w, r, reservedPrefix+"signin?return="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 		return
 	}

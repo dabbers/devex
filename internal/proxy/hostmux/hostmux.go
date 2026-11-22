@@ -146,66 +146,72 @@ func (m *Mux) Apply(_ context.Context, routes []proxy.Route) error {
 			return fmt.Errorf("hostmux: route %s has an unusable upstream %q: %w", r.Hostname, upstream, err)
 		}
 		hostname, owner := r.Hostname, r.OwnerID
-		next[hostname] = &route{
-			upstream: upstream,
-			owner:    owner,
-			access:   r.Access,
-			proxy: &httputil.ReverseProxy{
-				Rewrite: func(pr *httputil.ProxyRequest) {
-					pr.SetURL(target)
-					// Identity is the platform's to assert. An app behind
-					// this is told to trust these headers, so a visitor who
-					// could set one would have the admin surface of somebody
-					// else's installation, with nothing appearing broken.
-					proxy.StripIdentity(pr.Out.Header)
-					// A pass is the edge's, never the app's. The app is code
-					// an agent may have just written; one that could read
-					// the pass could replay it for as long as it lasts.
-					stripCookie(pr.Out.Header, previewpass.CookieName)
-					// ...and then state it, for whoever is actually signed
-					// in. Order matters: strip first, assert second, so a
-					// forged header is replaced and never merged with.
-					//
-					// Only the person this hostname belongs to. An app takes
-					// the assertion as permission, so announcing any
-					// signed-in visitor here would make every customer an
-					// administrator of every other customer's installation.
-					// Anyone else is a member of the public, which is what
-					// they are as far as this installation is concerned.
-					if who, ok := visitor(pr.In.Context()); ok && who.ID == owner && owner != "" {
-						pr.Out.Header.Set(proxy.UserHeader, who.ID)
-						if who.Email != "" {
-							pr.Out.Header.Set(proxy.EmailHeader, who.Email)
-						}
+		rt := &route{upstream: upstream, owner: owner, access: r.Access}
+		unavailable := m.upstreamUnavailable(hostname, upstream)
+		next[hostname] = rt
+		rt.proxy = &httputil.ReverseProxy{
+			Rewrite: func(pr *httputil.ProxyRequest) {
+				pr.SetURL(target)
+				// Identity is the platform's to assert. An app behind
+				// this is told to trust these headers, so a visitor who
+				// could set one would have the admin surface of somebody
+				// else's installation, with nothing appearing broken.
+				proxy.StripIdentity(pr.Out.Header)
+				// A pass is the edge's, never the app's. The app is code
+				// an agent may have just written; one that could read
+				// the pass could replay it for as long as it lasts.
+				stripCookie(pr.Out.Header, previewpass.CookieName)
+				// ...and then state it, for whoever is actually signed
+				// in. Order matters: strip first, assert second, so a
+				// forged header is replaced and never merged with.
+				//
+				// Only the person this hostname belongs to. An app takes
+				// the assertion as permission, so announcing any
+				// signed-in visitor here would make every customer an
+				// administrator of every other customer's installation.
+				// Anyone else is a member of the public, which is what
+				// they are as far as this installation is concerned.
+				if who, ok := visitor(pr.In.Context()); ok && who.ID == owner && owner != "" {
+					pr.Out.Header.Set(proxy.UserHeader, who.ID)
+					if who.Email != "" {
+						pr.Out.Header.Set(proxy.EmailHeader, who.Email)
 					}
-					// Keep the public hostname. A dev server derives absolute
-					// URLs and its hot-reload websocket address from the Host
-					// it was asked for, so rewriting it to the internal
-					// address makes the page load and then fail to connect.
-					pr.Out.Host = pr.In.Host
-					pr.SetXForwarded()
-				},
-				// Every cookie an app sets is kept to the hostname that set
-				// it. Every customer's preview is a sibling under one
-				// registrable domain, so a cookie scoped to that domain
-				// reaches every other customer's installation: one app
-				// could sign a visitor into a session of its choosing on
-				// somebody else's, or shadow their cookies. Only the
-				// Domain attribute goes, not the cookie, so an app
-				// configured with a cookie domain keeps working on its own
-				// hostname.
-				ModifyResponse: func(resp *http.Response) error {
-					hostOnlyCookies(resp.Header)
-					dropReservedCookies(resp.Header)
-					return nil
-				},
-				// Flush every write immediately. Hot reload and server-sent
-				// events are both long-lived streams, and the default
-				// buffering makes a live preview arrive in batches.
-				FlushInterval: -1,
-				ErrorHandler:  m.upstreamUnavailable(hostname, upstream),
-				ErrorLog:      slog.NewLogLogger(m.logger.Handler(), slog.LevelDebug),
+				}
+				// Keep the public hostname. A dev server derives absolute
+				// URLs and its hot-reload websocket address from the Host
+				// it was asked for, so rewriting it to the internal
+				// address makes the page load and then fail to connect.
+				pr.Out.Host = pr.In.Host
+				pr.SetXForwarded()
 			},
+			// Every cookie an app sets is kept to the hostname that set
+			// it. Every customer's preview is a sibling under one
+			// registrable domain, so a cookie scoped to that domain
+			// reaches every other customer's installation: one app
+			// could sign a visitor into a session of its choosing on
+			// somebody else's, or shadow their cookies. Only the
+			// Domain attribute goes, not the cookie, so an app
+			// configured with a cookie domain keeps working on its own
+			// hostname.
+			ModifyResponse: func(resp *http.Response) error {
+				hostOnlyCookies(resp.Header)
+				dropReservedCookies(resp.Header)
+				return rt.settle(resp)
+			},
+			// Flush every write immediately. Hot reload and server-sent
+			// events are both long-lived streams, and the default
+			// buffering makes a live preview arrive in batches.
+			FlushInterval: -1,
+			ErrorHandler: func(w http.ResponseWriter, out *http.Request, err error) {
+				f, ok := out.Context().Value(forwardedKey{}).(forwarded)
+				if ok && errors.Is(err, errForMembers) {
+					who, known := visitor(out.Context())
+					m.refuse(w, f.asked, hostname, who, known)
+					return
+				}
+				unavailable(w, out, err)
+			},
+			ErrorLog: slog.NewLogLogger(m.logger.Handler(), slog.LevelDebug),
 		}
 	}
 

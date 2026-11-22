@@ -66,7 +66,7 @@ func (a *app) tools() []tool {
 	return []tool{
 		{
 			Name:        "list_forms",
-			Description: "List every form in this installation, with its public address and how many answers it has received.",
+			Description: "List every form in this installation, with its address, its audience (public: anyone with the link; internal: members only) and how many answers it has received.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 			run: func(ctx context.Context, a *app, _ map[string]any) (any, error) {
 				forms, err := a.store.ListForms(ctx)
@@ -83,6 +83,7 @@ func (a *app) tools() []tool {
 						"id": form.ID, "slug": form.Slug, "title": form.Title,
 						"description": form.Description,
 						"fields":      form.Fields, "submissions": counts[form.ID],
+						"audience": form.Audience,
 					})
 				}
 				return map[string]any{"forms": out}, nil

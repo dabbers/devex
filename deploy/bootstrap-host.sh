@@ -482,7 +482,10 @@ checkout() {
 # Host header is served over plain HTTP, around the CDN entirely. 443 is
 # included for when TLS terminates here, so that does not reopen the same hole.
 #
-# A table of its own with an accepting policy, touching only those two ports:
+# Ports from 1024 up take no new connections from off the machine. That is
+# where apps listen, and not every app honours the HOST it is given.
+#
+# A table of its own with an accepting policy, touching none of SSH's port:
 # a mistake here can make the site unreachable but cannot lock out SSH. Loaded
 # with nft -f rather than by restarting nftables, whose stock config begins by
 # flushing every rule on the machine, including ones it did not write.
@@ -526,6 +529,9 @@ firewall() {
 		        tcp dport { 80, 443 } ip saddr @cdn4 accept
 		        tcp dport { 80, 443 } ip6 saddr @cdn6 accept
 		        tcp dport { 80, 443 } drop
+		        # Apps' own ports. An app believes the identity header on what
+		        # reaches it, so nothing may reach it around the edge.
+		        iifname != "lo" tcp dport 1024-65535 ct state new drop
 		    }
 		}
 	NFT

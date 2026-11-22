@@ -1,6 +1,7 @@
 {{define "body"}}
 <h1>{{.Form.Title}}</h1>
 {{if .Form.Description}}<p class="lede">{{.Form.Description}}</p>{{end}}
+{{if ne .Form.Audience "public"}}<p class="lede">Only members can see and answer this form.</p>{{end}}
 {{if .Error}}<div class="note">{{.Error}}</div>{{end}}
 <form method="post" action="/f/{{.Form.Slug}}">
   {{range .Form.Fields}}

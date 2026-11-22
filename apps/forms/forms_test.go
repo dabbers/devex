@@ -63,6 +63,7 @@ func contactForm() *Form {
 	return &Form{
 		Title:       "Contact us",
 		Description: "We read everything.",
+		Audience:    AudiencePublic,
 		Fields: []Field{
 			{Label: "Your name", Type: "text", Required: true},
 			{Label: "Email", Type: "email", Required: true},
@@ -420,5 +421,209 @@ func TestTheAgentSurfaceAnswers(t *testing.T) {
 	})
 	if missing["isError"] != true {
 		t.Fatalf("a failed tool call did not report isError: %v", missing)
+	}
+}
+
+// behindPlatform is the app as installed: identity is whatever header the edge
+// asserts, and nobody by default.
+func behindPlatform(t *testing.T) (http.Handler, *Store) {
+	t.Helper()
+	store := testStore(t)
+	built, err := newApp(store, config{trustProxy: true}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("newApp: %v", err)
+	}
+	return built.handler(), store
+}
+
+func ask(h http.Handler, method, target, as string, body url.Values, headers ...string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, "https://forms.example"+target, strings.NewReader(body.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if as != "" {
+		r.Header.Set(userHeader, as)
+	}
+	for i := 0; i+1 < len(headers); i += 2 {
+		r.Header.Set(headers[i], headers[i+1])
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+// TestEachFormHasItsAudience: forms on one site target different people, and
+// changing one moves only that one.
+func TestEachFormHasItsAudience(t *testing.T) {
+	h, store := behindPlatform(t)
+	ctx := context.Background()
+
+	create := func(title, audience string) *Form {
+		t.Helper()
+		values := url.Values{"title": {title}, "fields": {"Name"}}
+		if audience != "" {
+			values.Set("audience", audience)
+		}
+		if w := ask(h, "POST", "/forms", "usr_member", values); w.Code != http.StatusSeeOther {
+			t.Fatalf("create %s = %d", title, w.Code)
+		}
+		form, err := store.FormBySlug(ctx, slugify(title))
+		if err != nil {
+			t.Fatalf("%s was not created: %v", title, err)
+		}
+		return form
+	}
+	jobs, review, unsaid := create("Jobs", "public"), create("Review", "internal"), create("Unsaid", "")
+
+	expect := func(form *Form, anyone bool) {
+		t.Helper()
+		for _, method := range []string{"GET", "POST"} {
+			w := ask(h, method, "/f/"+form.Slug, "", url.Values{"name": {"A stranger"}})
+			if anyone && w.Code != http.StatusOK {
+				t.Errorf("%s public %s = %d for a stranger", method, form.Slug, w.Code)
+			}
+			if !anyone {
+				if w.Code != http.StatusUnauthorized || w.Header().Get(signInHeader) != "required" {
+					t.Errorf("%s internal %s = %d for a stranger, want a request to sign in", method, form.Slug, w.Code)
+				}
+				if strings.Contains(w.Body.String(), form.Title) {
+					t.Errorf("%s internal %s showed a stranger the form", method, form.Slug)
+				}
+			}
+			if !strings.Contains(w.Header().Get("Cache-Control"), "no-store") {
+				t.Errorf("%s %s can be cached", method, form.Slug)
+			}
+		}
+		if !anyone {
+			if rows, _ := store.ListSubmissions(ctx, form.ID, 10); len(rows) != 0 {
+				t.Errorf("a stranger's answer to internal %s was stored", form.Slug)
+			}
+		}
+		if w := ask(h, "GET", "/f/"+form.Slug, "usr_member", nil); w.Code != http.StatusOK {
+			t.Errorf("a member got %d from %s", w.Code, form.Slug)
+		}
+	}
+	expect(jobs, true)
+	expect(review, false)
+	expect(unsaid, false)
+
+	set := func(form *Form, as, audience string) int {
+		return ask(h, "POST", "/forms/"+form.ID+"/audience", as, url.Values{"audience": {audience}}).Code
+	}
+	if got := set(review, "", "public"); got != http.StatusUnauthorized {
+		t.Errorf("a stranger changing an audience got %d", got)
+	}
+	if got := set(review, "usr_member", "everyone"); got != http.StatusBadRequest {
+		t.Errorf("an unknown audience got %d", got)
+	}
+	expect(review, false)
+	if got := set(review, "usr_member", "public"); got != http.StatusSeeOther {
+		t.Fatalf("opening a form got %d", got)
+	}
+	expect(review, true)
+	expect(unsaid, false)
+	if got := set(&Form{ID: "frm_none"}, "usr_member", "public"); got != http.StatusNotFound {
+		t.Errorf("a missing form got %d", got)
+	}
+}
+
+// TestOnlyTheOpenListIsOpen: the site's door is open, so every route not meant
+// for strangers has to refuse them here, including one nobody has written yet.
+func TestOnlyTheOpenListIsOpen(t *testing.T) {
+	h, _ := behindPlatform(t)
+	for _, route := range []string{
+		"GET /", "POST /forms", "GET /forms/x", "POST /forms/x/audience",
+		"GET /export", "POST /import", "POST /mcp", "POST /jobs/digest",
+		"GET /a-route-written-tomorrow", "DELETE /f/x", "POST /healthz",
+		"GET /f/", "GET /f/x/more",
+	} {
+		method, target, _ := strings.Cut(route, " ")
+		w := ask(h, method, target, "", nil)
+		if w.Code != http.StatusUnauthorized || w.Header().Get(signInHeader) != "required" {
+			t.Errorf("%s = %d for a stranger, want a request to sign in", route, w.Code)
+		}
+	}
+	if w := ask(h, "GET", "/healthz", "", nil); w.Code != http.StatusOK {
+		t.Errorf("health = %d for a stranger", w.Code)
+	}
+}
+
+// TestAnotherSiteCannotActAsAMember: every other customer's app is same-site
+// with this one, so a member's cookie alone must not be enough to write.
+func TestAnotherSiteCannotActAsAMember(t *testing.T) {
+	h, store := behindPlatform(t)
+	form := &Form{Title: "Review", Fields: []Field{{Label: "Name"}}}
+	if err := store.CreateForm(context.Background(), form); err != nil {
+		t.Fatal(err)
+	}
+	open := url.Values{"audience": {"public"}}
+	for _, headers := range [][]string{
+		{"Sec-Fetch-Site", "same-site"},
+		{"Sec-Fetch-Site", "cross-site"},
+		{"Origin", "https://other.example"},
+	} {
+		for _, target := range []string{"/forms/" + form.ID + "/audience", "/f/" + form.Slug, "/import"} {
+			if w := ask(h, "POST", target, "usr_member", open, headers...); w.Code != http.StatusForbidden {
+				t.Errorf("POST %s with %v = %d, want 403", target, headers, w.Code)
+			}
+		}
+	}
+	if w := ask(h, "POST", "/forms/"+form.ID+"/audience", "usr_member", open,
+		"Sec-Fetch-Site", "same-origin", "Origin", "https://forms.example"); w.Code != http.StatusSeeOther {
+		t.Errorf("the app's own page = %d", w.Code)
+	}
+}
+
+// TestAnArchiveKeepsItsAudiences: losing one on the way through publishes it.
+func TestAnArchiveKeepsItsAudiences(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	archive := func(version int, audience Audience) *Archive {
+		return &Archive{Format: exportFormat, Version: version, Forms: []*Form{{
+			ID: "frm_kept", Slug: "kept", Title: "Kept", Audience: audience, Fields: []Field{},
+		}}}
+	}
+	if err := store.Import(ctx, archive(2, "")); err == nil || !strings.Contains(err.Error(), "who it is for") {
+		t.Fatalf("a version 2 archive with no audience was not refused as one: %v", err)
+	}
+	for _, c := range []struct {
+		version    int
+		said, want Audience
+	}{{1, "", AudiencePublic}, {2, AudienceInternal, AudienceInternal}, {2, AudiencePublic, AudiencePublic}} {
+		if _, err := store.db.Exec(`TRUNCATE submissions, forms CASCADE`); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Import(ctx, archive(c.version, c.said)); err != nil {
+			t.Fatalf("import v%d: %v", c.version, err)
+		}
+		out, err := store.Export(ctx)
+		if err != nil || out.Forms[0].Audience != c.want {
+			t.Errorf("v%d %q came back as %+v (%v), want %q", c.version, c.said, out, err, c.want)
+		}
+	}
+}
+
+// TestFormsFromBeforeAudiencesStayPublic: upgrading must not close a form
+// somebody has already handed out.
+func TestFormsFromBeforeAudiencesStayPublic(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for _, q := range []string{
+		`ALTER TABLE forms DROP COLUMN audience`,
+		`DELETE FROM schema_migrations WHERE name = '0004_form_audience'`,
+		`INSERT INTO forms (id, slug, title) VALUES ('frm_old', 'old', 'Old')`,
+	} {
+		if _, err := store.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO forms (id, slug, title) VALUES ('frm_new', 'new', 'New')`); err != nil {
+		t.Fatal(err)
+	}
+	for slug, want := range map[string]Audience{"old": AudiencePublic, "new": AudienceInternal} {
+		if form, err := store.FormBySlug(ctx, slug); err != nil || form.Audience != want {
+			t.Errorf("%s = %+v (%v), want %q", slug, form, err, want)
+		}
 	}
 }

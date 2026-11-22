@@ -23,8 +23,10 @@ import (
 // looking at and an importer can refuse what it does not understand.
 const exportFormat = "dabberz.forms.export"
 
-// exportVersion changes only when the shape changes incompatibly.
-const exportVersion = 1
+// exportVersion changes only when the shape changes incompatibly. 2 added each
+// form's audience: an importer that dropped it would publish internal forms,
+// so one that only knows 1 has to refuse.
+const exportVersion = 2
 
 // Archive is everything this installation holds.
 type Archive struct {
@@ -123,6 +125,19 @@ func (s *Store) Import(ctx context.Context, archive *Archive) error {
 			archive.Version, exportVersion)
 	}
 
+	for _, form := range archive.Forms {
+		if form == nil {
+			return fmt.Errorf("forms: the archive holds an empty form")
+		}
+		if archive.Version < 2 && form.Audience == "" {
+			// Version 1 was written when every form was open to anyone.
+			form.Audience = AudiencePublic
+		}
+		if !form.Audience.valid() {
+			return fmt.Errorf("forms: %s does not say who it is for", form.Slug)
+		}
+	}
+
 	var existing int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM forms`).Scan(&existing); err != nil {
 		return err
@@ -143,9 +158,9 @@ func (s *Store) Import(ctx context.Context, archive *Archive) error {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO forms (id, slug, title, description, fields, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			form.ID, form.Slug, form.Title, form.Description, fields,
+			INSERT INTO forms (id, slug, title, description, fields, audience, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			form.ID, form.Slug, form.Title, form.Description, fields, form.Audience,
 			form.CreatedAt, form.UpdatedAt); err != nil {
 			return fmt.Errorf("forms: import form %s: %w", form.Slug, err)
 		}

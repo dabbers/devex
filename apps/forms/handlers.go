@@ -28,6 +28,11 @@ var theme embed.FS
 const (
 	userHeader  = "X-Dabberz-User"
 	emailHeader = "X-Dabberz-Email"
+	// signInHeader, on a 401, asks the platform to sign the visitor in, or to
+	// tell them they are not a member. The app never redirects to a login
+	// itself: it cannot tell a stranger from a signed-in non-member, and would
+	// send the second round for ever.
+	signInHeader = "X-Dabberz-Signin"
 )
 
 type app struct {
@@ -46,54 +51,90 @@ func newApp(store *Store, cfg config, logger *slog.Logger) (*app, error) {
 }
 
 func (a *app) handler() http.Handler {
-	mux := http.NewServeMux()
+	// The site is open at the platform's door, so this is where who may reach
+	// what is decided. Everything is for members unless it is on this short
+	// list: a route added to admin below is private without anyone having to
+	// remember to make it so.
+	open := http.NewServeMux()
 
 	// Health is open by definition: the platform asks it before it would have
 	// anyone to authenticate.
-	mux.HandleFunc("GET /healthz", a.health)
+	open.HandleFunc("GET /healthz", a.health)
 
-	// Public. These are the whole point of a form.
-	mux.HandleFunc("GET /f/{slug}", a.publicForm)
-	mux.HandleFunc("POST /f/{slug}", a.submit)
+	// Each form says who it is for; formFor asks it.
+	open.HandleFunc("GET /f/{slug}", a.publicForm)
+	open.HandleFunc("POST /f/{slug}", a.submit)
 
 	// The admin surface, behind the platform's identity.
-	mux.HandleFunc("GET /{$}", a.requireUser(a.listForms))
-	mux.HandleFunc("POST /forms", a.requireUser(a.createForm))
-	mux.HandleFunc("GET /forms/{id}", a.requireUser(a.showSubmissions))
-	mux.HandleFunc("GET /export", a.requireUser(a.export))
-	mux.HandleFunc("POST /import", a.requireUser(a.importData))
+	admin := http.NewServeMux()
+	open.Handle("/", a.requireUser(admin.ServeHTTP))
+
+	admin.HandleFunc("GET /{$}", a.listForms)
+	admin.HandleFunc("POST /forms", a.createForm)
+	admin.HandleFunc("GET /forms/{id}", a.showSubmissions)
+	admin.HandleFunc("POST /forms/{id}/audience", a.changeAudience)
+	admin.HandleFunc("GET /export", a.export)
+	admin.HandleFunc("POST /import", a.importData)
 
 	// Agent access. Declared in the manifest, so it is not optional.
-	mux.HandleFunc("POST /mcp", a.requireUser(a.mcp))
+	admin.HandleFunc("POST /mcp", a.mcp)
 
 	// Scheduled work the platform invokes. Not public: it arrives with the
 	// platform's own identity like anything else.
-	mux.HandleFunc("POST /jobs/digest", a.requireUser(a.digest))
+	admin.HandleFunc("POST /jobs/digest", a.digest)
 
-	return a.logRequests(mux)
+	return a.logRequests(neverCached(open))
 }
 
-// requireUser refuses anything the platform has not attributed to a person.
+// neverCached keeps every answer out of shared caches. Who may see a page can
+// change with a click, and a copy at a CDN would not hear about it.
+func neverCached(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requireUser refuses anything the platform has not attributed to a member.
 func (a *app) requireUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !a.cfg.identityReady() {
-			a.fail(w, r, http.StatusServiceUnavailable, "No identity configured",
-				"This installation cannot tell who is asking, so it will not serve its admin surface.")
-			return
+		if member, ok := a.member(w, r); ok {
+			next(w, member)
 		}
-
-		user := a.cfg.devUser
-		if a.cfg.trustProxy {
-			if named := strings.TrimSpace(r.Header.Get(userHeader)); named != "" {
-				user = named
-			}
-		}
-		if user == "" {
-			a.fail(w, r, http.StatusUnauthorized, "Sign in", "This page belongs to an account.")
-			return
-		}
-		next(w, r.WithContext(withUser(r.Context(), user, r.Header.Get(emailHeader))))
 	}
+}
+
+// sameOrigin refuses a member's browser being used by another site. The
+// session cookie's SameSite is no help: every other customer's app is the
+// same site as this one until the preview domain is a public suffix.
+var sameOrigin = http.NewCrossOriginProtection()
+
+// member returns the request as the member making it, or answers it and
+// reports false.
+func (a *app) member(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	if !a.cfg.identityReady() {
+		a.fail(w, r, http.StatusServiceUnavailable, "No identity configured",
+			"This installation cannot tell who is asking, so it will not serve what is for its members.")
+		return nil, false
+	}
+
+	user := a.cfg.devUser
+	if a.cfg.trustProxy {
+		if named := strings.TrimSpace(r.Header.Get(userHeader)); named != "" {
+			user = named
+		}
+	}
+	if user == "" {
+		w.Header().Set(signInHeader, "required")
+		a.fail(w, r, http.StatusUnauthorized, "Sign in", "This page is for this app's members.")
+		return nil, false
+	}
+	if err := sameOrigin.Check(r); err != nil {
+		a.fail(w, r, http.StatusForbidden, "That came from another site",
+			"Open the page here and try again.")
+		return nil, false
+	}
+	return r.WithContext(withUser(r.Context(), user, r.Header.Get(emailHeader))), true
 }
 
 func (a *app) health(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +189,7 @@ func (a *app) createForm(w http.ResponseWriter, r *http.Request) {
 		Title:       r.PostFormValue("title"),
 		Description: r.PostFormValue("description"),
 		Fields:      parseFieldLines(r.PostFormValue("fields")),
+		Audience:    Audience(r.PostFormValue("audience")),
 	}
 	if err := a.store.CreateForm(r.Context(), form); err != nil {
 		// Back to the page that asked, with the reason, rather than a dead end.
@@ -155,6 +197,27 @@ func (a *app) createForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/forms/"+form.ID, http.StatusSeeOther)
+}
+
+// changeAudience opens a form to anyone or closes it to members.
+func (a *app) changeAudience(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	audience := Audience(r.PostFormValue("audience"))
+	if !audience.valid() {
+		a.fail(w, r, http.StatusBadRequest, "That is not an audience",
+			"A form is for anyone with the link, or for members only.")
+		return
+	}
+	err := a.store.SetAudience(r.Context(), id, audience)
+	if errors.Is(err, ErrNotFound) {
+		a.fail(w, r, http.StatusNotFound, "No such form", "It may have been deleted.")
+		return
+	}
+	if err != nil {
+		a.serverError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/forms/"+id, http.StatusSeeOther)
 }
 
 // parseFieldLines reads the one-per-line question format: "Label | type | required".
@@ -225,16 +288,33 @@ func (a *app) showSubmissions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --------------------------------------------------------------- public
+// --------------------------------------------------------------- answering
 
-func (a *app) publicForm(w http.ResponseWriter, r *http.Request) {
+// formFor loads the form being asked for, if this visitor is in its audience.
+// Otherwise it answers the request and reports false. Only AudiencePublic is
+// open, so an audience this code does not know is closed.
+func (a *app) formFor(w http.ResponseWriter, r *http.Request) (*Form, bool) {
 	form, err := a.store.FormBySlug(r.Context(), r.PathValue("slug"))
 	if errors.Is(err, ErrNotFound) {
 		a.fail(w, r, http.StatusNotFound, "No such form", "Check the address.")
-		return
+		return nil, false
 	}
 	if err != nil {
 		a.serverError(w, r, err)
+		return nil, false
+	}
+	if form.Audience == AudiencePublic {
+		return form, true
+	}
+	if _, ok := a.member(w, r); !ok {
+		return nil, false
+	}
+	return form, true
+}
+
+func (a *app) publicForm(w http.ResponseWriter, r *http.Request) {
+	form, ok := a.formFor(w, r)
+	if !ok {
 		return
 	}
 	a.render(w, r, "public.html", map[string]any{
@@ -245,13 +325,8 @@ func (a *app) publicForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) submit(w http.ResponseWriter, r *http.Request) {
-	form, err := a.store.FormBySlug(r.Context(), r.PathValue("slug"))
-	if errors.Is(err, ErrNotFound) {
-		a.fail(w, r, http.StatusNotFound, "No such form", "Check the address.")
-		return
-	}
-	if err != nil {
-		a.serverError(w, r, err)
+	form, ok := a.formFor(w, r)
+	if !ok {
 		return
 	}
 	if err := r.ParseForm(); err != nil {

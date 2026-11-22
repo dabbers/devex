@@ -31,13 +31,27 @@ var fieldTypes = map[string]bool{
 	"text": true, "email": true, "textarea": true, "number": true, "checkbox": true,
 }
 
-// Form is a questionnaire with a public address.
+// Audience is who may see and answer a form. Managing forms and reading what
+// was sent is always for members, whatever the form's audience.
+type Audience string
+
+const (
+	// AudiencePublic is anyone with the link.
+	AudiencePublic Audience = "public"
+	// AudienceInternal is this installation's members.
+	AudienceInternal Audience = "internal"
+)
+
+func (a Audience) valid() bool { return a == AudiencePublic || a == AudienceInternal }
+
+// Form is a questionnaire with an address and an audience.
 type Form struct {
 	ID          string    `json:"id"`
 	Slug        string    `json:"slug"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	Fields      []Field   `json:"fields"`
+	Audience    Audience  `json:"audience"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -83,6 +97,12 @@ var migrations = []struct {
 		)`},
 	{"0003_submissions_by_form", `
 		CREATE INDEX submissions_by_form ON submissions (form_id, created_at DESC, id DESC)`},
+	// Forms from before audiences were open to anyone with the link and stay
+	// that way. A row written since without saying is for members.
+	{"0004_form_audience", `
+		ALTER TABLE forms ADD COLUMN audience TEXT NOT NULL DEFAULT 'public'
+			CHECK (audience IN ('public', 'internal'));
+		ALTER TABLE forms ALTER COLUMN audience SET DEFAULT 'internal'`},
 }
 
 // Migrate brings the schema up to date.
@@ -153,10 +173,10 @@ func (s *Store) CreateForm(ctx context.Context, form *Form) error {
 		return err
 	}
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO forms (id, slug, title, description, fields)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO forms (id, slug, title, description, fields, audience)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING created_at, updated_at`,
-		form.ID, form.Slug, form.Title, form.Description, encoded,
+		form.ID, form.Slug, form.Title, form.Description, encoded, form.Audience,
 	).Scan(&form.CreatedAt, &form.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "forms_slug_key") {
@@ -167,15 +187,32 @@ func (s *Store) CreateForm(ctx context.Context, form *Form) error {
 	return nil
 }
 
+// SetAudience changes who a form is for.
+func (s *Store) SetAudience(ctx context.Context, id string, audience Audience) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE forms SET audience = $2, updated_at = now() WHERE id = $1`, id, audience)
+	if err != nil {
+		return fmt.Errorf("forms: set audience: %w", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("forms: set audience: %w", err)
+	}
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // FormBySlug loads the form published at an address.
 func (s *Store) FormBySlug(ctx context.Context, slug string) (*Form, error) {
-	return s.form(ctx, `SELECT id, slug, title, description, fields, created_at, updated_at
+	return s.form(ctx, `SELECT id, slug, title, description, fields, audience, created_at, updated_at
 		FROM forms WHERE slug = $1`, slug)
 }
 
 // FormByID loads one form.
 func (s *Store) FormByID(ctx context.Context, id string) (*Form, error) {
-	return s.form(ctx, `SELECT id, slug, title, description, fields, created_at, updated_at
+	return s.form(ctx, `SELECT id, slug, title, description, fields, audience, created_at, updated_at
 		FROM forms WHERE id = $1`, id)
 }
 
@@ -185,7 +222,7 @@ func (s *Store) form(ctx context.Context, query string, arg any) (*Form, error) 
 		fields []byte
 	)
 	err := s.db.QueryRowContext(ctx, query, arg).Scan(
-		&form.ID, &form.Slug, &form.Title, &form.Description, &fields,
+		&form.ID, &form.Slug, &form.Title, &form.Description, &fields, &form.Audience,
 		&form.CreatedAt, &form.UpdatedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -202,7 +239,7 @@ func (s *Store) form(ctx context.Context, query string, arg any) (*Form, error) 
 // ListForms returns every form, newest first.
 func (s *Store) ListForms(ctx context.Context) ([]*Form, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, slug, title, description, fields, created_at, updated_at
+		SELECT id, slug, title, description, fields, audience, created_at, updated_at
 		FROM forms ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("forms: list forms: %w", err)
@@ -216,7 +253,7 @@ func (s *Store) ListForms(ctx context.Context) ([]*Form, error) {
 			fields []byte
 		)
 		if err := rows.Scan(&form.ID, &form.Slug, &form.Title, &form.Description,
-			&fields, &form.CreatedAt, &form.UpdatedAt); err != nil {
+			&fields, &form.Audience, &form.CreatedAt, &form.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(fields, &form.Fields); err != nil {
@@ -309,6 +346,13 @@ func (f *Form) normalise() error {
 	f.Title = strings.TrimSpace(f.Title)
 	f.Description = strings.TrimSpace(f.Description)
 
+	if f.Audience == "" {
+		// Unsaid is private: the mistake that costs nothing.
+		f.Audience = AudienceInternal
+	}
+	if !f.Audience.valid() {
+		return fmt.Errorf("forms: a form is %q or %q, not %q", AudiencePublic, AudienceInternal, f.Audience)
+	}
 	if f.Title == "" {
 		return errors.New("forms: a form needs a title")
 	}

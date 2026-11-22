@@ -116,6 +116,7 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 		"title":       {"Contact us"},
 		"description": {"We read everything."},
 		"fields":      {"Your name | text | required\nEmail | email | required"},
+		"audience":    {"public"},
 	}, nil)
 	if owned != http.StatusSeeOther {
 		t.Fatalf("creating a form as the owner returned %d", owned)
@@ -155,6 +156,25 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 	}
 	if stored != "Ada Lovelace" {
 		t.Fatalf("stored %q", stored)
+	}
+
+	// The same site, a second form, a different audience: through the real
+	// edge and the real app, each decided by the app's own rule.
+	visiting.be(owner)
+	if got := post(t, client, edge, base, "/forms", url.Values{
+		"title": {"Team"}, "fields": {"Note"}, "audience": {"internal"},
+	}, nil); got != http.StatusSeeOther {
+		t.Fatalf("creating an internal form returned %d", got)
+	}
+	for _, c := range []struct {
+		name string
+		who  *domain.User
+		want int
+	}{{"nobody", nil, http.StatusUnauthorized}, {"a stranger", stranger, http.StatusForbidden}, {"a member", owner, http.StatusOK}} {
+		visiting.be(c.who)
+		if got := post(t, client, edge, base, "/f/team", url.Values{"note": {"hello"}}, nil); got != c.want {
+			t.Errorf("%s answering an internal form got %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 

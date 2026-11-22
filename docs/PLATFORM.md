@@ -301,6 +301,30 @@ started without it by accident and fall open. That is the failure that matters
 most and it is silent: nothing is broken, the admin pages simply serve anyone
 who asks.
 
+### Who may reach what: the app decides
+
+A site is open at the platform's door. Which route is for whom is the app's
+to decide, because only the app knows that one form is a job application and
+the next is an internal review. The platform supplies who is asking and does
+the signing in; the app never writes a login.
+
+- **Deny by default.** Every route is for members unless the app lists it as
+  open. `X-Dabberz-User` present means a member; absent means a stranger.
+- **Ask, don't redirect.** For a stranger on a members' route the app answers
+  `401` with `X-Dabberz-Signin: required`. The edge sends a browser to sign
+  in, refuses a signed-in non-member, and gives a script a plain 401. A 401
+  without that header passes through untouched, so an app's own accounts for
+  its own customers are possible.
+- **Refuse cross-origin writes by members.** Every app is same-site with
+  every other until the preview domain is a public suffix.
+- **Listen on `HOST` when given one.** The identity headers are only true of
+  requests that came through the platform.
+
+`access` in the manifest defaults to `public`, which means this. An app that
+cannot decide for itself declares `internal`, and an owner can lock any site
+from the panel. A change's preview is always members-only: it is the app's
+rules before anyone approved them, over a copy of real data.
+
 ### Where forwarded identity stops working
 
 Forwarding is enough while an app answers on a hostname the platform owns and
