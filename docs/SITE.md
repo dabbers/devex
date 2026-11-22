@@ -1,7 +1,13 @@
 # dabberz.com
 
-The marketing site. Static HTML and one stylesheet, no build step, deployed to
-Cloudflare Pages from this directory.
+The marketing site: static HTML and one stylesheet in `site/`, no build step,
+deployed to Cloudflare Pages.
+
+These notes live in `docs/` rather than in `site/` on purpose. Cloudflare Pages
+serves every file in the build output directory, so anything left beside the
+HTML is published -- this file would have been readable at
+`dabberz.com/README.md`, including the note below about the legal pages not
+having been reviewed.
 
 Set in the same Broadsheet system as the control plane — the tokens in
 `style.css` are copied from `internal/web/static/style.css` so the site and the
@@ -13,6 +19,17 @@ Cloudflare Pages, connected to this repository:
 
 - **Build command:** none
 - **Build output directory:** `site`
+
+The output directory is not optional. Left at its default the build scans the
+repository root, finds a Go project and no HTML, and fails with
+`Could not detect a directory containing static files`.
+
+Functions live in `functions/` at the **repository root**, not under `site/`.
+Pages looks for them relative to the project's root directory (the default,
+`/`), while serving the build output directory beside them -- so
+`functions/api/subscribe.js` is served at `/api/subscribe`. If the project's
+root directory is ever changed to `site`, the functions directory has to move
+with it.
 
 No framework and no build means nothing to break between a commit and a deploy,
 and nothing to keep up to date.
