@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>dabberz &mdash; leave SaaS, don&rsquo;t become IT</title>
-<meta name="description" content="Install a working app on our machine — your own database, your own web address — then change any part of it by asking an AI agent. Forms is free today. From $15/month later, never per seat.">
+<meta name="description" content="Hosted business software you own, changed by asking an AI agent instead of filing a feature request. Being built in the open, not open yet. Leave your email to hear when it is.">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -21,68 +21,48 @@
 <div class="hero"><div class="wrap">
   <p class="kicker">Hosted business software you own</p>
   <h1>Leave SaaS.<br>Don&rsquo;t become IT.</h1>
-  <p class="lede">Install a working app on our machine &mdash; your own database, your own
-  web address. Then change any part of it, including what it is fundamentally
-  <em>for</em>, by describing the change to an AI agent. No settings page, no feature
-  request.</p>
+  <p class="lede">dabberz is being built so you can install a working app on our
+  machine &mdash; your own database, your own web address &mdash; and then change any
+  part of it, including what it is fundamentally <em>for</em>, by describing the change
+  to an AI agent. No settings page. No feature request.</p>
 
-  <p class="availability"><b>One app exists today: Forms.</b> CRM and help desk are
-  planned, not built. Forms is <b>free right now</b>, with 90 days&rsquo; notice before
-  that changes. Later, <b>from $15 a month</b> for room to run two to four tools: never
-  per seat, never per app.
-  <a href="#cost">The whole price, including the part that isn&rsquo;t on our bill</a>.</p>
+  <p class="availability"><b>It isn&rsquo;t open yet.</b> One app runs today &mdash; Forms
+  &mdash; and the control panel that would hand you an installation of it isn&rsquo;t
+  finished. We&rsquo;d rather say that than put a signup button on a promise.</p>
 
-  <div class="actions tight">
-    <a class="btn" href="/contact.html">Get a Forms install &mdash; free</a>
-  </div>
-  <p class="next">Email rather than a signup form, while this is early. One person reads
-  it and replies in a day or two &mdash; and will tell you straight if it isn&rsquo;t a
-  fit for you yet.</p>
+  <!-- EMAIL CAPTURE (hero). No backend today: this form has no action, so the
+       browser will not submit it anywhere. To make it live, add action="..."
+       and method="post" to the <form> below, pointing at whatever list provider
+       or Cloudflare Function you choose, and set the input's `name` to whatever
+       that endpoint expects. The same block is repeated at the foot of the page
+       (id="join-foot") - update both. -->
+  <form class="signup" id="join" novalidate>
+    <label for="email-hero">Email address</label>
+    <div class="signup-row">
+      <input type="email" id="email-hero" name="email" autocomplete="email"
+             placeholder="you@yourcompany.com" required>
+      <button class="btn" type="submit">Tell me when it&rsquo;s ready</button>
+    </div>
+  </form>
+  <p class="next">We&rsquo;ll write when there is something you can use, and occasionally
+  before that about what&rsquo;s being built. Nothing else uses your address. Rather say
+  something longer? <a href="/contact.html">Email a person</a> &mdash; one reads it and
+  replies in a day or two.</p>
 </div></div>
 
 <main class="wrap">
 
-<h2>Who this is for &mdash; and who it isn&rsquo;t</h2>
-<div class="cols pair fit">
-  <div>
-    <h3>A good fit today</h3>
-    <ul>
-      <li><b>You build small tools with AI and have nowhere to put them.</b> The tool took
-      an evening; the hosting, the sign-in and the backups are what killed it.</li>
-      <li><b>You want one form, survey or intake queue</b> at its own address, with the
-      submissions going somewhere you control.</li>
-      <li><b>You want to own the software and the data</b> without becoming the person who
-      operates a server.</li>
-      <li><b>You already pay for Claude</b>, or don&rsquo;t mind starting.</li>
-    </ul>
-  </div>
-  <div>
-    <h3>Not yet</h3>
-    <ul>
-      <li><b>You need a CRM or a help desk.</b> Neither is built. Forms is the catalog.</li>
-      <li><b>Your changes are mostly a logo and a colour.</b> Everything here goes through
-      ask &rarr; preview &rarr; approve, which is more steps than a settings screen for
-      small edits. <a href="#change">The trade, in full</a>.</li>
-      <li><b>It&rsquo;s client-facing, or you&rsquo;d genuinely miss it for a day.</b> One
-      machine, one operator, no second machine to fail over to.</li>
-      <li><b>Your AI is not Claude.</b> You bring your own agent, but today the
-      platform drives Claude Code specifically &mdash; nothing else does yet.</li>
-      <li><b>You need a spreadsheet out.</b> Export is a JSON archive. There is no CSV.</li>
-    </ul>
-  </div>
-</div>
-
 <h2>The template is where you start, not what you get</h2>
-<p>Forms is a finished, working tool the day you install it, and plenty of people will use
-it exactly as it comes. But nothing in it is fixed. The wording, the fields, the look, who
+<p>Forms exists and it works. It is a finished tool, and plenty of people will use it
+exactly as it comes. But nothing in it is fixed. The wording, the fields, the look, who
 sees what, what happens after somebody answers &mdash; and what the app is fundamentally
 for. A form that collects enquiries can become the thing that sorts and scores them.
 Nobody is going to tell you that you have reached the edge of what the template allows,
 because there isn&rsquo;t an edge.</p>
-<p>That is the whole reason to start here rather than from nothing. Everybody who builds
-one of these builds the same sign-in, the same list with a search box, the same export
-button &mdash; work worth nothing to your business whether you pay for it in weekends, in
-a developer or in AI credits.</p>
+<p>That is the whole reason to start from a template rather than from nothing. Everybody
+who builds one of these builds the same sign-in, the same list with a search box, the same
+export button &mdash; work worth nothing to your business whether you pay for it in
+weekends, in a developer or in AI credits.</p>
 <p>The honest limit is not the template. It is the agent: it does what it is told, as well
 as it can do it, and you see the result before anybody else does.</p>
 
@@ -90,12 +70,13 @@ as it can do it, and you see the result before anybody else does.</p>
   <div class="shotframe"><img src="/installed-app.png" alt="A Forms installation that an agent restyled as a garish 1999 homepage, with a sign-in prompt."></div>
   <figcaption><b>This is not what Forms looks like.</b> Somebody asked an installation to
   become a 1999 homepage, to find out whether the agent would really change anything it
-  was told to. It did &mdash; written, tested and put live by exactly the route below. Not
-  a mock-up, and not the default look: the only honest picture we have of
+  was told to. It did &mdash; written, tested and put live by the route below. Not a
+  mock-up, and not the default look: the only honest picture we have of
   &ldquo;no ceiling&rdquo;.</figcaption>
 </figure>
 
-<h2 id="change">How a change happens</h2>
+<h2 id="change">Asking for a change already works</h2>
+<p>This part is not a plan. It runs today, and it is how the screenshot above happened.</p>
 <ol class="steps">
   <li><b>You ask.</b> &ldquo;Add a budget-range dropdown to the enquiry form, and make it
   match my brand colours.&rdquo; Plain sentences. It starts the moment you ask: no queue,
@@ -110,100 +91,121 @@ as it can do it, and you see the result before anybody else does.</p>
   back.</li>
 </ol>
 <p>A simple change runs that whole loop &mdash; copy, build, check, show you, go
-live &mdash; in <b>under fifteen minutes</b>. Bigger ones take longer, because more of
-the app has to be rebuilt and re-checked.</p>
-<div class="note">
-  <p><b>The trade, plainly.</b> There is no settings screen, which is why nothing is off
-  limits &mdash; and it is equally why changing your logo is a request rather than a
-  click. Big changes come out well ahead on that deal. Four-second edits do not. If most
-  of what you ever change is a colour and the address submissions go to, this is more
-  steps than the settings page you left, and you should know that before you move.</p>
-</div>
+live &mdash; in <b>under fifteen minutes</b>. Bigger ones take longer, because more of the
+app has to be rebuilt and re-checked. There is no settings screen, which is why nothing is
+off limits, and equally why changing a logo is a request rather than a click: big changes
+come out well ahead on that deal, four-second edits don&rsquo;t.</p>
 
-<h2 id="cost">What it costs</h2>
-<p>You rent room to run things in. That is the only unit here, and it is the one thing we
-actually buy &mdash; disks and machines, not your colleagues.</p>
+<h2>Forms is the first app, not the product</h2>
+<p>The point of a platform is that the next tool isn&rsquo;t a separate product with a
+separate bill. A CRM and a help desk are the two we hear asked for most and the two we
+intend to build next; the order isn&rsquo;t settled. When they exist they will sit on the
+same database, the same sign-in, the same mail and the same storage as everything else you
+run here &mdash; so your contacts and your tickets are in one system rather than wired
+together with an integration you maintain.</p>
+<p>Each of them will be a template like Forms: finished enough to use on day one, and with
+nothing in it you aren&rsquo;t allowed to change.</p>
+<p class="muted">If there is a tool you would genuinely move off, that is the most useful
+thing you can tell us.
+<a href="/contact.html">Say which one and what you pay for it now</a> &mdash;
+it changes what gets built first.</p>
+
+<h2 id="cost">What we will charge for, and what we won&rsquo;t</h2>
+<p>No number here yet, deliberately. We would rather leave a blank than print a price we
+are going to move once we know how this is actually run and paid for. What is settled is
+the shape of the bill, and the shape is the part worth arguing about:</p>
 <ul class="ledger">
-  <li><span class="amt">$0 today</span><span>Forms is free while dabberz is this early,
-  and not on a countdown &mdash; something that expires once you have put real records in
-  it is a trap rather than an offer. You get 90 days&rsquo; notice before the price
-  changes, and the export button works either way.</span></li>
-  <li><span class="amt">From $15/mo</span><span>Room for two to four tools, when charging
-  starts. Run one busy one or four quiet ones; we don&rsquo;t count them, and we
-  don&rsquo;t count the people using them. Not per seat, not per app, not per record, not
-  per response. Hiring someone costs nothing.</span></li>
-  <li><span class="amt">More room</span><span>Roughly twice the room for roughly twice the
-  price, and on up. How we arrange that behind the scenes is our problem, never a line on
-  your invoice.</span></li>
-  <li><span class="amt">Storage</span><span>Metered past an allowance, at about what it
-  costs us &mdash; &ldquo;unlimited&rdquo; on a flat fee is a promise that gets quietly
-  broken later. We have not settled the allowance yet, and we would rather leave a blank
-  here than print a number we are going to move.</span></li>
-  <li><span class="amt">+ your own AI</span><span>You bring the AI agent; we don&rsquo;t
-  sell it to you and we take no cut of it, so that line on our bill is zero and cannot
-  surprise you. Whatever it costs is between you and whoever you get it from. Two things
-  to know rather than discover &mdash; today the platform drives Claude Code
-  specifically, and a long session of changes draws on your own usage limits, the same
-  allowance you use for everything else.</span></li>
+  <li><span class="amt">Never per seat</span><span>You will not pay us more for hiring
+  somebody. The number of people using your apps is not something we intend to count, ever.
+  This one is a commitment rather than a plan.</span></li>
+  <li><span class="amt">Never per app</span><span>Not per app, not per record, not per
+  response. You rent room to run things in &mdash; disks and machines, which is the one
+  thing we actually buy &mdash; and you run what you like in it.</span></li>
+  <li><span class="amt">More room, more money</span><span>Roughly twice the room for
+  roughly twice the price, and on up. How we arrange that behind the scenes is our
+  problem, never a line on your invoice.</span></li>
+  <li><span class="amt">+ your own AI</span><span>You bring the AI agent. We don&rsquo;t
+  sell it to you and we take no cut of it, so that line on our bill is zero and
+  can&rsquo;t surprise you &mdash; and it is a separate subscription if you don&rsquo;t
+  already have one. Today the platform drives Claude Code specifically, so that is the one
+  to have; a long session of changes draws on your own usage limits, the same allowance you
+  use for everything else.</span></li>
 </ul>
-<p>So there are two bills and we are only one of them: ours starts at $15 a month and
-does not move when you hire somebody, and the AI is yours, bought wherever you already
-buy it.</p>
-
-<h2>What can go wrong</h2>
-<div class="cols pair">
-  <div>
-    <h3>One machine, one person</h3>
-    <p>There is nowhere else for your app to run if that machine has a bad day, and nobody
-    else to pick up the phone. Fine for an internal form or a survey. Weigh it properly
-    before you move something you would genuinely miss.</p>
-  </div>
-  <div>
-    <h3>We can read your data</h3>
-    <p>One operator with full access to the machine. Any claim otherwise would be theatre:
-    scrambling the disk stops somebody who steals the hardware, it does not stop us, and a
-    padlock drawn on a web page never has.</p>
-  </div>
-  <div>
-    <h3>So can the agent</h3>
-    <p>It has to read your records to check its own work against them. What it reads goes
-    to whoever provides your AI, under your agreement with them rather than ours. If
-    you can&rsquo;t agree to that for a particular job, that job isn&rsquo;t one to bring
-    here yet.</p>
-  </div>
-  <div>
-    <h3>Leaving takes one button</h3>
-    <p>Export is a button inside the app &mdash; no request to make, nobody to ask, working
-    from the first day. It gives you a JSON archive of everything the app holds. It is not
-    a spreadsheet: there is no CSV export today.</p>
-  </div>
-</div>
+<p>So there will be two bills and we only intend to be one of them: ours for the room, and
+the AI bought wherever you already buy it.</p>
 
 <h2>Where this actually is</h2>
-<p>Early, and specific about it. Forms is the only template. You can&rsquo;t bring your own
-app yet; when you can, it will have to use the platform&rsquo;s own sign-in, storage and
-mail, because that contract is the only reason we can run something without knowing what
-it does.</p>
+<p>Early, and specific about it. Forms is the only app. The control panel isn&rsquo;t
+finished, so there is no self-serve install to give you. It all runs on one machine with
+one person operating it &mdash; no second machine to fail over to, and nobody else to pick
+up the phone. That person can read your data, too; any claim otherwise would be theatre,
+because scrambling a disk stops somebody who steals the hardware and does not stop the
+operator.</p>
+<p>You can&rsquo;t bring your own app yet. When you can, it will have to use the
+platform&rsquo;s own sign-in, storage and mail, because that contract is the only reason
+we can run something without knowing what it does.</p>
 <p><a href="https://github.com/dabbers/devex">The source is public</a> &mdash; including
-the unfinished parts and a written list of what is unverified or known wrong. If
-you&rsquo;re deciding whether to trust this, that list is a more useful page than this one.
-<a href="/about.html">About</a> has the long version: how a change is checked, who builds
-this, and what is yours versus ours.</p>
-<p class="muted">Want the CRM or the help desk instead?
-<a href="/contact.html">Tell us which tool you&rsquo;d actually move off, and what you pay
-for it now</a> &mdash; we&rsquo;ll tell you when it ships, whether or not you become a
-customer.</p>
+the unfinished parts and a written list of what is unverified or known wrong. If you are
+deciding whether this is worth your attention, that list is a more useful page than this
+one. <a href="/about.html">About</a> has the long version: how a change is checked, who
+builds this, and what is yours versus ours.</p>
 
-<h2>Try it</h2>
-<p>Forms, free, on a web address of your own. The install itself takes about a minute.</p>
-<div class="actions tight">
-  <a class="btn" href="/contact.html">Get a Forms install &mdash; free</a>
-</div>
+<h2>Hear about it when it&rsquo;s real</h2>
+<p>One email when there is something you can install, and the occasional note on progress
+in between.</p>
+
+<!-- EMAIL CAPTURE (foot). Mirror of the hero form - see the comment there.
+     Add the same action/method/name to both. -->
+<form class="signup" id="join-foot" novalidate>
+  <label for="email-foot">Email address</label>
+  <div class="signup-row">
+    <input type="email" id="email-foot" name="email" autocomplete="email"
+           placeholder="you@yourcompany.com" required>
+    <button class="btn" type="submit">Tell me when it&rsquo;s ready</button>
+  </div>
+</form>
 <p class="next">Or email <a href="mailto:support@dab-media.com">support@dab-media.com</a>
-directly and say roughly what you&rsquo;d want to run. A person replies in a day or two,
-and will tell you honestly if it isn&rsquo;t a fit yet.</p>
+and say roughly what you&rsquo;d want to run. A person replies in a day or two, and will
+tell you honestly whether this is ever going to suit you.</p>
 
 </main>
+
+<!-- ===================================================================
+     TEMPORARY, DELETE WHEN THE FORMS HAVE A REAL ENDPOINT.
+     There is no list backend today. A <form> with no action submits to the
+     current URL, which would reload the page and silently lose the address
+     somebody just typed. Until an action is set, this intercepts the submit
+     and hands them a prefilled mailto instead. It does nothing at all once
+     either form has an `action` attribute, so adding the endpoint is the
+     only change needed - but delete this block too, for tidiness.
+     =================================================================== -->
+<script>
+document.querySelectorAll('form.signup').forEach(function (f) {
+  if (f.getAttribute('action')) return;
+  f.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var field = f.querySelector('input[type=email]');
+    var email = field.value.trim();
+    if (email.indexOf('@') < 1) { field.focus(); return; }
+    // Built with textContent rather than innerHTML: the address is visitor
+    // input, and this repository's rule is that untrusted input never reaches
+    // an HTML sink, however well escaped it happens to be today.
+    var p = document.createElement('p');
+    p.className = 'signup-fallback';
+    var lead = document.createElement('b');
+    lead.textContent = 'Almost.';
+    var a = document.createElement('a');
+    a.href = 'mailto:support@dab-media.com?subject=' +
+      encodeURIComponent('dabberz \u2014 add me to the list') + '&body=' +
+      encodeURIComponent('Please add ' + email + ' to the list.\n\n');
+    a.textContent = 'Send that as an email';
+    p.append(lead, ' There is no automatic list yet \u2014 one person runs this. ',
+      a, ' and you are on it.');
+    f.replaceWith(p);
+  });
+});
+</script>
+
 <footer class="site"><div class="wrap">
   <span>&copy; 2026 Dab Media LLC</span>
   <nav>

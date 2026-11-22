@@ -26,5 +26,18 @@ and nothing to keep up to date.
   describe what the platform actually does rather than from a template, but
   neither has been read by a lawyer. Have one read them before the service takes
   money.
-- `index.html`'s "Request access" button points at `contact.html`. Point it at a
-  signup flow when there is one worth pointing at.
+- **The signup form has no endpoint.** `index.html` carries two
+  `<form class="signup">` blocks — `#join` in the hero and `#join-foot` at the
+  bottom — each with no `action`, and an HTML comment marking where it goes.
+  Set the `action` on **both**.
+
+  Until then a small script near the footer intercepts the submit, so a visitor
+  who types an address is handed a prefilled `mailto:` instead of watching the
+  page reload and lose it. The script disables itself the moment a form has an
+  `action`, so adding the endpoint is the only change needed; delete the block
+  and the `.signup-fallback` rule afterwards for tidiness.
+
+  Cloudflare Pages has no backend by default. The cheapest real endpoint is a
+  Pages Function under `functions/` writing to D1, which keeps the list on
+  infrastructure that is already ours — worth something for a product sold on
+  owning your own data.
