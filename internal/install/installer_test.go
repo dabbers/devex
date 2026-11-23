@@ -135,6 +135,36 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 		t.Fatalf("a signed-in stranger reached another installation's admin surface: %d", intruded)
 	}
 
+	// The platform running something of its own in the workspace -- a check
+	// suite, a git question -- does not take the running app's database away
+	// from it. It used to: each one rotated the password the app had started
+	// with, and every page that read data answered 500 until a restart.
+	serving, err := db.store.GetWorkspace(ctx, installation.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if res, err := installer.deps.Workspaces.Run(ctx, serving, "true", nil, time.Minute); err != nil || !res.OK() {
+			t.Fatalf("running a command in the workspace: %v", err)
+		}
+	}
+	// A rotated password only refuses new connections, and the app's pool
+	// had one open, which is why this went unseen until the pool recycled it
+	// an hour later. Close the app's connections so the next page must
+	// reconnect with what it was started with.
+	var closed int
+	terminate := fmt.Sprintf(`SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = '%s'`,
+		database.RoleFor(installation.Database))
+	if err := db.QueryRowInt(ctx, installation.Database, terminate, &closed); err != nil {
+		t.Fatalf("closing the app's connections: %v", err)
+	}
+	if closed == 0 {
+		t.Fatal("the app held no connection to close, so this proves nothing")
+	}
+	// The pool checks a connection before reusing it once it has sat for a
+	// second, which is what notices the closed ones.
+	time.Sleep(1500 * time.Millisecond)
+
 	// The public form is filled in by somebody with no account at all.
 	visiting.be(nil)
 

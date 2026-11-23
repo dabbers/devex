@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/dabbers/devex/internal/agent"
 	"github.com/dabbers/devex/internal/domain"
@@ -83,6 +84,20 @@ type Manager struct {
 	gitTokens GitTokens
 	overrides Overrides
 	opts      Options
+
+	// issued is the per-workspace environment the running services were
+	// started with, by workspace ID.
+	//
+	// Minting it rotates a database password, which cuts off whatever holds
+	// the old one. That is right when the services are being started and
+	// wrong for anything else: a check suite or a git question run while the
+	// preview is up used to rotate it from under the preview, which then
+	// answered every page that touched its data with a 500. So it is minted
+	// when services start and reused until they stop. Only in memory, so it is
+	// still never written down; a restart of this process loses it, and
+	// Resume restarts every running workspace, which mints it again.
+	issuedMu sync.Mutex
+	issued   map[string]map[string]string
 }
 
 // New returns a manager.
@@ -96,6 +111,7 @@ func New(deps Deps, opts Options) (*Manager, error) {
 		gitTokens: deps.GitTokens,
 		overrides: deps.Overrides,
 		opts:      opts.withDefaults(),
+		issued:    map[string]map[string]string{},
 	}, nil
 }
 
@@ -171,6 +187,8 @@ func (m *Manager) bringUp(ctx context.Context, w *domain.Workspace) (*Started, e
 		return nil, err
 	}
 
+	// Fresh, because the services are about to be (re)started with it.
+	m.forget(w.ID)
 	env, err := m.workspaceEnvironment(ctx, w)
 	if err != nil {
 		return nil, err
@@ -307,6 +325,9 @@ func (m *Manager) Stop(ctx context.Context, w *domain.Workspace) error {
 			return fmt.Errorf("workspace: look up machine %s: %w", w.InstanceID, err)
 		}
 	}
+
+	// Nothing holds the credential any more, so the next start mints one.
+	m.forget(w.ID)
 
 	stopped, err := m.store.TransitionWorkspace(ctx, w.ID,
 		domain.WorkspaceStopping, domain.WorkspaceStopped, "")
@@ -460,14 +481,39 @@ func (m *Manager) workspaceEnvironment(ctx context.Context, w *domain.Workspace)
 	if m.overrides == nil {
 		return env, nil
 	}
-	particular, err := m.overrides.For(ctx, w)
+	particular, err := m.particular(ctx, w)
 	if err != nil {
-		return nil, fmt.Errorf("workspace: resolve environment for %s: %w", w.ID, err)
+		return nil, err
 	}
 	for name, value := range particular {
 		env[name] = value
 	}
 	return env, nil
+}
+
+// particular returns the environment the workspace's services were started
+// with, minting it only when nothing has been issued since they last started.
+func (m *Manager) particular(ctx context.Context, w *domain.Workspace) (map[string]string, error) {
+	// Held across the mint, so two callers cannot both rotate and leave one
+	// of them holding a credential that no longer works.
+	m.issuedMu.Lock()
+	defer m.issuedMu.Unlock()
+	if env, ok := m.issued[w.ID]; ok {
+		return env, nil
+	}
+	env, err := m.overrides.For(ctx, w)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: resolve environment for %s: %w", w.ID, err)
+	}
+	m.issued[w.ID] = env
+	return env, nil
+}
+
+// forget drops what was issued to a workspace, so the next caller mints anew.
+func (m *Manager) forget(workspaceID string) {
+	m.issuedMu.Lock()
+	defer m.issuedMu.Unlock()
+	delete(m.issued, workspaceID)
 }
 
 // HasOverrides reports whether per-workspace environment is wired.
