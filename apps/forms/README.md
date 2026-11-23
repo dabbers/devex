@@ -24,6 +24,21 @@ say that this app is unreachable except through it. Without one of the two the
 admin surface serves no one, which is deliberate: an app that falls open when
 identity is misconfigured is the worst failure available to it.
 
+## Who can do what
+
+The site is open; the app decides route by route.
+
+- A form is `public` (anyone with the link, no sign-in) or `internal`
+  (members), chosen when it is created and changeable on its page. Unsaid is
+  internal. Forms from before audiences stayed public.
+- Everything else is for members. Routes go on the `admin` mux, which is
+  guarded as a whole; only put one on `open` if a stranger should reach it.
+- Never write a login. `member` reads the identity the platform forwards, and
+  without one answers 401 with `X-Dabberz-Signin: required`; the platform
+  does the sign-in.
+- Rolling back to a version from before audiences makes every form public
+  again, because that code does not read the column.
+
 ## The checks
 
 ```sh

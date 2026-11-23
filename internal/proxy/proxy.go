@@ -124,6 +124,9 @@ const (
 	IdentityHeaderPrefix = "X-Dabberz-"
 	UserHeader           = IdentityHeaderPrefix + "User"
 	EmailHeader          = IdentityHeaderPrefix + "Email"
+	// SignInHeader is the app's half: on a 401 it says the page is for
+	// members, and the edge does the signing in or the refusing.
+	SignInHeader = IdentityHeaderPrefix + "Signin"
 )
 
 // StripIdentity removes every identity header from a request that arrived

@@ -39,6 +39,8 @@ const (
 	Change = "chg"
 	// Token authenticates a request that has no browser behind it.
 	Token = "tok"
+	// LibraryFile is one file in an account's library.
+	LibraryFile = "lib"
 )
 
 // encoding is Crockford-style base32 in lowercase without padding, chosen so

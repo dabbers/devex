@@ -7,6 +7,7 @@ import (
 
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/store"
 )
 
 // TestEveryRouteNamingSomebodysResourceRefusesEveryoneElse walks the route
@@ -51,7 +52,15 @@ func TestEveryRouteNamingSomebodysResourceRefusesEveryoneElse(t *testing.T) {
 		t.Fatalf("CreateChange: %v", err)
 	}
 
+	// A library file, recorded directly; its bytes are not what is tested.
+	file := &store.LibraryFile{UserID: f.owner.ID, Path: "brand/guide.md", Kind: "text",
+		ContentType: "text/markdown", Size: 1, SHA256: strings.Repeat("0", 64)}
+	if err := f.store.PutLibraryFile(f.ctx, file); err != nil {
+		t.Fatalf("PutLibraryFile: %v", err)
+	}
+
 	ids := map[string]string{
+		"file":         file.ID,
 		"repo":         f.repo.ID,
 		"task":         task.ID,
 		"fork":         forks[0].ID,

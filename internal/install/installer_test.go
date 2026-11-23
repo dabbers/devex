@@ -19,6 +19,7 @@ import (
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/library"
 	"github.com/dabbers/devex/internal/preview"
 	"github.com/dabbers/devex/internal/proxy/hostmux"
 	"github.com/dabbers/devex/internal/secrets"
@@ -116,6 +117,7 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 		"title":       {"Contact us"},
 		"description": {"We read everything."},
 		"fields":      {"Your name | text | required\nEmail | email | required"},
+		"audience":    {"public"},
 	}, nil)
 	if owned != http.StatusSeeOther {
 		t.Fatalf("creating a form as the owner returned %d", owned)
@@ -133,6 +135,36 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 		intruded != http.StatusNotFound {
 		t.Fatalf("a signed-in stranger reached another installation's admin surface: %d", intruded)
 	}
+
+	// The platform running something of its own in the workspace -- a check
+	// suite, a git question -- does not take the running app's database away
+	// from it. It used to: each one rotated the password the app had started
+	// with, and every page that read data answered 500 until a restart.
+	serving, err := db.store.GetWorkspace(ctx, installation.WorkspaceID)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if res, err := installer.deps.Workspaces.Run(ctx, serving, "true", nil, time.Minute); err != nil || !res.OK() {
+			t.Fatalf("running a command in the workspace: %v", err)
+		}
+	}
+	// A rotated password only refuses new connections, and the app's pool
+	// had one open, which is why this went unseen until the pool recycled it
+	// an hour later. Close the app's connections so the next page must
+	// reconnect with what it was started with.
+	var closed int
+	terminate := fmt.Sprintf(`SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = '%s'`,
+		database.RoleFor(installation.Database))
+	if err := db.QueryRowInt(ctx, installation.Database, terminate, &closed); err != nil {
+		t.Fatalf("closing the app's connections: %v", err)
+	}
+	if closed == 0 {
+		t.Fatal("the app held no connection to close, so this proves nothing")
+	}
+	// The pool checks a connection before reusing it once it has sat for a
+	// second, which is what notices the closed ones.
+	time.Sleep(1500 * time.Millisecond)
 
 	// The public form is filled in by somebody with no account at all.
 	visiting.be(nil)
@@ -155,6 +187,25 @@ func TestInstallingFormsProducesSomethingThatWorks(t *testing.T) {
 	}
 	if stored != "Ada Lovelace" {
 		t.Fatalf("stored %q", stored)
+	}
+
+	// The same site, a second form, a different audience: through the real
+	// edge and the real app, each decided by the app's own rule.
+	visiting.be(owner)
+	if got := post(t, client, edge, base, "/forms", url.Values{
+		"title": {"Team"}, "fields": {"Note"}, "audience": {"internal"},
+	}, nil); got != http.StatusSeeOther {
+		t.Fatalf("creating an internal form returned %d", got)
+	}
+	for _, c := range []struct {
+		name string
+		who  *domain.User
+		want int
+	}{{"nobody", nil, http.StatusUnauthorized}, {"a stranger", stranger, http.StatusForbidden}, {"a member", owner, http.StatusOK}} {
+		visiting.be(c.who)
+		if got := post(t, client, edge, base, "/f/team", url.Values{"note": {"hello"}}, nil); got != c.want {
+			t.Errorf("%s answering an internal form got %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 
@@ -342,9 +393,14 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 		t.Fatalf("OpenCatalog: %v", err)
 	}
 
+	lib, err := library.New(db, filepath.Join(dataDir, "library"))
+	if err != nil {
+		t.Fatalf("library.New: %v", err)
+	}
+
 	installer, err := New(Deps{
 		Store: db, Catalog: catalog, Workspaces: workspaces,
-		Vault: vault, Databases: databases, Logger: quiet,
+		Vault: vault, Databases: databases, Logger: quiet, Library: lib,
 	}, Options{
 		RepoDir: filepath.Join(dataDir, "repos"),
 		// What the blocks that do exist offer. Identity, mail and storage are
@@ -362,6 +418,7 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	if err != nil {
 		t.Fatalf("install.New: %v", err)
 	}
+	router.WithAssets(Assets{Installer: installer})
 	return installer, databases, owner, edge.URL, visiting
 }
 

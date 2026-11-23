@@ -16,28 +16,87 @@ import (
 // ErrNotFound reports that a record does not exist.
 var ErrNotFound = errors.New("forms: not found")
 
-// Field is one question on a form.
+// Field is one item on a form: a question, a block of text, or the start of
+// a new page. One ordered list rather than pages holding questions, so a form
+// from before pages existed is simply a form with one page, and moving a
+// question between pages is moving it in the list.
 type Field struct {
 	Key      string `json:"key"`
 	Label    string `json:"label"`
 	Type     string `json:"type"`
 	Required bool   `json:"required"`
+	// Help is a line of guidance under a question, the body of a text block,
+	// or a page's introduction.
+	Help string `json:"help,omitempty"`
+	// Options are a choice or dropdown's answers, in order.
+	Options []string `json:"options,omitempty"`
+	// ShowIf hides this item, or the whole page it starts, unless every
+	// condition holds. Conditions may only look at questions before it.
+	ShowIf []Condition `json:"show_if,omitempty"`
 }
 
-// fieldTypes are the input kinds a form may ask for. Deliberately few: this is
-// the eighty per cent, and a customer who needs a ninety-first type asks the
-// agent for it rather than waiting for a release.
+// Condition is one test of an earlier answer.
+type Condition struct {
+	Field string `json:"field"`
+	Op    string `json:"op"`
+	Value string `json:"value,omitempty"`
+}
+
+// fieldTypes are the question kinds a form may ask. Still deliberately few:
+// a customer who needs another asks the agent for it.
 var fieldTypes = map[string]bool{
 	"text": true, "email": true, "textarea": true, "number": true, "checkbox": true,
+	"choice": true, "dropdown": true, "date": true, "url": true,
 }
 
-// Form is a questionnaire with a public address.
+// Items that ask nothing.
+const (
+	// TypePage starts a new page. Its label is the page's title.
+	TypePage = "page"
+	// TypeText is a heading with an optional paragraph, between questions.
+	TypeText = "text-block"
+)
+
+// conditionOps are the tests a condition may make.
+var conditionOps = map[string]bool{
+	"equals": true, "not_equals": true, "contains": true, "answered": true, "not_answered": true,
+}
+
+// Limits on what one form may hold, so a form is something a person answers
+// rather than a way to put a megabyte in every page view.
+const (
+	maxItems       = 300
+	maxPages       = 50
+	maxOptions     = 100
+	maxLabel       = 300
+	maxHelp        = 2000
+	maxOptionLen   = 200
+	maxDescription = 4000
+	maxConditions  = 10
+	maxAnswer      = 20000
+)
+
+// Audience is who may see and answer a form. Managing forms and reading what
+// was sent is always for members, whatever the form's audience.
+type Audience string
+
+const (
+	// AudiencePublic is anyone with the link.
+	AudiencePublic Audience = "public"
+	// AudienceInternal is this installation's members.
+	AudienceInternal Audience = "internal"
+)
+
+func (a Audience) valid() bool { return a == AudiencePublic || a == AudienceInternal }
+
+// Form is a questionnaire with an address and an audience.
 type Form struct {
 	ID          string    `json:"id"`
 	Slug        string    `json:"slug"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	Fields      []Field   `json:"fields"`
+	Audience    Audience  `json:"audience"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -83,6 +142,12 @@ var migrations = []struct {
 		)`},
 	{"0003_submissions_by_form", `
 		CREATE INDEX submissions_by_form ON submissions (form_id, created_at DESC, id DESC)`},
+	// Forms from before audiences were open to anyone with the link and stay
+	// that way. A row written since without saying is for members.
+	{"0004_form_audience", `
+		ALTER TABLE forms ADD COLUMN audience TEXT NOT NULL DEFAULT 'public'
+			CHECK (audience IN ('public', 'internal'));
+		ALTER TABLE forms ALTER COLUMN audience SET DEFAULT 'internal'`},
 }
 
 // Migrate brings the schema up to date.
@@ -153,10 +218,10 @@ func (s *Store) CreateForm(ctx context.Context, form *Form) error {
 		return err
 	}
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO forms (id, slug, title, description, fields)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO forms (id, slug, title, description, fields, audience)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING created_at, updated_at`,
-		form.ID, form.Slug, form.Title, form.Description, encoded,
+		form.ID, form.Slug, form.Title, form.Description, encoded, form.Audience,
 	).Scan(&form.CreatedAt, &form.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "forms_slug_key") {
@@ -167,15 +232,55 @@ func (s *Store) CreateForm(ctx context.Context, form *Form) error {
 	return nil
 }
 
+// UpdateForm replaces a form's title, description and items. Its address,
+// audience and answers stay as they are: answers are kept by question key, so
+// a question that keeps its key keeps its answers, and one that is removed
+// still has them in the export.
+func (s *Store) UpdateForm(ctx context.Context, form *Form) error {
+	current, err := s.FormByID(ctx, form.ID)
+	if err != nil {
+		return err
+	}
+	form.Slug, form.Audience = current.Slug, current.Audience
+	if err := form.normalise(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(form.Fields)
+	if err != nil {
+		return err
+	}
+	return s.db.QueryRowContext(ctx, `
+		UPDATE forms SET title = $2, description = $3, fields = $4, updated_at = now()
+		WHERE id = $1 RETURNING created_at, updated_at`,
+		form.ID, form.Title, form.Description, encoded).Scan(&form.CreatedAt, &form.UpdatedAt)
+}
+
+// SetAudience changes who a form is for.
+func (s *Store) SetAudience(ctx context.Context, id string, audience Audience) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE forms SET audience = $2, updated_at = now() WHERE id = $1`, id, audience)
+	if err != nil {
+		return fmt.Errorf("forms: set audience: %w", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("forms: set audience: %w", err)
+	}
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // FormBySlug loads the form published at an address.
 func (s *Store) FormBySlug(ctx context.Context, slug string) (*Form, error) {
-	return s.form(ctx, `SELECT id, slug, title, description, fields, created_at, updated_at
+	return s.form(ctx, `SELECT id, slug, title, description, fields, audience, created_at, updated_at
 		FROM forms WHERE slug = $1`, slug)
 }
 
 // FormByID loads one form.
 func (s *Store) FormByID(ctx context.Context, id string) (*Form, error) {
-	return s.form(ctx, `SELECT id, slug, title, description, fields, created_at, updated_at
+	return s.form(ctx, `SELECT id, slug, title, description, fields, audience, created_at, updated_at
 		FROM forms WHERE id = $1`, id)
 }
 
@@ -185,7 +290,7 @@ func (s *Store) form(ctx context.Context, query string, arg any) (*Form, error) 
 		fields []byte
 	)
 	err := s.db.QueryRowContext(ctx, query, arg).Scan(
-		&form.ID, &form.Slug, &form.Title, &form.Description, &fields,
+		&form.ID, &form.Slug, &form.Title, &form.Description, &fields, &form.Audience,
 		&form.CreatedAt, &form.UpdatedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -202,7 +307,7 @@ func (s *Store) form(ctx context.Context, query string, arg any) (*Form, error) 
 // ListForms returns every form, newest first.
 func (s *Store) ListForms(ctx context.Context) ([]*Form, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, slug, title, description, fields, created_at, updated_at
+		SELECT id, slug, title, description, fields, audience, created_at, updated_at
 		FROM forms ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("forms: list forms: %w", err)
@@ -216,7 +321,7 @@ func (s *Store) ListForms(ctx context.Context) ([]*Form, error) {
 			fields []byte
 		)
 		if err := rows.Scan(&form.ID, &form.Slug, &form.Title, &form.Description,
-			&fields, &form.CreatedAt, &form.UpdatedAt); err != nil {
+			&fields, &form.Audience, &form.CreatedAt, &form.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(fields, &form.Fields); err != nil {
@@ -309,6 +414,13 @@ func (f *Form) normalise() error {
 	f.Title = strings.TrimSpace(f.Title)
 	f.Description = strings.TrimSpace(f.Description)
 
+	if f.Audience == "" {
+		// Unsaid is private: the mistake that costs nothing.
+		f.Audience = AudienceInternal
+	}
+	if !f.Audience.valid() {
+		return fmt.Errorf("forms: a form is %q or %q, not %q", AudiencePublic, AudienceInternal, f.Audience)
+	}
 	if f.Title == "" {
 		return errors.New("forms: a form needs a title")
 	}
@@ -318,19 +430,57 @@ func (f *Form) normalise() error {
 	if !slugOK(f.Slug) {
 		return fmt.Errorf("forms: %q is not a usable address; use letters, numbers and hyphens", f.Slug)
 	}
-	if len(f.Fields) == 0 {
-		return errors.New("forms: a form with no questions would collect nothing")
+	if len([]rune(f.Title)) > maxLabel || len([]rune(f.Description)) > maxDescription {
+		return errors.New("forms: the title or description is too long")
 	}
+	return normaliseFields(f.Fields)
+}
 
-	seen := make(map[string]bool, len(f.Fields))
-	for i := range f.Fields {
-		field := &f.Fields[i]
+// normaliseFields checks a form's items and fills in what it can: keys from
+// labels, the default type, tidy options.
+func normaliseFields(fields []Field) error { return checkFields(fields, true) }
+
+// checkFields is normaliseFields, optionally allowing a form with no
+// questions: an archive may hold one that predates the rule, and restoring it
+// as it was beats refusing the whole archive.
+func checkFields(fields []Field, needQuestion bool) error {
+	if len(fields) > maxItems {
+		return fmt.Errorf("forms: a form may have at most %d items", maxItems)
+	}
+	questions, pages := 0, 1
+	// Each question seen so far, by key. A condition may only look back,
+	// which keeps every form free of cycles and answerable in order.
+	earlier := map[string]*Field{}
+	seen := map[string]bool{}
+	for i := range fields {
+		field := &fields[i]
 		field.Label = strings.TrimSpace(field.Label)
-		if field.Label == "" {
-			return errors.New("forms: every question needs a label")
+		field.Help = strings.TrimSpace(field.Help)
+		if field.Type == "" {
+			field.Type = "text"
+		}
+		asks := fieldTypes[field.Type]
+		if !asks && field.Type != TypePage && field.Type != TypeText {
+			return fmt.Errorf("forms: %q is not a question type this app knows", field.Type)
+		}
+		if field.Label == "" && field.Type != TypePage {
+			return errors.New("forms: every question and heading needs a label")
+		}
+		if len([]rune(field.Label)) > maxLabel || len([]rune(field.Help)) > maxHelp {
+			return fmt.Errorf("forms: %q is too long", truncate(field.Label, 40))
 		}
 		if field.Key == "" {
-			field.Key = slugify(field.Label)
+			base := slugify(field.Label)
+			if base == "" || !asks {
+				base = fmt.Sprintf("%s-%d", strings.TrimSuffix(field.Type, "-block"), i+1)
+			}
+			if len(base) > 56 {
+				base = strings.Trim(base[:56], "-")
+			}
+			field.Key = base
+			for n := 2; seen[field.Key]; n++ {
+				field.Key = fmt.Sprintf("%s-%d", base, n)
+			}
 		}
 		if !slugOK(field.Key) {
 			return fmt.Errorf("forms: %q is not a usable field key", field.Key)
@@ -340,14 +490,80 @@ func (f *Form) normalise() error {
 		}
 		seen[field.Key] = true
 
-		if field.Type == "" {
-			field.Type = "text"
+		if field.Type == TypePage {
+			pages++
+			if pages > maxPages {
+				return fmt.Errorf("forms: a form may have at most %d pages", maxPages)
+			}
 		}
-		if !fieldTypes[field.Type] {
-			return fmt.Errorf("forms: %q is not a question type this app knows", field.Type)
+		if !asks {
+			field.Required = false
+		}
+
+		if field.Type == "choice" || field.Type == "dropdown" {
+			var kept []string
+			distinct := map[string]bool{}
+			for _, option := range field.Options {
+				option = strings.TrimSpace(option)
+				if option == "" || distinct[option] {
+					continue
+				}
+				if len([]rune(option)) > maxOptionLen {
+					return fmt.Errorf("forms: an option of %q is too long", truncate(field.Label, 40))
+				}
+				distinct[option] = true
+				kept = append(kept, option)
+			}
+			if len(kept) == 0 || len(kept) > maxOptions {
+				return fmt.Errorf("forms: %q needs between 1 and %d options", truncate(field.Label, 40), maxOptions)
+			}
+			field.Options = kept
+		} else {
+			field.Options = nil
+		}
+
+		if len(field.ShowIf) > maxConditions {
+			return fmt.Errorf("forms: %q has more than %d conditions", truncate(field.Label, 40), maxConditions)
+		}
+		for j := range field.ShowIf {
+			c := &field.ShowIf[j]
+			c.Value = strings.TrimSpace(c.Value)
+			if earlier[c.Field] == nil {
+				return fmt.Errorf("forms: %q depends on %q, which is not a question before it",
+					truncate(nonEmpty(field.Label, "a page"), 40), c.Field)
+			}
+			if !conditionOps[c.Op] {
+				return fmt.Errorf("forms: %q is not a condition this app knows", c.Op)
+			}
+			if len([]rune(c.Value)) > maxOptionLen {
+				return errors.New("forms: a condition's value is too long")
+			}
+		}
+
+		if asks {
+			questions++
+			earlier[field.Key] = field
 		}
 	}
+	if questions == 0 && needQuestion {
+		return errors.New("forms: a form with no questions would collect nothing")
+	}
 	return nil
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func nonEmpty(s, otherwise string) string {
+	if s == "" {
+		return otherwise
+	}
+	return s
 }
 
 func slugOK(s string) bool {

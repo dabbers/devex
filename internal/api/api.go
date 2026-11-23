@@ -24,6 +24,7 @@ import (
 	"github.com/dabbers/devex/internal/domain"
 	"github.com/dabbers/devex/internal/identity"
 	"github.com/dabbers/devex/internal/install"
+	"github.com/dabbers/devex/internal/library"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/orchestrator"
 	"github.com/dabbers/devex/internal/preview"
@@ -53,6 +54,7 @@ type Server struct {
 	gitTokens  GitLinks
 	agentCreds AgentCreds
 	installer  *install.Installer
+	library    *library.Library
 	edge       EdgeSignIn
 	logger     *slog.Logger
 	streamGap  time.Duration
@@ -111,7 +113,11 @@ type Deps struct {
 	// EdgeSignIn signs people in at apps. Optional: without it, members-only
 	// pages on apps can only be refused.
 	EdgeSignIn EdgeSignIn
-	Logger     *slog.Logger
+	// Library is the account's central store of files and notes. Optional:
+	// without it there is nowhere to keep them, and settings cannot use
+	// pictures.
+	Library *library.Library
+	Logger  *slog.Logger
 }
 
 // New returns an API server.
@@ -138,7 +144,7 @@ func New(deps Deps) (*Server, error) {
 		verifier: deps.Verifier, driver: deps.Driver, ui: deps.UI,
 		authn: deps.Authn, visitors: deps.Visitors, workspaces: deps.Workspaces, agent: deps.Agent,
 		gitTokens: deps.GitTokens, agentCreds: deps.AgentCreds, installer: deps.Installer,
-		edge: deps.EdgeSignIn, logger: logger,
+		library: deps.Library, edge: deps.EdgeSignIn, logger: logger,
 		// How often the event stream polls for new entries. The store is local,
 		// so this is cheap.
 		streamGap: time.Second, streamKeepalive: 20 * time.Second,
@@ -167,6 +173,14 @@ func (s *Server) Handler() http.Handler {
 	rt.handle("DELETE /v1/installations/{installation}", s.deleteInstallation)
 	rt.handle("POST /v1/installations/{installation}/rollback", s.rollbackInstallation)
 	rt.handle("PUT /v1/installations/{installation}/access", s.setInstallationAccess)
+	rt.handle("GET /v1/installations/{installation}/settings", s.getInstallationSettings)
+	rt.handle("PUT /v1/installations/{installation}/settings", s.putInstallationSettings)
+	rt.handle("GET /v1/installations/{installation}/library", s.listInstallationLibrary)
+	rt.handle("PUT /v1/installations/{installation}/library/files", s.putInstallationLibraryFile)
+	rt.handle("GET /v1/library", s.listAccountLibrary)
+	rt.handle("PUT /v1/library/files", s.putAccountLibraryFile)
+	rt.handle("GET /v1/library/files/{file}/content", s.libraryFileContent)
+	rt.handle("DELETE /v1/library/files/{file}", s.deleteLibraryFile)
 
 	// Signing in at an app: the panel vouches for who you are, the app's
 	// edge decides whether that lets you in.

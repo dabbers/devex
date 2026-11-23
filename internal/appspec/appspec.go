@@ -54,15 +54,16 @@ type Spec struct {
 	Checks   Checks    `yaml:"checks"`
 
 	// Access is who the edge lets in, as the app ships. The owner can change
-	// it per installation. Left out, an app is internal: members only, which
-	// is the mistake that costs nothing if it is wrong.
+	// it per installation. Left out, the site is open and the app decides
+	// route by route, as docs/PLATFORM.md requires of it. An app that cannot
+	// do that declares internal.
 	Access *domain.Access `yaml:"access"`
 }
 
 // DefaultAccess is the policy an installation starts with.
 func (s *Spec) DefaultAccess() domain.Access {
 	if s.Access == nil {
-		return domain.Access{Mode: domain.AccessInternal}
+		return domain.Access{Mode: domain.AccessPublic}
 	}
 	return *s.Access
 }

@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "title": "Forms settings",
+  "root": ["brand", "answers"],
+  "components": [
+    {
+      "id": "brand",
+      "type": "section",
+      "title": "Look",
+      "description": "How the site presents itself on every page.",
+      "children": ["name", "tagline", "logo", "accent", "header"]
+    },
+    {
+      "id": "name",
+      "type": "text",
+      "label": "Site name",
+      "description": "Shown at the top of every page and in the browser tab.",
+      "path": "/brand/name",
+      "default": "Forms",
+      "maxLength": 80
+    },
+    {
+      "id": "tagline",
+      "type": "text",
+      "label": "Tagline",
+      "description": "A few words beside the name.",
+      "path": "/brand/tagline",
+      "default": "on dabberz",
+      "maxLength": 120
+    },
+    {
+      "id": "logo",
+      "type": "image",
+      "label": "Logo",
+      "description": "Shown in place of the name. A wide image about 40 pixels tall works best.",
+      "path": "/brand/logo"
+    },
+    {
+      "id": "accent",
+      "type": "color",
+      "label": "Accent colour",
+      "description": "Buttons, links and highlights.",
+      "path": "/brand/accent",
+      "default": "#7a1f2b"
+    },
+    {
+      "id": "header",
+      "type": "color",
+      "label": "Header colour",
+      "path": "/brand/header",
+      "default": "#3a1015"
+    },
+    {
+      "id": "answers",
+      "type": "section",
+      "title": "Answers",
+      "children": ["thanks"]
+    },
+    {
+      "id": "thanks",
+      "type": "textarea",
+      "label": "Thank-you message",
+      "description": "Shown to someone after they submit a form. Leave it empty for the standard message.",
+      "path": "/answers/thanks",
+      "maxLength": 600
+    }
+  ]
+}

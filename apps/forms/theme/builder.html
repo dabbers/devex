@@ -1,0 +1,8 @@
+{{define "body"}}
+<link rel="stylesheet" href="/static/builder.css">
+<p class="crumbs"><a href="/">&larr; All forms</a>{{if .Form.ID}} &middot; <a href="/forms/{{.Form.ID}}">Answers</a> &middot; <a href="/f/{{.Form.Slug}}" data-open-link>Open the form</a>{{end}}</p>
+<div id="builder" data-form="{{toJSON .Form}}">
+  <noscript><div class="note">The builder needs JavaScript. Everything it does can also be asked of this app's agent in words.</div></noscript>
+</div>
+<script src="/static/builder.js" defer></script>
+{{end}}

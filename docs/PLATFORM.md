@@ -301,6 +301,30 @@ started without it by accident and fall open. That is the failure that matters
 most and it is silent: nothing is broken, the admin pages simply serve anyone
 who asks.
 
+### Who may reach what: the app decides
+
+A site is open at the platform's door. Which route is for whom is the app's
+to decide, because only the app knows that one form is a job application and
+the next is an internal review. The platform supplies who is asking and does
+the signing in; the app never writes a login.
+
+- **Deny by default.** Every route is for members unless the app lists it as
+  open. `X-Dabberz-User` present means a member; absent means a stranger.
+- **Ask, don't redirect.** For a stranger on a members' route the app answers
+  `401` with `X-Dabberz-Signin: required`. The edge sends a browser to sign
+  in, refuses a signed-in non-member, and gives a script a plain 401. A 401
+  without that header passes through untouched, so an app's own accounts for
+  its own customers are possible.
+- **Refuse cross-origin writes by members.** Every app is same-site with
+  every other until the preview domain is a public suffix.
+- **Listen on `HOST` when given one.** The identity headers are only true of
+  requests that came through the platform.
+
+`access` in the manifest defaults to `public`, which means this. An app that
+cannot decide for itself declares `internal`, and an owner can lock any site
+from the panel. A change's preview is always members-only: it is the app's
+rules before anyone approved them, over a copy of real data.
+
 ### Where forwarded identity stops working
 
 Forwarding is enough while an app answers on a hostname the platform owns and
@@ -462,6 +486,59 @@ Note what this does *not* do: rebuilding a change's preview never resets its
 checkout. That operation exists for a workspace that serves an installation,
 where "whatever is on the disk" must not decide what customers see. In a
 workspace somebody is working in, the uncommitted edit is the work.
+
+### The library, and settings the app declares
+
+The platform hardcodes as little as possible about any app. What an owner can
+adjust without asking for a change is declared by the app itself, and what
+agents should know is kept where every agent can read it.
+
+**The library** (`internal/library`) is the account's store of files and
+notes: brand guides, logos, theme instructions, decisions. It has an account
+shelf, shared by every app, and a shelf per installation. People add to it in
+the panel. Agents read a copy at `.dabberz/library/{account,app}/`, refreshed
+before every turn, and add to it by leaving files in
+`.dabberz/library-outbox/{account,app}/`. The platform checks each one after the
+turn, exactly as it checks an upload, and says in the reply what it kept and
+what it refused. No agent holds a credential for the library.
+
+Only inert files get in, judged by their bytes:
+- PNG, JPEG and GIF are decoded and re-encoded, so what is stored is pixels the
+  platform wrote.
+- PDFs are scanned, compressed streams included, and refused if they carry
+  JavaScript, actions, embedded files, rich media, XFA or encryption.
+- UTF-8 text (`.md`, `.txt`, `.csv`, `.json`) is refused if it starts with
+  `#!`.
+
+Everything else is refused, SVG and HTML included. The copy in a workspace is
+regular files with no execute bits. Nothing is ever read back from that copy,
+so changing it changes nothing.
+
+**Settings** (`internal/appsettings`) are declared by the app in
+`config/settings.json`, in its own code. The agent edits that file as the app
+changes, through the usual review. The declaration is a flat list of
+components from a fixed catalog: section, note, text, textarea, number, toggle,
+select, color and image. Components refer to each other by ID from a `root`,
+and values are bound by path. This follows A2UI's shape, so adopting A2UI later
+is a translation.
+
+The catalog is the security boundary. Unknown types and unknown fields are
+refused, every string is plain text, and the panel draws each component with
+text nodes only. An agent cannot put markup, script, style or a link into the
+panel.
+
+The owner's values are kept by the platform (`installation_settings`), checked
+against the live declaration, and written to `.dabberz/settings.json` in the
+workspace. They are rewritten whenever the owner saves, and on install, promote
+and rollback. The app re-reads that file when it changes, so a value change
+applies on the next page, with no rebuild and no approval. Changing which
+settings exist goes through approval, because it is a change to the app's code.
+
+A picture setting holds a library file ID. The edge serves that picture at
+`/_dabberz/asset/<sha256>.<ext>` on the app's own hostname, only while one of
+that installation's settings points at it, only to whoever may see the site's
+front page, and always with `nosniff` and a sandboxing CSP. The rest of the
+library is never public.
 
 ## From a sentence to production
 

@@ -98,8 +98,9 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    wrote has been linted.
 7. **App access: members are the owner, and only the in-process edge
    enforces it.** Each installation has a policy (public, internal, or hybrid
-   with public path prefixes), the edge keeps it on every route including
-   change previews, and members sign in by bouncing through the panel
+   with public path prefixes), public by default: the app decides per route
+   (PLATFORM.md, "Who may reach what"). Change previews are always internal.
+   Members sign in by bouncing through the panel
    (`/_dabberz/signin` → `panel/#/open` → `POST /v1/edge/signin` →
    `/_dabberz/callback`). Still to do, in order: organisations and roles
    (Clerk Organizations, which also brings SAML/OIDC SSO), guest links
@@ -108,8 +109,15 @@ which takes a second or two for `intake`. Look for `workspace resumed` in
    would serve an internal app openly. Sessions are signed with a key that
    lives only in the process, so a restart signs everyone out of every app;
    the next members-only page bounces them back in without a prompt while
-   their panel sign-in holds. `intake` predates policies and is public until
-   its owner sets it on the service page.
+   their panel sign-in holds. `intake` was set internal by its owner, and runs Forms from before
+   per-form audiences: the catalog's copy reaches it only through a change.
+   The panel opens every app through `/_dabberz/signin`. A path with more
+   than one reading is never public on a hybrid app.
+8. **App ports are kept off the internet by the firewall.** An app believes
+   the identity header on whatever reaches it. The rule was applied to
+   dbz-alpha on 2026-11-22 and is in `deploy/bootstrap-host.sh`. The second
+   layer is the app honouring `HOST`, which Forms does from 0.2.0; an app
+   that ignores it has only the firewall.
 
 ## What this session fixed, all running on the host
 

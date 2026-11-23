@@ -39,11 +39,12 @@ const (
 	workspaceScope    scope = "workspace"
 	installationScope scope = "installation"
 	changeScope       scope = "change"
+	fileScope         scope = "file"
 )
 
 // ownedScopes is every path value that names something with an owner. Adding
 // an owned resource means adding it here; nothing else needs to change.
-var ownedScopes = []scope{repoScope, taskScope, forkScope, workspaceScope, installationScope, changeScope}
+var ownedScopes = []scope{repoScope, taskScope, forkScope, workspaceScope, installationScope, changeScope, fileScope}
 
 // scopeKey types the context keys so nothing else can collide with them.
 type scopeKey scope
@@ -153,6 +154,12 @@ func (s *Server) resolveScope(ctx context.Context, named scope, id string) (any,
 			return nil, "", err
 		}
 		return change, change.UserID, nil
+	case fileScope:
+		f, err := s.store.LibraryFileByID(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		return f, f.UserID, nil
 	default:
 		// Unreachable while ownedScopes and this switch agree, and a scope
 		// with no resolver must not pass unchecked.
@@ -210,6 +217,12 @@ func scopedChange(r *http.Request) *domain.Change {
 func scopedInstallation(r *http.Request) *domain.Installation {
 	one, _ := r.Context().Value(scopeKey(installationScope)).(*domain.Installation)
 	return one
+}
+
+// scopedFile returns the library file the gate authorized for this request.
+func scopedFile(r *http.Request) *store.LibraryFile {
+	f, _ := r.Context().Value(scopeKey(fileScope)).(*store.LibraryFile)
+	return f
 }
 
 // scopedWorkspace returns the workspace the gate authorized for this request.

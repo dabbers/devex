@@ -33,6 +33,9 @@ type recordingUpstream struct {
 	seen []*http.Request
 	// setCookies is what the app answers with.
 	setCookies []string
+	// status and headers are the rest of its answer, when a test cares.
+	status  int
+	headers http.Header
 }
 
 func (u *recordingUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +45,14 @@ func (u *recordingUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, c := range u.setCookies {
 		w.Header().Add("Set-Cookie", c)
 	}
-	w.WriteHeader(http.StatusOK)
+	for name, values := range u.headers {
+		w.Header()[name] = values
+	}
+	status := u.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
 	io.WriteString(w, "app:"+r.URL.Path) //nolint:errcheck // a test upstream
 }
 
@@ -480,5 +490,154 @@ func TestSigningOutEndsTheSession(t *testing.T) {
 	c := cookieNamed(rec, previewpass.CookieName)
 	if c == nil || c.MaxAge >= 0 {
 		t.Errorf("signing out left the session cookie: %+v", c)
+	}
+}
+
+// TestAPathTwoWaysToReadIsNeverPublic: the edge forwards the path as it was
+// spelled, so one that cleans to a public page and routes to an admin one
+// must not get through. Nor may the reverse.
+func TestAPathTwoWaysToReadIsNeverPublic(t *testing.T) {
+	t.Parallel()
+	forms := domain.Access{Mode: domain.AccessHybrid, Public: []string{"/f/"}}
+
+	for target, public := range map[string]bool{
+		"/admin/x%2F..%2F..%2Ff%2Fy": false,
+		"/admin/x%2f..%2f..%2ff%2fy": false,
+		"/admin/../f/y":              false,
+		"/admin/%2e%2e/f/y":          false,
+		"/f/%252e%252e/admin":        false,
+		"/f/..;/admin":               false,
+		"/f/..%5cadmin":              false,
+		"/f//admin":                  false,
+		"/f/%2e":                     false,
+		"/f/a%2Fb":                   false,
+		"/f/v1%2e2":                  false,
+		"/f/x%00":                    false,
+		"/f/x%23y":                   false,
+		"/f/x%3Fy":                   false,
+		"/f/contact":                 true,
+		"/f/contact%20us":            true,
+		"/f/v1.2":                    true,
+		"/f/contact?next=%2Fthanks":  true,
+	} {
+		mux, app := edgeFor(t, forms, nil)
+		rec := visit(mux, http.MethodGet, target)
+		if reached := len(app.requests()) > 0; reached != public {
+			t.Errorf("%s: reached the app = %v (status %d), want %v", target, reached, rec.Code, public)
+		}
+	}
+}
+
+// TestTheOwnerCanSignInAtAPublicApp: a public app refuses nobody, so nothing
+// bounces its owner, and Forms met them as a stranger. The sign-in path works
+// whatever the policy, which is what the panel's Open links rely on.
+func TestTheOwnerCanSignInAtAPublicApp(t *testing.T) {
+	t.Parallel()
+	mux, app := edgeFor(t, open, nil)
+
+	start := visit(mux, http.MethodGet, "/_dabberz/signin?return=/")
+	state := cookieNamed(start, stateCookie)
+	if state == nil {
+		t.Fatalf("a public app did not start a sign-in: status %d", start.Code)
+	}
+	value, _, _ := strings.Cut(state.Value, ".")
+	link, err := mux.Handoff(appHost, value, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := cookieNamed(visit(mux, http.MethodGet, back.RequestURI(), state), previewpass.CookieName)
+	if session == nil {
+		t.Fatal("no session at a public app")
+	}
+	visit(mux, http.MethodGet, "/", session)
+	if seen := app.requests(); len(seen) != 1 || seen[0].Header.Get(proxy.UserHeader) != ownerID {
+		t.Error("a public app was not told its owner is asking")
+	}
+
+	// With nowhere to sign in, the link still opens the app.
+	mux.signIn = nil
+	if rec := visit(mux, http.MethodGet, "/_dabberz/signin?return=/forms/1"); rec.Header().Get("Location") != "/forms/1" {
+		t.Errorf("with no panel the Open link ends at %q, status %d", rec.Header().Get("Location"), rec.Code)
+	}
+}
+
+// TestAnAppAsksForSignInAndTheEdgeDoesIt: on an open site the app decides a
+// page is for members, and the edge does what follows for each kind of
+// visitor, without ever looping.
+func TestAnAppAsksForSignInAndTheEdgeDoesIt(t *testing.T) {
+	t.Parallel()
+	asking := http.Header{proxy.SignInHeader: {"required"}}
+	stranger := &domain.User{ID: "usr_other", Email: "other@example.com"}
+
+	for name, c := range map[string]struct {
+		who      *domain.User
+		status   int
+		headers  http.Header
+		method   string
+		accept   string
+		want     int
+		location string
+	}{
+		"a person signed out": {nil, 401, asking, "GET", "text/html", 302,
+			"/_dabberz/signin?return=" + url.QueryEscape("/f/team?x=1&y=2")},
+		"a script":                         {nil, 401, asking, "GET", "application/json", 401, ""},
+		"a post":                           {nil, 401, asking, "POST", "text/html", 401, ""},
+		"somebody who is not a member":     {stranger, 401, asking, "GET", "text/html", 403, ""},
+		"a member the app still refused":   {owner, 401, asking, "GET", "text/html", 401, ""},
+		"the app's own accounts":           {nil, 401, nil, "GET", "text/html", 401, ""},
+		"the header on a page that loaded": {nil, 200, asking, "GET", "text/html", 200, ""},
+	} {
+		mux, app := edgeFor(t, open, c.who)
+		app.status, app.headers = c.status, c.headers
+		req := httptest.NewRequest(c.method, "http://"+appHost+"/f/team?x=1&y=2", nil)
+		req.Header.Set("Accept", c.accept)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != c.want || rec.Header().Get("Location") != c.location {
+			t.Errorf("%s: %d to %q, want %d to %q", name, rec.Code, rec.Header().Get("Location"), c.want, c.location)
+		}
+		if rec.Header().Get(proxy.SignInHeader) != "" {
+			t.Errorf("%s: the app's request to the edge reached the visitor", name)
+		}
+		replaced := c.who != owner && c.status == 401 && c.headers != nil
+		if shown := strings.Contains(rec.Body.String(), "app:"); shown == replaced {
+			t.Errorf("%s: the app's page shown = %v", name, shown)
+		}
+		if c.want == http.StatusFound && rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: the bounce can be cached", name)
+		}
+	}
+}
+
+// TestWhatAMemberWasShownIsNotCached: the CDN caches by path, so a members'
+// file it kept would be served to whoever asked next.
+func TestWhatAMemberWasShownIsNotCached(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		policy  domain.Access
+		who     *domain.User
+		private bool
+	}{
+		"a member at an open site":   {open, owner, true},
+		"a member at a shut route":   {internal, owner, true},
+		"a stranger at an open site": {open, nil, false},
+	} {
+		mux, app := edgeFor(t, c.policy, c.who)
+		app.headers = http.Header{
+			"Cache-Control":                {"public, max-age=14400"},
+			"Cdn-Cache-Control":            {"max-age=14400"},
+			"Cloudflare-Cdn-Cache-Control": {"max-age=14400"},
+		}
+		got := visit(mux, http.MethodGet, "/app.js").Header()
+		private := got.Get("Cache-Control") == "private, no-store" &&
+			got.Get("CDN-Cache-Control") == "" && got.Get("Cloudflare-CDN-Cache-Control") == ""
+		if private != c.private {
+			t.Errorf("%s: kept out of shared caches = %v, want %v (%v)", name, private, c.private, got)
+		}
 	}
 }

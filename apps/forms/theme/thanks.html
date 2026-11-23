@@ -1,4 +1,4 @@
 {{define "body"}}
 <h1>Thank you</h1>
-<p class="lede">Your answers to &ldquo;{{.Form.Title}}&rdquo; were received.</p>
+{{with site.Thanks}}<p class="lede">{{.}}</p>{{else}}<p class="lede">Your answers to &ldquo;{{.Form.Title}}&rdquo; were received.</p>{{end}}
 {{end}}

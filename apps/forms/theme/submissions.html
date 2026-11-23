@@ -3,12 +3,22 @@
 <p class="lede">
   Published at <a href="/f/{{.Form.Slug}}"><code>/f/{{.Form.Slug}}</code></a> &middot;
   {{len .Submissions}} answer{{if ne (len .Submissions) 1}}s{{end}} &middot;
+  <a href="/forms/{{.Form.ID}}/edit">edit the form</a> &middot;
   <a href="/export">export everything</a>
 </p>
 
+<form method="post" action="/forms/{{.Form.ID}}/audience">
+  <label for="audience">Who can answer</label>
+  <select id="audience" name="audience">
+    <option value="internal"{{if eq .Form.Audience "internal"}} selected{{end}}>Members only (signed in)</option>
+    <option value="public"{{if eq .Form.Audience "public"}} selected{{end}}>Anyone with the link (no sign-in)</option>
+  </select>
+  <button type="submit">Save</button>
+</form>
+
 {{if .Submissions}}
 <table>
-  <tr><th>When</th>{{range .Form.Fields}}<th>{{.Label}}</th>{{end}}</tr>
+  <tr><th>When</th>{{range .Questions}}<th>{{.Label}}</th>{{end}}</tr>
   {{range .Submissions}}
   <tr>
     <td>{{.When}}</td>

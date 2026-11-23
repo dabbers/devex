@@ -50,7 +50,7 @@ func (m *Manager) startServices(ctx context.Context, w *domain.Workspace, instan
 			continue
 		}
 		port := listenPort(service, ports)
-		if err := m.startService(ctx, instance, service, withPort(env, port)); err != nil {
+		if err := m.startService(ctx, instance, service, withListen(env, instance.Address, port)); err != nil {
 			return err
 		}
 		if err := m.awaitHealthy(ctx, instance, service, port); err != nil {
@@ -71,10 +71,16 @@ func listenPort(service *domain.Service, ports map[string]int) int {
 	return service.Port
 }
 
-// withPort copies the environment with PORT set, so the service binds where
-// the platform expects to find it. A copy because the same map is handed to
-// every service and each one listens somewhere different.
-func withPort(env map[string]string, port int) map[string]string {
+// withListen copies the environment with PORT set, and HOST where it matters,
+// so the service binds where the platform expects to find it and nowhere
+// else. A copy because the same map is handed to every service and each one
+// listens somewhere different.
+//
+// HOST is set when the proxy reaches the machine over loopback, as with the
+// local driver: there every interface includes the internet's, and an app
+// reached around the edge believes whatever identity header it is sent. A
+// guest with an address of its own has to listen on it, and is not told.
+func withListen(env map[string]string, address string, port int) map[string]string {
 	if port == 0 {
 		return env
 	}
@@ -83,6 +89,9 @@ func withPort(env map[string]string, port int) map[string]string {
 		scoped[name] = value
 	}
 	scoped["PORT"] = fmt.Sprint(port)
+	if ip := net.ParseIP(address); ip != nil && ip.IsLoopback() {
+		scoped["HOST"] = address
+	}
 	return scoped
 }
 

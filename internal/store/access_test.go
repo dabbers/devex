@@ -7,12 +7,11 @@ import (
 	"github.com/dabbers/devex/internal/domain"
 )
 
-// TestEveryPreviewOfAnInstallationHasItsFrontDoor: the edge is regenerated
-// from ListOwnedRoutes, so the policy has to come out of it for every
-// workspace on the installation's repository -- the one serving customers and
-// every change being worked on. A change's preview is the same app with the
-// same admin pages; leaving it open would be leaving them open.
-func TestEveryPreviewOfAnInstallationHasItsFrontDoor(t *testing.T) {
+// TestTheSiteHasItsPolicyAndItsPreviewsAreShut: the edge is regenerated from
+// ListOwnedRoutes, so the serving workspace's policy has to come out of it,
+// and no change's preview may ever inherit an open one: that is unapproved
+// code on a copy of real data.
+func TestTheSiteHasItsPolicyAndItsPreviewsAreShut(t *testing.T) {
 	s, ctx := newTestStore(t)
 	u, repo, project := seed(t, s, ctx)
 	sv := seedService(t, s, ctx, project.ID)
@@ -37,7 +36,7 @@ func TestEveryPreviewOfAnInstallationHasItsFrontDoor(t *testing.T) {
 	}
 	plainService := seedService(t, s, ctx, plainProject.ID)
 
-	route := func(name, repoID, projectID, serviceID string, port int) {
+	route := func(name, repoID, projectID, serviceID string, port int) string {
 		t.Helper()
 		ws := &domain.Workspace{UserID: u.ID, RepoID: repoID, ProjectID: projectID, Name: name, Branch: name}
 		if err := s.CreateWorkspace(ctx, ws); err != nil {
@@ -49,8 +48,12 @@ func TestEveryPreviewOfAnInstallationHasItsFrontDoor(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("PutPreviewRoute: %v", err)
 		}
+		return ws.ID
 	}
-	route("serving", repo.ID, project.ID, sv.ID, 41000)
+	installation.WorkspaceID = route("serving", repo.ID, project.ID, sv.ID, 41000)
+	if err := s.UpdateInstallation(ctx, installation); err != nil {
+		t.Fatalf("UpdateInstallation: %v", err)
+	}
 	route("change", repo.ID, project.ID, sv.ID, 41001)
 	route("plain", plain.ID, plainProject.ID, plainService.ID, 41002)
 
@@ -69,20 +72,32 @@ func TestEveryPreviewOfAnInstallationHasItsFrontDoor(t *testing.T) {
 		}
 	}
 	public := domain.Access{Mode: domain.AccessPublic}
+	shut := domain.Access{Mode: domain.AccessInternal}
 	check(map[string]domain.Access{
 		"serving.ondabberz.link": forms,
-		"change.ondabberz.link":  forms,
+		"change.ondabberz.link":  shut,
 		"plain.ondabberz.link":   public,
 	})
 
-	// Changed by the owner, it changes everywhere.
-	installation.Access = domain.Access{Mode: domain.AccessInternal}
+	// An open site does not open its previews.
+	installation.Access = public
+	if err := s.UpdateInstallation(ctx, installation); err != nil {
+		t.Fatalf("UpdateInstallation: %v", err)
+	}
+	check(map[string]domain.Access{
+		"serving.ondabberz.link": public,
+		"change.ondabberz.link":  shut,
+		"plain.ondabberz.link":   public,
+	})
+
+	// Locked by the owner, the site is locked.
+	installation.Access = shut
 	if err := s.UpdateInstallation(ctx, installation); err != nil {
 		t.Fatalf("UpdateInstallation: %v", err)
 	}
 	check(map[string]domain.Access{
 		"serving.ondabberz.link": installation.Access,
-		"change.ondabberz.link":  installation.Access,
+		"change.ondabberz.link":  shut,
 		"plain.ondabberz.link":   public,
 	})
 

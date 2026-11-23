@@ -116,6 +116,9 @@ func (s *Server) authConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	config := s.authn.PublicConfig()
+	// Whether a link to an app can sign the person in on the way. Only the
+	// in-process edge can; through any other router that path is the app's.
+	config["app_sign_in"] = s.edge != nil
 
 	// Whether this request is already signed in, so the page knows whether to
 	// show a prompt without a second round trip.

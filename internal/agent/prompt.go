@@ -208,3 +208,17 @@ func firstLine(text string, limit int) string {
 	}
 	return clean[:limit] + "…"
 }
+
+// LibraryInstructions tell an agent working on an installed app about the
+// account's library and the app's own settings. Added to a turn's prompt only
+// when the workspace is an installation's.
+const LibraryInstructions = `The account's library:
+- .dabberz/library/account/ holds what the owner keeps for all their apps: brand guides, logos, theme notes, decisions. .dabberz/library/app/ holds this app's own. Read what is relevant before changing how the app looks or behaves, and follow it.
+- It is a read-only copy, refreshed every turn. Editing it changes nothing.
+- To keep something -- a note of a decision, a preference the owner stated, a picture -- write it into .dabberz/library-outbox/account/ (for every app) or .dabberz/library-outbox/app/ (this app only), with the path you want it kept at. After your turn the platform checks each file and keeps it or says why not. It keeps PNG, JPEG, GIF, PDF without scripts, and UTF-8 text (.md, .txt, .csv, .json). It keeps nothing executable.
+- Keep notes short and specific, one topic per file, named for what they are about, e.g. account/brand/colours.md.
+
+The app's settings:
+- What the owner may change about this app without asking you is declared in config/settings.json, in the app's own code. The panel draws a form from it; you never write UI for settings. Add a setting when you make something the owner will plausibly want to adjust (a colour, a heading, an email address, a feature switch), and remove one you make obsolete.
+- The format: {"version": 1, "title": "...", "root": [ids], "components": [...]}. Each component has an "id" and a "type" from this catalog only: section (title, description, children: [ids]), note (text), text, textarea, number (min, max, step), toggle, select (options: [{value, label}]), color (#rrggbb), image (a picture from the library). Settings have a "label", a "path" like /brand/accent, and may have "description", "default", "required", "maxLength". Every component is used exactly once from root. All strings are plain text: no HTML, no markdown, no URLs.
+- At run time the app reads .dabberz/settings.json (or the file named by DABBERZ_SETTINGS_FILE): {"values": {path: value}, "images": {path: {"url": ..., "content_type": ...}}}. The platform rewrites it whenever the owner saves; read it when it changes, fall back to the defaults when it is missing, and link to an image by its url.`

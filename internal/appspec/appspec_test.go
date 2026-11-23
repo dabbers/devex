@@ -260,3 +260,15 @@ func TestEveryProblemIsReportedAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestASiteIsOpenUnlessItsManifestSaysOtherwise: the app decides route by
+// route, and one that cannot says so.
+func TestASiteIsOpenUnlessItsManifestSaysOtherwise(t *testing.T) {
+	if got := (&Spec{}).DefaultAccess().Mode; got != domain.AccessPublic {
+		t.Errorf("an app that declares nothing is %q, want public", got)
+	}
+	locked := &Spec{Access: &domain.Access{Mode: domain.AccessInternal}}
+	if got := locked.DefaultAccess().Mode; got != domain.AccessInternal {
+		t.Errorf("an app that declares internal is %q", got)
+	}
+}

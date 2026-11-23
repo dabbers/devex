@@ -6,7 +6,7 @@
 # manifest is missing are discovered here rather than on somebody's CRM.
 app: forms
 name: Forms
-version: 0.1.0
+version: 0.3.0
 platform: 1
 license: AGPL-3.0
 upstream: https://github.com/dabbers/app-forms
@@ -55,11 +55,9 @@ extends:
 checks:
   suite: checks/
 
-# Who gets in. Filling in a form is for anyone with the link; everything else
-# -- listing forms, reading what people sent, exporting -- is for the
-# installation's members, and the platform keeps that door, not this app.
+# Who gets in. The site is open and this app decides per route: each form is
+# for anyone or for members, and everything else -- listing forms, reading what
+# people sent, exporting -- is for members. The platform says who is a member
+# and signs them in when the app asks.
 access:
-  mode: hybrid
-  public:
-    - /f/
-    - /healthz
+  mode: public

@@ -638,7 +638,7 @@ function subtaskRow(fork) {
     el("div", { class: "subtask-meta" },
       el("span", { class: "mono", text: fork.branch }),
       fork.preview_url
-        ? el("a", { href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+        ? el("a", { href: appLink(fork.preview_url), target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
         : null,
       el("a", { href: `#/fork/${fork.id}`, text: "machine →" }),
       ...budgetMeters(fork.usage)));
@@ -701,7 +701,7 @@ async function renderFork(forkID) {
     aside: tag(fork.state),
     row: fork.preview_url ? [
       el("span", { class: "mono", text: fork.preview_url.replace(/^https?:\/\//, "") }),
-      el("a", { class: "btn btn-secondary btn-sm", href: fork.preview_url, target: "_blank", rel: "noopener noreferrer", text: "Open ↗" }),
+      el("a", { class: "btn btn-secondary btn-sm", href: appLink(fork.preview_url), target: "_blank", rel: "noopener noreferrer", text: "Open ↗" }),
       validateButton(fork),
     ] : [],
   }));
@@ -920,7 +920,7 @@ async function renderWorkspaces() {
       el("div", {},
         ws.preview_url
           ? el("a", {
-              class: "mono", href: ws.preview_url, target: "_blank", rel: "noopener noreferrer",
+              class: "mono", href: appLink(ws.preview_url), target: "_blank", rel: "noopener noreferrer",
               text: ws.preview_url.replace(/^https?:\/\//, ""),
             })
           : el("span", { class: "muted", text: ws.state === "running" ? "no front door" : "not running" }))));
@@ -1065,7 +1065,7 @@ function workspaceControls(ws) {
   }
   if (ws.preview_url) {
     controls.push(el("a", {
-      class: "btn btn-secondary", href: ws.preview_url,
+      class: "btn btn-secondary", href: appLink(ws.preview_url),
       target: "_blank", rel: "noopener noreferrer", text: "Open ↗",
     }));
   }
@@ -1241,7 +1241,7 @@ function workspacePanel(owner, previews) {
       }
     }
     header.append(el("a", {
-      class: "btn btn-secondary btn-sm", href: shownService.url,
+      class: "btn btn-secondary btn-sm", href: appLink(shownService.url),
       target: "_blank", rel: "noopener noreferrer", text: "Open ↗",
     }));
 
@@ -1420,7 +1420,7 @@ async function renderRepo(repoID) {
         el("div", { class: "subtask-meta" },
           el("span", { text: entry.forks ? plural(entry.forks, "sub-task") : "no sub-tasks yet" }),
           entry.preview_url
-            ? el("a", { href: entry.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+            ? el("a", { href: appLink(entry.preview_url), target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
             : null)))));
   }
 
@@ -1755,6 +1755,19 @@ function changeTitle(prompt) {
   return truncate(line, 80);
 }
 
+// appSignIn is whether this deployment's edge can sign people in at apps.
+let appSignIn = false;
+
+// appLink opens an app as the person using the panel. An app's hostname never
+// sees the panel's sign-in, and on a public app nothing would send them to
+// fetch one: the edge refuses nobody there, so the app meets its own owner as
+// a stranger. So the link asks the edge to sign them in on the way.
+function appLink(href) {
+  if (!appSignIn || !href) return href;
+  const to = new URL(href);
+  return `${to.origin}/_dabberz/signin?return=${encodeURIComponent(to.pathname + to.search)}`;
+}
+
 const external = (href, text, cls = "btn btn-secondary") =>
   el("a", { class: cls, href, target: "_blank", rel: "noopener noreferrer", text });
 
@@ -1792,7 +1805,7 @@ async function renderServices() {
       el("div", {},
         one.url && one.state === "running"
           ? el("a", {
-              class: "mono", href: one.url, target: "_blank", rel: "noopener noreferrer",
+              class: "mono", href: appLink(one.url), target: "_blank", rel: "noopener noreferrer",
               text: one.url.replace(/^https?:\/\//, ""),
             })
           : el("span", { class: "muted", text: one.state === "failed" ? "did not come up" : "not live" }))));
@@ -1901,7 +1914,7 @@ async function renderService(id) {
   };
 
   const controls = [];
-  if (one.url && one.state === "running") controls.push(external(one.url, "Open ↗"));
+  if (one.url && one.state === "running") controls.push(external(appLink(one.url), "Open ↗"));
   if (one.previous_revision && one.state === "running") {
     controls.push(el("button", {
       class: "btn btn-secondary",
@@ -1945,7 +1958,7 @@ async function renderService(id) {
     el("dl", { class: "kv" },
       el("dt", { text: "Address" }),
       el("dd", {}, one.url
-        ? el("a", { href: one.url, target: "_blank", rel: "noopener noreferrer", text: one.url })
+        ? el("a", { href: appLink(one.url), target: "_blank", rel: "noopener noreferrer", text: one.url })
         : "not yet"),
       el("dt", { text: "Version" }), el("dd", { class: "mono", text: shortRevision(one.revision) }),
       el("dt", { text: "Before that" }), el("dd", { class: "mono", text: shortRevision(one.previous_revision) }),
@@ -1985,6 +1998,13 @@ async function renderService(id) {
     }
   });
   root.append(accessSection(one));
+  // Drawn from what the app itself declares; the panel knows no app's
+  // settings. Loaded after the page so a slow workspace does not hold it up.
+  const settingsSlot = el("div");
+  const librarySlot = el("div");
+  root.append(settingsSlot, librarySlot);
+  settingsSection(one).then((node) => settingsSlot.replaceWith(node));
+  librarySection(one).then((node) => librarySlot.replaceWith(node));
 
   root.append(section("Ask for a change",
     el("div", { style: "max-width:620px" },
@@ -2002,14 +2022,14 @@ async function renderService(id) {
       el("div", {}, el("a", { class: "service-name", href: `#/change/${change.id}`, text: change.title })),
       el("div", {}, tag(change.state), el("span", { class: "muted", text: `  ${relativeTime(change.created_at)}` })),
       el("div", {}, change.preview_url && open
-        ? el("a", { class: "mono", href: change.preview_url, target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
+        ? el("a", { class: "mono", href: appLink(change.preview_url), target: "_blank", rel: "noopener noreferrer", text: "preview ↗" })
         : null)));
   }
   root.append(section("Changes", changes.length ? list : empty("No changes yet.")));
 
   return live.subscribe(throttle(() => {
     // Never under a half-written prompt: a redraw would throw it away.
-    if (currentPath() === `#/service/${id}` && !prompt.value && !start.disabled) renderService(id);
+    if (currentPath() === `#/service/${id}` && !prompt.value && !start.disabled && !unsavedSettings) renderService(id);
   }, 3000));
 }
 
@@ -2030,7 +2050,7 @@ async function renderChange(id) {
   };
 
   const controls = [];
-  if (change.preview_url && !finished) controls.push(external(change.preview_url, "Open preview ↗"));
+  if (change.preview_url && !finished) controls.push(external(appLink(change.preview_url), "Open preview ↗"));
   if (!finished) {
     const check = el("button", { class: "btn btn-secondary", text: "Check it" });
     check.addEventListener("click", () => act(async () => {
@@ -2147,6 +2167,7 @@ const ROUTES = [
   [/^#\/workspace\/([\w-]+)$/, (m) => renderWorkspace(m[1]), "workspaces"],
   [/^#\/activity$/, (_, params) => renderActivity(params), "activity"],
   [/^#\/account$/, () => renderAccount(), "account"],
+  [/^#\/library$/, () => renderLibrary(), "library"],
   [/^#\/new$/, (_, params) => renderNew(params), "repos"],
   [/^#\/repo\/([\w-]+)$/, (m) => renderRepo(m[1]), "repos"],
   [/^#\/task\/([\w-]+)$/, (m) => renderTask(m[1]), "repos"],
@@ -2289,6 +2310,7 @@ async function start() {
     return;
   }
 
+  appSignIn = !!config.app_sign_in;
   if (config.sign_in_required) {
     try {
       await loadClerk(config);
@@ -2349,9 +2371,9 @@ async function renderOpen(params) {
 }
 
 const ACCESS_WORDS = {
-  internal: "Members only",
-  hybrid: "Members only, except some public pages",
-  public: "Anyone",
+  public: "The app decides, page by page",
+  internal: "Locked: members only",
+  hybrid: "Locked, except some public pages",
 };
 
 // accessSection is who the service lets in. The edge enforces it, so it holds
@@ -2392,9 +2414,297 @@ function accessSection(one) {
   return section("Who can get in",
     el("div", { style: "max-width:620px" },
       el("p", { class: "muted", text:
-        "Members are you, for now. Anyone else who opens a members-only page is asked to sign in, " +
-        "and turned away if they are not a member. Its previews follow the same rule." }),
+        "Members are you, for now. Normally the site is open and the app says which pages are for anyone " +
+        "and which are for members, such as form by form. Locking it overrides the app. " +
+        "A change's preview is always members only, until it is approved." }),
       el("div", { class: "field" }, mode),
       pathsField,
       el("div", { class: "row-actions" }, save)));
+}
+
+// ---------------------------------------------------------------- settings
+
+// unsavedSettings holds back the service page's automatic refresh while an
+// owner has changed a setting and not saved it.
+let unsavedSettings = false;
+
+// The catalog of setting components the panel draws. An app's declaration
+// names components from it and nothing else; the platform has already refused
+// anything outside it, and anything this does not recognise is skipped rather
+// than guessed at. Every string from a declaration is drawn as text, and none
+// becomes an attribute that the browser would follow or run.
+const SETTING_INPUTS = {
+  text(c, value, set) {
+    const input = el("input", { class: "input", type: "text" });
+    if (c.maxLength) input.maxLength = Number(c.maxLength);
+    input.placeholder = c.default == null ? "" : String(c.default);
+    input.value = value == null ? "" : String(value);
+    input.addEventListener("input", () => set(input.value === "" ? null : input.value));
+    return input;
+  },
+  textarea(c, value, set) {
+    const input = el("textarea", { class: "input", rows: "4" });
+    if (c.maxLength) input.maxLength = Number(c.maxLength);
+    input.placeholder = c.default == null ? "" : String(c.default);
+    input.value = value == null ? "" : String(value);
+    input.addEventListener("input", () => set(input.value === "" ? null : input.value));
+    return input;
+  },
+  number(c, value, set) {
+    const input = el("input", { class: "input", type: "number" });
+    for (const key of ["min", "max", "step"]) {
+      if (typeof c[key] === "number" && Number.isFinite(c[key])) input[key] = String(c[key]);
+    }
+    input.placeholder = c.default == null ? "" : String(c.default);
+    input.value = value == null ? "" : String(value);
+    input.addEventListener("input", () => set(input.value === "" ? null : Number(input.value)));
+    return input;
+  },
+  toggle(c, value, set) {
+    const input = el("input", { type: "checkbox" });
+    input.checked = value == null ? Boolean(c.default) : Boolean(value);
+    input.addEventListener("change", () => set(input.checked));
+    return input;
+  },
+  select(c, value, set) {
+    const input = el("select", { class: "input" });
+    const current = value == null ? c.default : value;
+    for (const option of c.options || []) {
+      const node = el("option", { text: String(option.label) });
+      node.value = String(option.value);
+      node.selected = option.value === current;
+      input.append(node);
+    }
+    input.addEventListener("change", () => set(input.value));
+    return input;
+  },
+  color(c, value, set) {
+    const valid = (v) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
+    const start = (valid(value) ? value : valid(c.default) ? c.default : "#000000").toLowerCase();
+    const picker = el("input", { type: "color" });
+    picker.value = start;
+    const hex = el("input", { class: "input mono", type: "text", style: "max-width:120px" });
+    hex.maxLength = 7;
+    hex.value = start;
+    picker.addEventListener("input", () => { hex.value = picker.value; set(picker.value); });
+    hex.addEventListener("input", () => {
+      if (valid(hex.value)) { picker.value = hex.value.toLowerCase(); set(hex.value.toLowerCase()); }
+    });
+    return el("div", { class: "row", style: "gap:8px;align-items:center" }, picker, hex);
+  },
+  image(c, value, set, images) {
+    const input = el("select", { class: "input" });
+    const none = el("option", { text: "The app's own (none chosen)" });
+    none.value = "";
+    input.append(none);
+    for (const file of images) {
+      const node = el("option", { text: (file.scope ? "This app: " : "Account: ") + file.path });
+      node.value = file.id;
+      node.selected = file.id === value;
+      input.append(node);
+    }
+    const preview = el("div", { class: "setting-preview" });
+    const show = (id) => {
+      clear(preview);
+      if (id) preview.append(libraryThumb({ id }));
+    };
+    show(value);
+    input.addEventListener("change", () => { set(input.value || null); show(input.value); });
+    return el("div", {}, input, preview,
+      images.length ? null : el("p", { class: "muted small", text: "Add a picture to the library below to choose one." }));
+  },
+};
+
+async function settingsSection(one) {
+  let data;
+  try {
+    data = await api.get(`/v1/installations/${one.id}/settings`);
+  } catch (err) {
+    return section("Settings", el("p", { class: "muted", text: err.message }));
+  }
+  if (data.problem) {
+    return section("Settings", el("div", { class: "callout" },
+      el("p", {}, el("strong", { text: "This app's settings could not be read. " }), data.problem),
+      el("p", { class: "muted", text: "Ask for a change to fix its config/settings.json." })));
+  }
+  if (!data.spec) {
+    return section("Settings", el("p", { class: "muted", text:
+      "This app declares no settings yet. Ask for a change such as “let me change the colours and the logo”, " +
+      "and its agent will add them here." }));
+  }
+
+  const byID = new Map((data.spec.components || []).map((c) => [c.id, c]));
+  const changed = {};
+  const save = el("button", { class: "btn btn-primary", text: "Save settings", disabled: true });
+
+  const draw = (ids, depth) => ids.map((id) => {
+    const c = byID.get(id);
+    if (!c || depth > 4) return null;
+    if (c.type === "section") {
+      return el("fieldset", { class: "settings-group" },
+        el("legend", { text: String(c.title || "") }),
+        c.description ? el("p", { class: "muted", text: String(c.description) }) : null,
+        ...draw(c.children || [], depth + 1));
+    }
+    if (c.type === "note") return el("p", { class: "muted", text: String(c.text || "") });
+    const make = SETTING_INPUTS[c.type];
+    if (!make || typeof c.path !== "string") return null;
+    const set = (value) => {
+      changed[c.path] = value;
+      unsavedSettings = true;
+      save.disabled = false;
+    };
+    const input = make(c, data.values[c.path], set, data.images || []);
+    return el("div", { class: "field" },
+      el("label", { text: String(c.label || c.path) + (c.required ? " (required)" : "") }),
+      input,
+      c.description ? el("p", { class: "muted small", text: String(c.description) }) : null);
+  });
+
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      await api.send("PUT", `/v1/installations/${one.id}/settings`, { values: changed });
+      for (const key of Object.keys(changed)) delete changed[key];
+      unsavedSettings = false;
+      toast("Saved. The site shows it from the next page anyone opens.");
+    } catch (err) {
+      save.disabled = false;
+      toast(err.message, true);
+    }
+  });
+
+  return section(String(data.spec.title || "Settings"),
+    el("div", { style: "max-width:620px" },
+      el("p", { class: "muted", text: "What this app lets you change. The app decides what is here; ask for a change to add something." }),
+      ...draw(data.spec.root || [], 0),
+      el("div", { class: "row-actions" }, save)));
+}
+
+// ---------------------------------------------------------------- library
+
+// libraryThumb shows a library picture. Fetched with the owner's credentials
+// and shown from a blob URL, so the file never needs an address of its own.
+function libraryThumb(file) {
+  const img = el("img", { class: "library-thumb", alt: "" });
+  (async () => {
+    try {
+      const res = await fetch(`/v1/library/files/${encodeURIComponent(file.id)}/content`,
+        { headers: await authHeaders({}) });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      if (!/^image\/(png|jpeg|gif)$/.test(blob.type)) return;
+      img.src = URL.createObjectURL(blob);
+    } catch {
+      // A missing preview is not worth an error.
+    }
+  })();
+  return img;
+}
+
+async function uploadToLibrary(base, file, folder) {
+  const path = (folder ? folder.replace(/\/+$/, "") + "/" : "") + file.name;
+  const res = await fetch(`${base}?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: await authHeaders({ "content-type": "application/octet-stream" }),
+    body: file,
+  });
+  if (res.status === 401) return signInRequired();
+  if (!res.ok) throw new Error(`${file.name}: ${await describe(res)}`);
+  return res.json();
+}
+
+function libraryList(files, onChange) {
+  if (!files.length) return empty("Nothing here yet.");
+  return el("div", { class: "library-list" }, ...files.map((file) => {
+    const remove = el("button", { class: "btn btn-secondary btn-sm", text: "Delete" });
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Delete ${file.path}? This cannot be undone.`)) return;
+      try {
+        await api.send("DELETE", `/v1/library/files/${encodeURIComponent(file.id)}`);
+        onChange();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    const who = file.created_by && file.created_by.startsWith("agent:") ? "kept by the agent" : "added by you";
+    return el("div", { class: "library-row" },
+      file.kind === "image" ? libraryThumb(file) : el("span", { class: "library-kind", text: file.kind }),
+      el("div", {},
+        el("div", { class: "mono", text: file.path }),
+        el("div", { class: "muted small", text:
+          `${Math.max(1, Math.round(file.size / 1024))} KB · ${who} · ${relativeTime(file.updated_at)}` })),
+      remove);
+  }));
+}
+
+function uploader(base, onDone) {
+  const input = el("input", { type: "file", multiple: true,
+    accept: ".png,.jpg,.jpeg,.gif,.pdf,.txt,.md,.markdown,.csv,.json" });
+  const folder = el("input", { class: "input", type: "text", placeholder: "Folder (optional), e.g. brand",
+    style: "max-width:260px" });
+  const go = el("button", { class: "btn btn-secondary", text: "Add" });
+  go.addEventListener("click", async () => {
+    if (!input.files.length) return;
+    go.disabled = true;
+    for (const file of input.files) {
+      try {
+        await uploadToLibrary(base, file, folder.value.trim());
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+    go.disabled = false;
+    input.value = "";
+    onDone();
+  });
+  return el("div", { class: "library-add" },
+    el("div", { class: "row", style: "gap:8px;flex-wrap:wrap;align-items:center" }, input, folder, go),
+    el("p", { class: "muted small", text:
+      "Pictures (PNG, JPEG, GIF), PDFs without scripts, and text (.md, .txt, .csv, .json), up to 10 MB each. " +
+      "Pictures are re-saved by the platform; nothing that can run is kept." }));
+}
+
+async function librarySection(one) {
+  const holder = el("div");
+  const load = async () => {
+    clear(holder);
+    try {
+      const data = await api.get(`/v1/installations/${one.id}/library`);
+      holder.append(
+        el("p", { class: "muted", text:
+          "Files and notes this app's agent reads before changing anything: a brand guide, a logo, decisions. " +
+          "The agent adds to it too. Files for all your apps are in the account library." }),
+        libraryList(data.files, load),
+        uploader(`/v1/installations/${one.id}/library/files`, load),
+        el("p", { class: "muted small" },
+          `Also shared from your account library: ${data.account.length} file${data.account.length === 1 ? "" : "s"}. `,
+          el("a", { href: "#/library", text: "Open it" })));
+    } catch (err) {
+      holder.append(el("p", { class: "muted", text: err.message }));
+    }
+  };
+  await load();
+  return section("This app's library", holder);
+}
+
+async function renderLibrary() {
+  const root = view();
+  clear(root);
+  root.append(pageHead("Library", {
+    lede: "What every app's agent reads before it changes anything: your brand guide, logos, how you like things done. " +
+      "Agents keep notes here too. Each app also has a library of its own, on its page.",
+  }));
+  const holder = el("div");
+  const load = async () => {
+    clear(holder);
+    try {
+      const data = await api.get("/v1/library");
+      holder.append(libraryList(data.files, load), uploader("/v1/library/files", load));
+    } catch (err) {
+      holder.append(el("p", { class: "muted", text: err.message }));
+    }
+  };
+  root.append(section("Account library", holder));
+  await load();
 }
