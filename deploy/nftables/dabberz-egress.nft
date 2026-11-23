@@ -1,0 +1,123 @@
+#!/usr/sbin/nft -f
+#
+# Egress policy for the account that customers' apps and agents run as.
+#
+# Everything an instance does on the local driver -- the coding agent, the
+# build, the customer's own services -- runs as one unprivileged account
+# (driver.local.run_as, "dabberz" on dbz-alpha). The daemon itself is root.
+# That split is what this file hangs on: it restricts the instance account and
+# leaves the daemon alone, because the daemon is the thing that must still
+# reach Postgres, the preview ports and the outside world.
+#
+# WHAT THIS DOES AND DOES NOT BUY
+#
+# It buys: no reaching the control plane, no reaching private networks, no
+# mail relay, no arbitrary outbound ports, and a log line for anything that
+# tries. Those are the abuse paths that get a host's address nullrouted.
+#
+# It does NOT buy tenant isolation. Every instance shares one uid, so a rule
+# matching on uid cannot tell one customer's app from another's. The preview
+# range is blocked below, which closes the obvious cross-tenant path -- but
+# that is a blunt instrument, not isolation. Isolation needs a uid per
+# installation, or the Firecracker driver.
+#
+# Its own table, so it coexists with whatever else is loaded (notably the
+# rules restricting port 80 to the CDN's ranges). It does not touch, and must
+# not replace, /etc/nftables.conf.
+#
+# Load:     nft -f /etc/nftables.d/dabberz-egress.nft
+# Check:    nft -c -f /etc/nftables.d/dabberz-egress.nft
+# Inspect:  nft list table inet dabberz_egress
+# Remove:   nft delete table inet dabberz_egress
+
+# Idempotent: create-then-delete means a reload never fails on a missing table
+# and never stacks a second copy of the rules on top of the first.
+table inet dabberz_egress
+delete table inet dabberz_egress
+
+table inet dabberz_egress {
+
+	set private4 {
+		type ipv4_addr
+		flags interval
+		elements = {
+			10.0.0.0/8,       # RFC 1918
+			172.16.0.0/12,    # RFC 1918
+			192.168.0.0/16,   # RFC 1918
+			169.254.0.0/16,   # link-local, and cloud metadata at .169.254
+			100.64.0.0/10,    # carrier NAT
+			192.0.0.0/24,     # IETF protocol assignments
+			198.18.0.0/15,    # benchmarking
+		}
+	}
+
+	set private6 {
+		type ipv6_addr
+		flags interval
+		elements = {
+			fc00::/7,         # unique local
+			fe80::/10,        # link-local
+		}
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+
+		# Only the instance account is subject to any of this. Traffic from
+		# root -- the daemon, its router, its health checks, its backups --
+		# leaves here untouched.
+		meta skuid != "dabberz" accept
+
+		# -- loopback -------------------------------------------------------
+		# The app's own database. data.public_host is 127.0.0.1, so this is
+		# not optional: without it every installed app loses its database on
+		# the next connection.
+		ip daddr 127.0.0.1 tcp dport 5432 accept
+
+		# Name resolution. Debian resolves through systemd-resolved, which
+		# listens on loopback rather than on the real interface.
+		ip daddr 127.0.0.0/8 udp dport 53 accept
+		ip daddr 127.0.0.0/8 tcp dport 53 accept
+
+		# Everything else on loopback is refused, and this is the rule that
+		# earns the file. It covers the control plane on :80 and the preview
+		# range 41000-42999, where every other customer's app is listening on
+		# a predictable, contiguous port. A connection made there directly
+		# never passes through the router -- which is the only place a
+		# visitor's identity headers are stripped and the real one asserted
+		# against route ownership. Reaching a neighbour that way skips all of
+		# it, and finding a neighbour is a for-loop.
+		#
+		# COST: a project whose services talk to each other over localhost
+		# will break here. Forms is a single service, so nothing breaks
+		# today. A multi-service app needs this reconsidered -- see the
+		# README beside this file.
+		ip daddr 127.0.0.0/8 counter log prefix "dabberz-egress loopback " level info reject with tcp reset
+		ip6 daddr ::1 counter reject
+
+		# -- private networks -----------------------------------------------
+		# A bare-metal host with one public address has no legitimate reason
+		# to let a customer's app talk to RFC 1918 space or to link-local.
+		ip daddr @private4 counter log prefix "dabberz-egress private " level info reject with icmp type net-unreachable
+		ip6 daddr @private6 counter reject with icmpv6 type no-route
+
+		# -- mail -----------------------------------------------------------
+		# Refused before the general allowances below. Apps send mail through
+		# the platform's mail block, not by opening their own connection. A
+		# host that will relay mail is a host that will be used to relay mail,
+		# and the reputational damage outlives the account that did it.
+		tcp dport { 25, 465, 587, 2525 } counter log prefix "dabberz-egress smtp " level info reject with tcp reset
+
+		# -- the public internet ---------------------------------------------
+		# Package registries, git, and whichever AI provider the account
+		# brings. Deliberately a short list: everything an honest build needs
+		# and little else.
+		udp dport 53 accept
+		tcp dport { 22, 53, 80, 443, 9418 } accept
+
+		# Anything else outbound from an instance is unusual enough to want a
+		# record of. Scanning, mining pools and relays all live out here.
+		counter log prefix "dabberz-egress drop " level info
+		reject with icmpx type admin-prohibited
+	}
+}
