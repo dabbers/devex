@@ -28,6 +28,7 @@ import (
 	"github.com/dabbers/devex/internal/gitauth"
 	"github.com/dabbers/devex/internal/identity"
 	"github.com/dabbers/devex/internal/install"
+	"github.com/dabbers/devex/internal/library"
 	"github.com/dabbers/devex/internal/llm"
 	"github.com/dabbers/devex/internal/memory"
 	"github.com/dabbers/devex/internal/merge"
@@ -183,6 +184,12 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 	}
 
 	mem, err := memory.New(filepath.Join(dataDir, "memory"))
+	if err != nil {
+		return nil, err
+	}
+	// The account's central store of files and notes, kept by content hash
+	// beside the database.
+	lib, err := library.New(db, filepath.Join(dataDir, "library"))
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +382,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		deps := install.Deps{
 			Store: db, Catalog: catalog, Workspaces: workspaces,
 			Vault: vault, Databases: provisioner, Verifier: verifier,
-			Logger: logger,
+			Library: lib, Logger: logger,
 		}
 		// Set only when there is one: a nil issuer stored in the interface
 		// would read as present and fail on the first check.
@@ -405,6 +412,11 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 			logger.Warn("an app in the catalog does not satisfy the contract", "error", problem)
 		}
 		logger.Info("catalog ready", "dir", cfg.Catalog.Dir, "apps", len(apps))
+		if hostRouter != nil {
+			// Logos and other pictures an app's settings point at, served
+			// on the app's own hostname.
+			hostRouter.WithAssets(install.Assets{Installer: installer})
+		}
 	}
 
 	ui, err := web.Handler()
@@ -418,6 +430,7 @@ func build(ctx context.Context, cfg config.Config, logger *slog.Logger) (*applic
 		UI: ui, Authn: authenticator, Visitors: visitors, Workspaces: workspaces,
 		Agent: agentRunner, GitTokens: gitTokens, AgentCreds: agentCreds,
 		Installer: installer, Logger: logger, EdgeSignIn: edgeSignIn(hostRouter),
+		Library: lib,
 	})
 	if err != nil {
 		return nil, err

@@ -66,6 +66,7 @@ type Mux struct {
 	who      Identities
 	passes   Passes
 	signIn   *signIn
+	assets   Assets
 	logger   *slog.Logger
 }
 

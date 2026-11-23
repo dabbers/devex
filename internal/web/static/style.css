@@ -634,3 +634,15 @@ details.data pre {
 
 /* The app picked in the catalog, so the form below it has an obvious owner. */
 .service-row.chosen { box-shadow: inset 3px 0 0 var(--color-accent); }
+
+/* Settings an app declares, and the library. */
+.settings-group { border: 1px solid var(--rule, rgba(0, 0, 0, .12)); border-radius: 4px; padding: 12px 16px; margin: 0 0 16px; }
+.settings-group legend { font-weight: 600; padding: 0 6px; }
+.setting-preview { margin-top: 8px; }
+.small { font-size: 12px; }
+.library-list { display: grid; gap: 8px; margin-bottom: 16px; }
+.library-row { display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: center; }
+.library-row > div { min-width: 0; overflow-wrap: anywhere; }
+.library-thumb { width: 56px; height: 40px; object-fit: contain; background: rgba(0, 0, 0, .04); border-radius: 3px; }
+.library-kind { width: 56px; text-align: center; font-size: 11px; text-transform: uppercase; color: var(--ink-60); }
+.library-add { margin-top: 8px; }

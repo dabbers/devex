@@ -12,6 +12,7 @@ import (
 	"github.com/dabbers/devex/internal/appspec"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/library"
 	"github.com/dabbers/devex/internal/secrets"
 	"github.com/dabbers/devex/internal/store"
 	"github.com/dabbers/devex/internal/verify"
@@ -49,7 +50,10 @@ type Deps struct {
 	// without it the browser looks as a stranger, which for an app whose
 	// front page is behind sign-in means a check that cannot pass.
 	Passes Passes
-	Logger *slog.Logger
+	// Library is the account's store of files, which picture settings
+	// choose from. Optional: without it no picture setting can be set.
+	Library *library.Library
+	Logger  *slog.Logger
 }
 
 // Passes mints preview passes. It is previewpass.Issuer, narrowed.
@@ -354,6 +358,7 @@ func (i *Installer) start(ctx context.Context, installation *domain.Installation
 	if err != nil {
 		return err
 	}
+	i.refreshSettings(ctx, installation, ws)
 
 	// What is actually deployed. Recorded from the machine rather than
 	// assumed, and recorded at install rather than at the first promote:

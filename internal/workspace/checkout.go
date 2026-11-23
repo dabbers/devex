@@ -49,7 +49,29 @@ func (m *Manager) ensureCheckout(ctx context.Context, w *domain.Workspace, repo 
 			"workspace", w.ID, "repo", repo.Name, "instance", instance.ID)
 	}
 
-	return m.switchBranch(ctx, w, repo, instance, env)
+	if err := m.switchBranch(ctx, w, repo, instance, env); err != nil {
+		return err
+	}
+	return m.excludePlatformFiles(ctx, instance)
+}
+
+// excludePlatformFiles keeps .dabberz/ -- service logs, the library's copy,
+// the settings the platform writes -- out of git, without touching the app's
+// own .gitignore. Otherwise an agent's "git add -A" would commit a log that
+// may hold a visitor's details, or the account's library into an app.
+func (m *Manager) excludePlatformFiles(ctx context.Context, instance *vm.Instance) error {
+	script := `f=$(git rev-parse --git-path info/exclude) && mkdir -p "$(dirname "$f")" && ` +
+		`{ grep -qxF '/.dabberz/' "$f" 2>/dev/null || echo '/.dabberz/' >> "$f"; }`
+	res, err := m.driver.Exec(ctx, instance.ID, vm.Command{
+		Argv: []string{"sh", "-c", script}, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("workspace: keep platform files out of git: %w", err)
+	}
+	if !res.OK() {
+		return fmt.Errorf("workspace: keep platform files out of git: %s", firstLine(res.Stderr))
+	}
+	return nil
 }
 
 // hasCheckout reports whether the workspace already holds a repository.

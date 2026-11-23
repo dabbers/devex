@@ -158,11 +158,15 @@ func TestARequiredQuestionIsRequired(t *testing.T) {
 		t.Fatalf("POST: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("status = %d, want a redirect back to the form", resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	// The form again, saying what was missing and keeping what was typed --
+	// on a long form, losing every answer to one missed question is how
+	// people give up.
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want the form shown again", resp.StatusCode)
 	}
-	if !strings.Contains(resp.Header.Get("Location"), "required") {
-		t.Fatalf("location = %q, which does not say what was missing", resp.Header.Get("Location"))
+	if !strings.Contains(string(body), "Your name: is required") || !strings.Contains(string(body), `value="a@b.c"`) {
+		t.Fatalf("the form did not say what was missing or lost what was typed:\n%s", body)
 	}
 
 	stored, _ := store.ListSubmissions(context.Background(), form.ID, 10)

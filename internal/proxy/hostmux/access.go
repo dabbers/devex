@@ -214,6 +214,10 @@ func unambiguous(u *url.URL) bool {
 
 // serveRoute applies the route's policy and then forwards.
 func (m *Mux) serveRoute(w http.ResponseWriter, r *http.Request, host string, rt *route) {
+	if strings.HasPrefix(r.URL.Path, assetPrefix) {
+		m.serveAsset(w, r, host, rt)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, reservedPrefix) {
 		m.serveEdge(w, r, host)
 		return

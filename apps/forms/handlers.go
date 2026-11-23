@@ -2,8 +2,10 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -16,6 +18,41 @@ import (
 //
 //go:embed theme/*.html
 var theme embed.FS
+
+// static is the app's own scripts and styles, served at /static/.
+//
+//go:embed static
+var static embed.FS
+
+func staticFiles() fs.FS {
+	sub, err := fs.Sub(static, "static")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
+
+// templateFuncs are what the theme may call besides the owner's settings.
+func templateFuncs(settings *siteSettings) template.FuncMap {
+	return template.FuncMap{
+		"site": settings.get,
+		// toJSON is for data- attributes and the builder's data block; the
+		// template escapes it for wherever it lands.
+		"toJSON": func(v any) (string, error) {
+			b, err := json.Marshal(v)
+			return string(b), err
+		},
+		"valueOf": func(values map[string]string, key string) string { return values[key] },
+		"asks":    func(f Field) bool { return fieldTypes[f.Type] },
+		"inputType": func(f Field) string {
+			switch f.Type {
+			case "email", "number", "date", "url":
+				return f.Type
+			}
+			return "text"
+		},
+	}
+}
 
 // userHeader carries the person the platform authenticated.
 //
@@ -40,14 +77,18 @@ type app struct {
 	cfg       config
 	logger    *slog.Logger
 	templates *template.Template
+	settings  *siteSettings
 }
 
 func newApp(store *Store, cfg config, logger *slog.Logger) (*app, error) {
-	templates, err := template.ParseFS(theme, "theme/*.html")
+	settings := newSiteSettings()
+	// The theme reads the owner's settings through "site", so a page needs
+	// nothing passed to it to be drawn in the owner's colours.
+	templates, err := template.New("").Funcs(templateFuncs(settings)).ParseFS(theme, "theme/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &app{store: store, cfg: cfg, logger: logger, templates: templates}, nil
+	return &app{store: store, cfg: cfg, logger: logger, templates: templates, settings: settings}, nil
 }
 
 func (a *app) handler() http.Handler {
@@ -65,6 +106,10 @@ func (a *app) handler() http.Handler {
 	open.HandleFunc("GET /f/{slug}", a.publicForm)
 	open.HandleFunc("POST /f/{slug}", a.submit)
 
+	// The scripts and styles every page may use: paging and conditions for
+	// respondents, the builder for members. Code, not data, so open.
+	open.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticFiles())))
+
 	// The admin surface, behind the platform's identity.
 	admin := http.NewServeMux()
 	open.Handle("/", a.requireUser(admin.ServeHTTP))
@@ -73,6 +118,9 @@ func (a *app) handler() http.Handler {
 	admin.HandleFunc("POST /forms", a.createForm)
 	admin.HandleFunc("GET /forms/{id}", a.showSubmissions)
 	admin.HandleFunc("POST /forms/{id}/audience", a.changeAudience)
+	admin.HandleFunc("GET /forms/new", a.builder)
+	admin.HandleFunc("GET /forms/{id}/edit", a.builder)
+	admin.HandleFunc("POST /forms/save", a.saveForm)
 	admin.HandleFunc("GET /export", a.export)
 	admin.HandleFunc("POST /import", a.importData)
 
@@ -86,11 +134,23 @@ func (a *app) handler() http.Handler {
 	return a.logRequests(neverCached(open))
 }
 
-// neverCached keeps every answer out of shared caches. Who may see a page can
-// change with a click, and a copy at a CDN would not hear about it.
+// contentPolicy is what a page of this app may load and run: its own scripts
+// and styles, pictures from its own hostname (the logo the platform serves),
+// and nothing else. Nothing a form's author writes is ever markup, so this is
+// the second wall, not the first.
+const contentPolicy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
+// neverCached keeps every answer out of shared caches -- who may see a page
+// can change with a click, and a copy at a CDN would not hear about it -- and
+// sets the content policy.
 func neverCached(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "private, no-store")
+		h := w.Header()
+		h.Set("Cache-Control", "private, no-store")
+		h.Set("Content-Security-Policy", contentPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -270,10 +330,11 @@ func (a *app) showSubmissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	questions := form.Questions()
 	rows := make([]submissionRow, 0, len(submissions))
 	for _, submission := range submissions {
-		values := make([]string, 0, len(form.Fields))
-		for _, field := range form.Fields {
+		values := make([]string, 0, len(questions))
+		for _, field := range questions {
 			values = append(values, submission.Data[field.Key])
 		}
 		rows = append(rows, submissionRow{
@@ -284,6 +345,7 @@ func (a *app) showSubmissions(w http.ResponseWriter, r *http.Request) {
 	a.render(w, r, "submissions.html", map[string]any{
 		"Title":       form.Title,
 		"Form":        form,
+		"Questions":   questions,
 		"Submissions": rows,
 	})
 }
@@ -317,11 +379,32 @@ func (a *app) publicForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.render(w, r, "public.html", map[string]any{
-		"Title": form.Title,
-		"Form":  form,
-		"Error": r.URL.Query().Get("error"),
-	})
+	a.showForm(w, r, form, http.StatusOK, nil, nil)
+}
+
+// showForm draws a form to answer: blank, or again with what was typed and
+// what was wrong, opened at the page holding the problem.
+func (a *app) showForm(w http.ResponseWriter, r *http.Request, form *Form, status int, values map[string]string, problem *AnswerError) {
+	data := map[string]any{
+		"Title":  form.Title,
+		"Form":   form,
+		"Pages":  form.Pages(),
+		"Values": values,
+		"Start":  0,
+	}
+	if problem != nil {
+		data["Error"] = problem.Error()
+		data["ErrorField"] = problem.Field
+		for _, page := range form.Pages() {
+			for _, item := range page.Items {
+				if item.Key == problem.Field {
+					data["Start"] = page.Index
+				}
+			}
+		}
+	}
+	w.WriteHeader(status)
+	a.render(w, r, "public.html", data)
 }
 
 func (a *app) submit(w http.ResponseWriter, r *http.Request) {
@@ -334,18 +417,22 @@ func (a *app) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := make(map[string]string, len(form.Fields))
-	for _, field := range form.Fields {
-		// Only declared fields are stored. Anything else a client sends is
-		// discarded rather than written: a submission is the shape the form
-		// asked for, not whatever arrived.
-		value := strings.TrimSpace(r.PostFormValue(field.Key))
-		if field.Required && value == "" {
-			http.Redirect(w, r, "/f/"+form.Slug+"?error="+urlSafe(field.Label+" is required"),
-				http.StatusSeeOther)
-			return
+	// Only declared questions the respondent was actually shown are stored.
+	// Anything else a client sends is discarded rather than written: a
+	// submission is the shape the form asked for, not whatever arrived.
+	data, err := form.Collect(r.PostFormValue)
+	var problem *AnswerError
+	if errors.As(err, &problem) {
+		typed := map[string]string{}
+		for _, field := range form.Questions() {
+			typed[field.Key] = r.PostFormValue(field.Key)
 		}
-		data[field.Key] = value
+		a.showForm(w, r, form, http.StatusUnprocessableEntity, typed, problem)
+		return
+	}
+	if err != nil {
+		a.serverError(w, r, err)
+		return
 	}
 
 	if err := a.store.Submit(r.Context(), &Submission{FormID: form.ID, Data: data}); err != nil {
@@ -353,6 +440,66 @@ func (a *app) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.render(w, r, "thanks.html", map[string]any{"Title": "Thank you", "Form": form})
+}
+
+// --------------------------------------------------------------- builder
+
+// builder is the visual editor: the form as a respondent sees it, edited in
+// place. It draws itself from JSON in the page, and saves JSON to saveForm,
+// which checks everything as if it had come from anywhere.
+func (a *app) builder(w http.ResponseWriter, r *http.Request) {
+	form := &Form{Audience: AudienceInternal, Fields: []Field{
+		{Key: "your-name", Label: "Your name", Type: "text", Required: true},
+		{Key: "email", Label: "Email", Type: "email", Required: true},
+	}}
+	if id := r.PathValue("id"); id != "" {
+		found, err := a.store.FormByID(r.Context(), id)
+		if errors.Is(err, ErrNotFound) {
+			a.fail(w, r, http.StatusNotFound, "No such form", "It may have been deleted.")
+			return
+		}
+		if err != nil {
+			a.serverError(w, r, err)
+			return
+		}
+		form = found
+	}
+	title := "New form"
+	if form.ID != "" {
+		title = "Edit " + form.Title
+	}
+	a.render(w, r, "builder.html", map[string]any{"Title": title, "Form": form})
+}
+
+// saveForm creates or updates a form from the builder.
+func (a *app) saveForm(w http.ResponseWriter, r *http.Request) {
+	var form Form
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&form); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "That could not be read: " + err.Error()})
+		return
+	}
+	// Only what the builder edits is taken from the request. An existing
+	// form's address and audience are changed elsewhere, on purpose.
+	var err error
+	if form.ID == "" {
+		form.Slug = ""
+		err = a.store.CreateForm(r.Context(), &form)
+	} else {
+		err = a.store.UpdateForm(r.Context(), &form)
+	}
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "That form no longer exists."})
+	case err != nil && strings.HasPrefix(err.Error(), "forms: "):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": strings.TrimPrefix(err.Error(), "forms: ")})
+	case err != nil:
+		a.logger.Error("save form", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "It could not be saved. Try again."})
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"id": form.ID, "slug": form.Slug, "fields": form.Fields})
+	}
 }
 
 // digest is the scheduled job the manifest declares.

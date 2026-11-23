@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}}</title>
+<title>{{.Title}} · {{site.Name}}</title>
 <style>
 /* This file is part of the extension surface. An installation's agent edits
    it; core never does, so an upgrade can replace everything else in place. */
 :root{
   --ink:#201e1d; --paper:#f3f2f2; --rule:rgba(32,30,29,.16);
-  --maroon:#7a1f2b; --maroon-deep:#3a1015; --maroon-pale:#fdeef0;
+  --maroon:{{site.Accent}}; --maroon-deep:{{site.Header}}; --maroon-pale:color-mix(in srgb,{{site.Accent}} 8%,#fff);
   --muted:rgba(32,30,29,.62);
   --serif:"Source Serif 4",Georgia,"Times New Roman",serif;
 }
@@ -18,12 +18,13 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);
 header{background:var(--maroon-deep);border-bottom:3px solid var(--maroon);padding:12px clamp(16px,4vw,48px)}
 header a{color:#fff;text-decoration:none;font-weight:600;font-size:19px;letter-spacing:-.02em}
 header span{color:rgba(255,255,255,.62);font-size:13px;margin-left:10px}
+header img{display:block;max-height:40px;max-width:min(320px,70vw)}
 main{max-width:760px;margin:0 auto;padding:28px clamp(16px,4vw,48px) 80px}
 h1{font-size:34px;line-height:1.15;margin:0 0 6px;font-weight:600}
 h2{font-size:22px;margin:32px 0 10px;font-weight:600}
 p.lede{color:var(--muted);margin:0 0 24px}
 label{display:block;margin:16px 0 4px;font-weight:600;font-size:15px}
-input[type=text],input[type=email],input[type=number],textarea,select{
+input[type=text],input[type=email],input[type=number],input[type=url],input[type=date],textarea,select{
   width:100%;padding:9px 11px;border:1px solid var(--rule);border-radius:2px;
   font-family:var(--serif);font-size:16px;background:#fff;color:var(--ink)}
 textarea{min-height:110px}
@@ -38,10 +39,27 @@ a{color:var(--maroon)}
 .note{background:var(--maroon-pale);border-left:3px solid var(--maroon);padding:12px 14px;margin:20px 0}
 .req{color:var(--maroon)}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px}
+[hidden]{display:none !important}
+button.secondary{background:transparent;color:var(--maroon);border:1px solid var(--maroon)}
+.page + .page{margin-top:28px;padding-top:12px;border-top:1px solid var(--rule)}
+.answering.paged .page{margin-top:0;padding-top:0;border-top:0}
+.item{margin-top:4px}
+.item h3{font-size:19px;margin:24px 0 4px;font-weight:600}
+.block-text,.help{white-space:pre-line}
+.help{color:var(--muted);font-size:14px;margin:4px 0 0}
+.tick{display:flex;gap:8px;align-items:center;font-weight:400}
+.tick input{width:auto;margin:0}
+fieldset.choices{border:0;padding:0;margin:16px 0 0}
+fieldset.choices legend{font-weight:600;font-size:15px;margin-bottom:4px;padding:0}
+fieldset.choices .tick{margin:6px 0}
+.has-problem input,.has-problem textarea,.has-problem select{border-color:var(--maroon);box-shadow:0 0 0 1px var(--maroon)}
+.pager{display:flex;gap:12px;align-items:center;margin-top:24px}
+.pager button{margin-top:0}
+.pager .progress{flex:1;text-align:center;color:var(--muted);font-size:14px}
 </style>
 </head>
 <body>
-<header><a href="/">Forms</a><span>on dabberz</span></header>
+{{with site}}<header>{{if .ShowLogo}}<a href="/"><img src="{{.LogoURL}}" alt="{{.Name}}"></a>{{else}}<a href="/">{{.Name}}</a>{{if .Tagline}}<span>{{.Tagline}}</span>{{end}}{{end}}</header>{{end}}
 <main>{{template "body" .}}</main>
 </body>
 </html>{{end}}

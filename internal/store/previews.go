@@ -213,3 +213,14 @@ func scanPreviewRoute(row rowScanner) (*PreviewRoute, error) {
 	}
 	return &r, nil
 }
+
+// WorkspaceForHostname returns the workspace a hostname is routed to.
+func (s *Store) WorkspaceForHostname(ctx context.Context, hostname string) (string, error) {
+	var workspaceID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT workspace_id FROM preview_routes WHERE hostname = ? LIMIT 1`, hostname).Scan(&workspaceID)
+	if err != nil {
+		return "", wrapErr("find the workspace for a hostname", err)
+	}
+	return workspaceID, nil
+}

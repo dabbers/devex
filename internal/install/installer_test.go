@@ -19,6 +19,7 @@ import (
 	"github.com/dabbers/devex/internal/auth"
 	"github.com/dabbers/devex/internal/database"
 	"github.com/dabbers/devex/internal/domain"
+	"github.com/dabbers/devex/internal/library"
 	"github.com/dabbers/devex/internal/preview"
 	"github.com/dabbers/devex/internal/proxy/hostmux"
 	"github.com/dabbers/devex/internal/secrets"
@@ -392,9 +393,14 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 		t.Fatalf("OpenCatalog: %v", err)
 	}
 
+	lib, err := library.New(db, filepath.Join(dataDir, "library"))
+	if err != nil {
+		t.Fatalf("library.New: %v", err)
+	}
+
 	installer, err := New(Deps{
 		Store: db, Catalog: catalog, Workspaces: workspaces,
-		Vault: vault, Databases: databases, Logger: quiet,
+		Vault: vault, Databases: databases, Logger: quiet, Library: lib,
 	}, Options{
 		RepoDir: filepath.Join(dataDir, "repos"),
 		// What the blocks that do exist offer. Identity, mail and storage are
@@ -412,6 +418,7 @@ func newInstaller(t *testing.T, clusterDSN string) (*Installer, *tracked, *domai
 	if err != nil {
 		t.Fatalf("install.New: %v", err)
 	}
+	router.WithAssets(Assets{Installer: installer})
 	return installer, databases, owner, edge.URL, visiting
 }
 

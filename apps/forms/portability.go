@@ -25,8 +25,10 @@ const exportFormat = "dabberz.forms.export"
 
 // exportVersion changes only when the shape changes incompatibly. 2 added each
 // form's audience: an importer that dropped it would publish internal forms,
-// so one that only knows 1 has to refuse.
-const exportVersion = 2
+// so one that only knows 1 has to refuse. 3 added pages, choices and
+// conditions: an importer that dropped conditions would ask everyone every
+// question, and one that did not know the new types would reject the form.
+const exportVersion = 3
 
 // Archive is everything this installation holds.
 type Archive struct {
@@ -135,6 +137,12 @@ func (s *Store) Import(ctx context.Context, archive *Archive) error {
 		}
 		if !form.Audience.valid() {
 			return fmt.Errorf("forms: %s does not say who it is for", form.Slug)
+		}
+		// Checked as if typed in: an archive is input like any other,
+		// and a condition pointing forwards would make a form that cannot
+		// be answered in order.
+		if err := checkFields(form.Fields, false); err != nil {
+			return fmt.Errorf("forms: %s: %w", form.Slug, err)
 		}
 	}
 

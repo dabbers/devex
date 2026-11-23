@@ -2,18 +2,53 @@
 <h1>{{.Form.Title}}</h1>
 {{if .Form.Description}}<p class="lede">{{.Form.Description}}</p>{{end}}
 {{if ne .Form.Audience "public"}}<p class="lede">Only members can see and answer this form.</p>{{end}}
-{{if .Error}}<div class="note">{{.Error}}</div>{{end}}
-<form method="post" action="/f/{{.Form.Slug}}">
-  {{range .Form.Fields}}
-    <label for="f-{{.Key}}">{{.Label}}{{if .Required}} <span class="req">*</span>{{end}}</label>
-    {{if eq .Type "textarea"}}
-      <textarea id="f-{{.Key}}" name="{{.Key}}"{{if .Required}} required{{end}}></textarea>
-    {{else if eq .Type "checkbox"}}
-      <input type="checkbox" id="f-{{.Key}}" name="{{.Key}}" value="yes" style="width:auto">
-    {{else}}
-      <input type="{{.Type}}" id="f-{{.Key}}" name="{{.Key}}"{{if .Required}} required{{end}}>
+{{if .Error}}<div class="note" role="alert">{{.Error}}</div>{{end}}
+{{$values := .Values}}{{$problem := .ErrorField}}
+<form method="post" action="/f/{{.Form.Slug}}" class="answering" data-start="{{.Start}}" novalidate>
+  {{range .Pages}}
+  <section class="page" data-page="{{.Index}}"{{if .Break}}{{with .Break.ShowIf}} data-show-if="{{toJSON .}}"{{end}}{{end}}>
+    {{if .Break}}{{if .Break.Label}}<h2>{{.Break.Label}}</h2>{{end}}{{if .Break.Help}}<p class="lede">{{.Break.Help}}</p>{{end}}{{end}}
+    {{range .Items}}
+    <div class="item{{if eq .Key $problem}} has-problem{{end}}" data-key="{{.Key}}"{{with .ShowIf}} data-show-if="{{toJSON .}}"{{end}}>
+      {{if eq .Type "text-block"}}
+        <h3>{{.Label}}</h3>
+        {{if .Help}}<p class="block-text">{{.Help}}</p>{{end}}
+      {{else}}
+        {{$value := valueOf $values .Key}}
+        {{if eq .Type "checkbox"}}
+          <label class="tick"><input type="checkbox" id="f-{{.Key}}" name="{{.Key}}" value="yes"{{if eq $value "yes"}} checked{{end}}> {{.Label}}{{if .Required}} <span class="req">*</span>{{end}}</label>
+        {{else if eq .Type "choice"}}
+          <fieldset class="choices"><legend>{{.Label}}{{if .Required}} <span class="req">*</span>{{end}}</legend>
+            {{$key := .Key}}{{$required := .Required}}
+            {{range $i, $option := .Options}}
+            <label class="tick"><input type="radio" name="{{$key}}" value="{{$option}}"{{if eq $value $option}} checked{{end}}{{if and $required (eq $i 0)}} data-required{{end}}> {{$option}}</label>
+            {{end}}
+          </fieldset>
+        {{else}}
+          <label for="f-{{.Key}}">{{.Label}}{{if .Required}} <span class="req">*</span>{{end}}</label>
+          {{if eq .Type "textarea"}}
+            <textarea id="f-{{.Key}}" name="{{.Key}}"{{if .Required}} data-required{{end}}>{{$value}}</textarea>
+          {{else if eq .Type "dropdown"}}
+            <select id="f-{{.Key}}" name="{{.Key}}"{{if .Required}} data-required{{end}}>
+              <option value="">Choose…</option>
+              {{range .Options}}<option{{if eq $value .}} selected{{end}}>{{.}}</option>{{end}}
+            </select>
+          {{else}}
+            <input type="{{inputType .}}" id="f-{{.Key}}" name="{{.Key}}" value="{{$value}}"{{if .Required}} data-required{{end}}>
+          {{end}}
+        {{end}}
+        {{if .Help}}<p class="help">{{.Help}}</p>{{end}}
+      {{end}}
+    </div>
     {{end}}
+  </section>
   {{end}}
-  <button type="submit">Send</button>
+  <div class="pager">
+    <button type="button" class="secondary" data-back hidden>Back</button>
+    <span class="progress" data-progress></span>
+    <button type="button" data-next hidden>Next</button>
+    <button type="submit" data-send>Send</button>
+  </div>
 </form>
+<script src="/static/answer.js" defer></script>
 {{end}}

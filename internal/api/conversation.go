@@ -159,13 +159,20 @@ func (s *Server) runAgentTurn(ws *domain.Workspace, prompt, reply *domain.Messag
 		// alternative is a database write per token.
 		progress := newProgressWriter(ctx, s, reply)
 
+		// The library and the app's settings, as of now, for the agent to read.
+		installation := s.prepareLibrary(ctx, ws)
+		turnPrompt := agent.BuildConversationPrompt(
+			ws, repo, project, services, previews, prompt.Content, history)
+		if installation != nil {
+			turnPrompt += "\n" + agent.LibraryInstructions
+		}
+
 		res, err := s.agent.Run(ctx, agent.Request{
 			// The workspace's owner pays: their Claude token, never anyone
 			// else's, and a refusal if they have none.
 			UserID:     ws.UserID,
 			InstanceID: ws.InstanceID,
-			Prompt: agent.BuildConversationPrompt(
-				ws, repo, project, services, previews, prompt.Content, history),
+			Prompt:     turnPrompt,
 			// The workspace's own conversation, so each message continues the
 			// last instead of starting from an empty context -- which is the
 			// thing that would make a chat useless.
@@ -208,6 +215,12 @@ func (s *Server) runAgentTurn(ws *domain.Workspace, prompt, reply *domain.Messag
 				reply.Content = strings.TrimSpace(reply.Content + "\n\n" +
 					"(After this turn the platform rebuilt the app and restarted it, and that failed, " +
 					"so the preview may not show this work: " + err.Error() + ")")
+			}
+		}
+
+		if installation != nil {
+			if note := s.collectLibrary(ctx, ws, installation); note != "" {
+				reply.Content = strings.TrimSpace(reply.Content + "\n\n" + note)
 			}
 		}
 

@@ -134,6 +134,7 @@ func (i *Installer) prepare(ctx context.Context, installation *domain.Installati
 		return err
 	}
 	change.PreviewURL = started.Previews.Primary
+	i.refreshSettings(ctx, installation, ws)
 
 	revision, err := i.deps.Workspaces.Revision(ctx, ws)
 	if err != nil {
@@ -272,6 +273,8 @@ func (i *Installer) Promote(ctx context.Context, change *domain.Change) (*domain
 	if err := i.deps.Workspaces.Deploy(ctx, serving, change.Revision); err != nil {
 		return nil, i.blocked(ctx, change, err)
 	}
+	// The promoted code may declare settings the old did not.
+	i.refreshSettings(ctx, installation, serving)
 
 	now := time.Now().UTC()
 	installation.PreviousRevision = installation.Revision
@@ -512,7 +515,9 @@ func (i *Installer) Rollback(ctx context.Context, installation *domain.Installat
 		}
 	}
 
-	if err := i.deps.Workspaces.Deploy(ctx, serving, target); err != nil {
+	if err := i.deps.Workspaces.Deploy(ctx, serving, target); err == nil {
+		i.refreshSettings(ctx, installation, serving)
+	} else {
 		// Put the branch back, so it still says what is actually live.
 		if current != "" {
 			if undo := git(ctx, "-c", "safe.directory=*", "-C", bare, "update-ref", branch, current); undo != nil {

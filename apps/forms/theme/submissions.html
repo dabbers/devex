@@ -3,6 +3,7 @@
 <p class="lede">
   Published at <a href="/f/{{.Form.Slug}}"><code>/f/{{.Form.Slug}}</code></a> &middot;
   {{len .Submissions}} answer{{if ne (len .Submissions) 1}}s{{end}} &middot;
+  <a href="/forms/{{.Form.ID}}/edit">edit the form</a> &middot;
   <a href="/export">export everything</a>
 </p>
 
@@ -17,7 +18,7 @@
 
 {{if .Submissions}}
 <table>
-  <tr><th>When</th>{{range .Form.Fields}}<th>{{.Label}}</th>{{end}}</tr>
+  <tr><th>When</th>{{range .Questions}}<th>{{.Label}}</th>{{end}}</tr>
   {{range .Submissions}}
   <tr>
     <td>{{.When}}</td>

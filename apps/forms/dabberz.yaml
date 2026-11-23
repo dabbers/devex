@@ -6,7 +6,7 @@
 # manifest is missing are discovered here rather than on somebody's CRM.
 app: forms
 name: Forms
-version: 0.2.0
+version: 0.3.0
 platform: 1
 license: AGPL-3.0
 upstream: https://github.com/dabbers/app-forms
