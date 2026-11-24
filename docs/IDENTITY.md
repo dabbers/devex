@@ -91,8 +91,33 @@ For an app's own people, write it, and keep it boring:
   Tenancy then falls out of the architecture rather than being enforced by a
   query filter somebody can forget.
 - **OIDC relying-party support later**, so an installation can delegate to
-  Google Workspace or Microsoft when a customer asks. That is a sellable
-  upgrade, not launch scope.
+  Google Workspace, Microsoft or Okta when a customer asks.
+
+### Why the user table belongs in the installation's database
+
+The obvious counter-argument is that a central user table would let us offer
+single sign-on across a customer's apps later. It does not survive looking at.
+
+If the users and the issuer configuration live with the installation, then
+**SSO is something the customer configures, per app, against their own
+provider.** They point it at their Google Workspace or their Okta and it is
+done. Nothing has to be built here, nothing has to be brokered here, and the
+customer does not have to ask.
+
+Cross-app single sign-on still happens — it just is not ours. A customer who
+points three installations at one provider has SSO across all three, because
+the shared thing is *their* directory rather than our user table. We get the
+outcome without becoming an identity provider, which is a business we have no
+reason to be in and could not price without breaking the per-person promise.
+
+Three things follow, and all of them are good:
+
+- **Tenancy is structural.** Separate databases, so one installation's users
+  cannot be read from another by a query that forgot its filter.
+- **An installation is self-contained**, which is the property that makes it
+  ejectable at all.
+- **Nobody needs a dabberz account to use a customer's app**, which keeps the
+  per-head cost at zero on the only axis where it could have grown.
 
 ### Fork rather than write?
 
@@ -124,11 +149,10 @@ rework and an honest eject.
    limitation already blocks per-account GitHub linking, and the leaked test
    key still wants rotating. Separate decision, but the answer may fall out of
    doing this work.
-2. **Does an app's user table live in the app's database or the control
-   plane's?** The app's database gives tenancy for free and makes the
-   installation genuinely self-contained — which is what makes it ejectable.
-   The control plane's would make cross-app single sign-on possible later.
-   These pull in opposite directions and the choice should be made
-   deliberately, not by whichever is convenient first.
-3. **Does an invited user of one installation become a dabberz account?** They
+2. **Does an invited user of one installation become a dabberz account?** They
    must not, or the per-person cost comes back through the other door.
+3. **Where does an installation's identity configuration live?** It should sit
+   with the user table, in the installation's database, for the same reason —
+   but it is worth being deliberate, because it is the difference between the
+   eject kit carrying configuration and the eject kit asking somebody to
+   reconstruct it.

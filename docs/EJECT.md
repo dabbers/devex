@@ -28,10 +28,11 @@ because they were specified as interfaces that already exist in the world:
 | `storage` | S3-compatible (`endpoint`, `bucket`, `access_key`) | Yes. Tigris, R2, Spaces, MinIO. |
 | `mail` | SMTP URL | Yes. Any provider. |
 | `jobs` | cron expression | Yes. A cron container, or the target's scheduler. |
-| `identity` | **ours** | **No. This is the whole job.** |
+| `identity` | **ours** | **The only one that needs anything written.** |
 
 That table is the architecture review. The only thing standing between an
-installation and somebody else's machine is the one block we invented.
+installation and somebody else's machine is the one block we invented — and
+see below, because the identity decision shrinks even that.
 
 ### The finding this scoping turned up
 
@@ -70,6 +71,17 @@ A replacement is a small reverse proxy that:
 That is the deliverable. It is small — low hundreds of lines — and being small
 is the point: it is the executable proof of the sentence already on the about
 page, that the interface an app expects is "deliberately a boring one".
+
+**It gets smaller still** once the identity rework lands (`docs/IDENTITY.md`).
+If an installation's users and its issuer configuration live in the
+installation's own database, the shim holds no state of its own: it reads the
+same table and the same configuration out of the database that travelled with
+the app. Nobody has to re-create accounts, re-invite anybody, or reconstruct
+which provider the installation trusted.
+
+That turns identity from the hard part of ejecting into very nearly the easy
+part, and it is an argument for doing the identity work before the eject kit
+rather than after.
 
 It should carry the same test that the platform's own edge carries: a forged
 `X-Dabberz-User` on an inbound request must not reach the app, proven by
