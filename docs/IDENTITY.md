@@ -143,6 +143,56 @@ That is now the second workstream blocked on the same gap. Wiring the mail
 block is no longer a loose end; it is a prerequisite for both the identity
 rework and an honest eject.
 
+## Where identity configuration lives, and why not in app settings
+
+`internal/appsettings` already has the right shape for app configuration: an
+app declares its settings in `config/settings.json` in its own code, the agent
+changes that file through review like any other change, and the platform
+delivers the chosen values to `.dabberz/settings.json`, read-only. The
+declaration is the app's; the values are the owner's.
+
+Identity configuration sits on the platform side of that line, and the reason
+is not tidiness:
+
+**The agent writes `config/settings.json`.** If auth were declared there, an
+agent editing an app could add, remove or alter authentication. The claim this
+platform rests on is that the identity boundary sits underneath the app, where
+an agent editing the app cannot reach it. A toggle labelled "require sign-in"
+is one slipped review from being off. Secondarily, the component catalog has
+no secret type, deliberately, and a client secret belongs in the vault under
+the existing rule that values never reach the UI or the audit trail.
+
+So the platform holds five things, none of them in the app's repository:
+
+1. **Access mode** — internal, public, hybrid with its public prefixes, or the
+   app's own. Already platform-owned (`domain.Access`, migration 0016).
+2. **Who the members are** — the user table and invitations, in the
+   installation's database.
+3. **Which provider the installation trusts** — issuer, client ID.
+4. **The client secret** — vault only.
+5. **Self-serve rules** — invite-only, or an allowed email domain.
+
+### The line, stated once
+
+**The app decides which of its surfaces need a member. The platform decides
+who counts as a member and how they prove it.**
+
+"This form is members-only" is genuinely the app's business and belongs in
+`config/settings.json`. "Members are people in this Google Workspace" is the
+platform's. Same word, opposite sides of the boundary.
+
+### One renderer, not two
+
+None of this requires a second settings UI. The `appsettings` catalog is a
+general declarative form system that happens to be fed by apps; the platform
+can ship its own declaration for identity configuration against the same
+catalog, same renderer, same validation, sourced from the platform rather than
+from a repository the agent can write.
+
+That needs one addition the catalog does not have: a **secret** component,
+which writes to the vault and renders as "set" or "not set" rather than ever
+displaying a value.
+
 ## Open questions
 
 1. **Does the operator provider stay Clerk?** The Development-instance
@@ -151,8 +201,8 @@ rework and an honest eject.
    doing this work.
 2. **Does an invited user of one installation become a dabberz account?** They
    must not, or the per-person cost comes back through the other door.
-3. **Where does an installation's identity configuration live?** It should sit
-   with the user table, in the installation's database, for the same reason —
-   but it is worth being deliberate, because it is the difference between the
-   eject kit carrying configuration and the eject kit asking somebody to
-   reconstruct it.
+3. **Which side of the eject boundary does the issuer configuration fall?**
+   It is platform-held, but it should travel with the installation so the
+   eject kit carries it rather than handing somebody a README that says to set
+   their provider up again. Platform-owned and installation-scoped, not
+   platform-owned and centrally stored.
